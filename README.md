@@ -18,7 +18,7 @@
 <br>
 
 ## 🔥 Streak Stats
-[![GitHub Streak](https://github-readme-streak-stats.herokuapp.com?user=ten16thomasg&date_format=M%20j%5B%2C%20Y%5D)](https://git.io/streak-stats)
+[![GitHub Streak](https://github-readme-streak-stats.herokuapp.com?user=thomastysong&date_format=M%20j%5B%2C%20Y%5D)](https://git.io/streak-stats)
 
 <br>
 <br>
@@ -26,7 +26,7 @@
 ## <img src="https://media.giphy.com/media/iY8CRBdQXODJSCERIr/giphy.gif" width="30px"> Connect with me
 <p align="center">
 	<a href="mailto:thomastysong@gmail.com"><img img src="https://img.shields.io/badge/gmail-%23EA4335.svg?style=plastic&logo=gmail&logoColor=white" alt="Gmail"/></a>
-	<a href="https://github.com/ten16thomasg"><img src="https://img.shields.io/badge/github-%23181717.svg?style=plastic&logo=github&logoColor=white" alt="GitHub"/></a>
+	<a href="https://github.com/thomastysong"><img src="https://img.shields.io/badge/github-%23181717.svg?style=plastic&logo=github&logoColor=white" alt="GitHub"/></a>
 	<a href="https://www.linkedin.com/in/tomslmgtfy/"><img src="https://img.shields.io/badge/linkedin-%230A66C2.svg?style=plastic&logo=linkedin&logoColor=white" alt="LinkedIn"/></a>
 </p>
 
@@ -151,10 +151,10 @@
   <summary><b>💻 GitHub Profile Stats</b></summary>
   <br/>
   <p align="center">
-    <a href="https://github.com/ten16thomasg/github-readme-stats"><img alt="ten16thomasg's Github Stats" src="https://github-readme-stats.vercel.app/api?username=ten16thomasg&show_icons=true&count_private=true&theme=algolia" height="192px"/></a>
+    <a href="https://github.com/thomastysong/github-readme-stats"><img alt="thomastysong's Github Stats" src="https://github-readme-stats.vercel.app/api?username=thomastysong&show_icons=true&count_private=true&theme=algolia" height="192px"/></a>
 <br/>
   &nbsp;
-	  <img src="https://github-readme-stats.vercel.app/api/top-langs?username=ten16thomasg&langs_count=10&show_icons=true&locale=en&layout=compact&theme=algolia" alt="ten16thomasg" height="192px"/>
+	  <img src="https://github-readme-stats.vercel.app/api/top-langs?username=thomastysong&langs_count=10&show_icons=true&locale=en&layout=compact&theme=algolia" alt="thomastysong" height="192px"/>
   <br/>
   <b>Note:</b> Top languages is only a metric of the languages my public code consists of and doesn't reflect experience or skill level.
   </p>
@@ -163,7 +163,7 @@
 
   <summary><b>⚡ Recent GitHub Activity</b></summary>
   <br/>
-   <a href="https://github.com/ten16thomasg"><img alt="ten16thomasg's Activity Graph" src="https://activity-graph.herokuapp.com/graph?username=ten16thomasg&custom_title=ten16thomasg's%20Contribution%20Graph&theme=react-dark" /></a>
+   <a href="https://github.com/thomastysong"><img alt="thomastysong's Activity Graph" src="https://activity-graph.herokuapp.com/graph?username=thomastysong&custom_title=thomastysong's%20Contribution%20Graph&theme=react-dark" /></a>
   <br/>
 
 

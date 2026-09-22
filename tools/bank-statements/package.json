@@ -1,0 +1,15 @@
+{
+  "name": "bank-statements",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Download the last N months of card statements from a bank's website into your Downloads folder",
+  "main": "download-statements.js",
+  "scripts": {
+    "capitalone": "node download-statements.js capitalone",
+    "citi": "node download-statements.js citi",
+    "test": "node test/run-test.js"
+  },
+  "dependencies": {
+    "playwright": "^1.62.1"
+  }
+}

@@ -89,11 +89,11 @@ func parsePySpec(s string) pkgSpec {
 		s = strings.TrimSpace(s[:i]) // environment marker
 	}
 	ls := strings.ToLower(s)
-	if isLocalSpec(s) || strings.HasSuffix(ls, ".py") {
-		return pkgSpec{name: s, local: true}
-	}
 	if pyRemotePrefix(ls) {
 		return pyRemote(s)
+	}
+	if isLocalSpec(s) || strings.HasSuffix(ls, ".py") {
+		return pkgSpec{name: s, local: true}
 	}
 	name := rePyName.FindString(s)
 	if name == "" {

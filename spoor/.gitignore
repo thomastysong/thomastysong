@@ -1,0 +1,17 @@
+# build outputs
+/bin/
+/dist/
+*.exe
+*.ext
+*.test
+*.out
+coverage.*
+# local state written by tests and manual runs
+/tmp/
+*.db
+*.db-wal
+*.db-shm
+# editor noise
+.DS_Store
+.idea/
+.vscode/

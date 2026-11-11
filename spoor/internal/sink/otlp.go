@@ -127,12 +127,14 @@ func NewOTLP(o OTLPOptions) (Sink, error) {
 	}
 	tr := &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
-		TLSClientConfig:       o.TLS,
 		TLSHandshakeTimeout:   o.Timeout,
 		ResponseHeaderTimeout: o.Timeout,
 		MaxIdleConns:          2,
 		IdleConnTimeout:       90 * time.Second,
 		ForceAttemptHTTP2:     true,
+	}
+	if o.TLS != nil {
+		tr.TLSClientConfig = o.TLS.Clone()
 	}
 	return &otlpSink{
 		o:   o,

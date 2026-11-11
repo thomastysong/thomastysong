@@ -1,0 +1,9 @@
+{
+  "sessionId": "cp-sess-1",
+  "timestamp": 1794391200000,
+  "cwd": "/work/app",
+  "hook_event_name": "Notification",
+  "message": "Permission needed",
+  "title": "Permission needed",
+  "notification_type": "permission_prompt"
+}

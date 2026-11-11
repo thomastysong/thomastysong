@@ -1,0 +1,12 @@
+{
+  "sessionId": "cp-sess-1",
+  "timestamp": 1794391200000,
+  "cwd": "/work/app",
+  "error": {
+    "message": "token sk-live-123 rejected",
+    "name": "AuthError",
+    "stack": "..."
+  },
+  "errorContext": "model_call",
+  "recoverable": false
+}

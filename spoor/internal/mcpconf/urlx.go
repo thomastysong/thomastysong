@@ -63,7 +63,7 @@ func splitURL(raw string) urlParts {
 func isURLLike(s string) bool {
 	switch splitURL(s).scheme {
 	case "http", "https", "ws", "wss":
-		return reScheme.MatchString(strings.TrimSpace(s))
+		return true
 	}
 	return false
 }
@@ -115,17 +115,6 @@ func isLocalHost(host string) bool {
 	return false
 }
 
-// reSecretParam matches query parameter (and flag, env, header) names that
-// conventionally carry a credential.
-var reSecretParam = regexp.MustCompile(`(?i)(token|secret|passw(or)?d|pwd|api[-_]?key|apikey|access[-_]?key|credential|signature|sig|auth|bearer|session|jwt|private[-_]?key|pat)`)
-
-func isSecretName(name string) bool {
-	if strings.EqualFold(name, "key") {
-		return true
-	}
-	return reSecretParam.MatchString(name)
-}
-
 // urlCredential reports whether a URL carries a credential as written:
 // a password in the userinfo, or a secret-named query parameter with a
 // literal value. Path tokens are judged by pathToken.
@@ -138,13 +127,13 @@ func urlCredential(raw string) bool {
 		if hasPass {
 			cred = pass
 		}
-		if cred != "" && !isReference(cred) {
+		if cred != "" && !isReference(cred) && !isDocPlaceholder(cred) {
 			return true
 		}
 	}
 	for _, kv := range strings.Split(u.query, "&") {
 		k, v, _ := strings.Cut(kv, "=")
-		if v != "" && isSecretName(k) && !isReference(v) {
+		if v != "" && isSecretParam(k) && !isReference(v) && !isDocPlaceholder(v) {
 			return true
 		}
 	}

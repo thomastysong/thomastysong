@@ -1,0 +1,14 @@
+{
+  "conversation_id": "conv-1",
+  "generation_id": "gen-1",
+  "workspace_roots": [
+    "/work/proj"
+  ],
+  "cursor_version": "2.4.1",
+  "model": "claude-opus-5",
+  "transcript_path": null,
+  "hook_event_name": "beforeMCPExecution",
+  "tool_name": "create_issue",
+  "tool_input": "{\"title\":\"x\"}",
+  "url": "https://MCP.Example.com:8443/sse?key=abc"
+}

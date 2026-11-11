@@ -1,0 +1,17 @@
+{
+  "session_id": "gm-1",
+  "transcript_path": "/home/u/.gemini/tmp/abc/chats/session-1.json",
+  "cwd": "/work/site",
+  "timestamp": "2026-11-11T10:00:00.000Z",
+  "hook_event_name": "BeforeTool",
+  "tool_name": "mcp_my_server_do_thing",
+  "tool_input": {
+    "path": "/etc/passwd"
+  },
+  "mcp_context": {
+    "server_name": "my_server",
+    "tool_name": "do_thing",
+    "url": "https://mcp.example.com/sse"
+  },
+  "original_request_name": "mcp_my_server_do_thing"
+}

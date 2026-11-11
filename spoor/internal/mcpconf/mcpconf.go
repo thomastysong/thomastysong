@@ -132,4 +132,7 @@ type Server struct {
 	// execution declared next to a remote server, so it takes part in the
 	// definition hash and in the risk flags.
 	headersHelper string
+	// oauthSecret is a client secret written inside the oauth block. It is
+	// kept only so the inline-secret check can see it.
+	oauthSecret string
 }

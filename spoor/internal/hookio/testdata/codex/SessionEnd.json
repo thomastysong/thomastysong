@@ -1,0 +1,7 @@
+{
+  "cwd": "/work/repo",
+  "hook_event_name": "SessionEnd",
+  "reason": "other",
+  "session_id": "019a-codex-thread",
+  "transcript_path": "/home/u/.codex/sessions/2026/11/11/rollout-2026-11-11T10-00-00-019a.jsonl"
+}

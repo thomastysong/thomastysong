@@ -1,0 +1,10 @@
+{
+  "session_id": "cp-sess-1",
+  "timestamp": "2026-11-11T10:00:00.000Z",
+  "cwd": "/work/app",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "npm publish"
+  }
+}

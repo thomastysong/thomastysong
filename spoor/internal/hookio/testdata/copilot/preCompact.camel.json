@@ -1,0 +1,8 @@
+{
+  "sessionId": "cp-sess-1",
+  "timestamp": 1794391200000,
+  "cwd": "/work/app",
+  "transcriptPath": "/home/u/.copilot/session-state/cp-sess-1/events.jsonl",
+  "trigger": "auto",
+  "customInstructions": ""
+}

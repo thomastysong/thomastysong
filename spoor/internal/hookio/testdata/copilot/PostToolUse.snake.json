@@ -1,0 +1,14 @@
+{
+  "session_id": "cp-sess-1",
+  "timestamp": "2026-11-11T10:00:00.000Z",
+  "cwd": "/work/app",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Read",
+  "tool_input": {
+    "path": "/work/app/.env"
+  },
+  "tool_result": {
+    "result_type": "success",
+    "text_result_for_llm": "KEY=1"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "hook_event_name": "PreToolUse",
+  "tool_name": "run_in_terminal",
+  "cwd": "/work/app",
+  "sessionId": "vs-1",
+  "timestamp": "2026-11-11T10:00:00.000Z",
+  "tool_input": {
+    "command": "whoami"
+  }
+}

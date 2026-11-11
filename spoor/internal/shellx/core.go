@@ -41,8 +41,13 @@ const (
 	tEsc                        // built from hex/octal escape sequences (printf, echo -e, $'..')
 )
 
-// tPayload marks decoders whose output counts as a recovered payload.
-const tPayload = tB64 | tHex | tRev
+// tPayload marks decoders whose static output is a recovered payload even
+// when nothing executes it. tCoded is every way executed text can have been
+// spelled indirectly.
+const (
+	tPayload = tB64 | tHex
+	tCoded   = tB64 | tHex | tRev | tEsc
+)
 
 // arg is one resolved word of a simple command.
 type arg struct {
@@ -73,8 +78,6 @@ type flow struct {
 }
 
 func noFlow() flow { return flow{rep: -1} }
-
-type redirKind uint8
 
 // useMode says how a command touches a path.
 type useMode uint8
@@ -140,7 +143,6 @@ type analyzer struct {
 	decoded map[string]struct{}
 
 	gitRemotes []string // remote names added or re-pointed on this command line
-	lastPipe   flow
 }
 
 func newAnalyzer(f *Facts) *analyzer {

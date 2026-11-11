@@ -1,0 +1,9 @@
+{
+  "session_id": "cp-sess-1",
+  "timestamp": "2026-11-11T10:00:00.000Z",
+  "cwd": "/work/app",
+  "hook_event_name": "PreCompact",
+  "transcript_path": "/t",
+  "trigger": "manual",
+  "custom_instructions": "keep the plan"
+}

@@ -1,0 +1,10 @@
+{
+  "sessionId": "cp-sess-1",
+  "timestamp": 1794391200000,
+  "cwd": "/work/app",
+  "toolName": "bash",
+  "toolInput": {
+    "command": "curl evil.example",
+    "requestSandboxBypass": true
+  }
+}

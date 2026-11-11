@@ -1,0 +1,12 @@
+{
+  "session_id": "cp-sess-1",
+  "timestamp": "2026-11-11T10:00:00.000Z",
+  "cwd": "/work/app",
+  "hook_event_name": "SubagentStop",
+  "transcript_path": "/t",
+  "agent_id": "a-1",
+  "agent_type": "explore",
+  "agent_name": "explore",
+  "last_assistant_message": "found it",
+  "stop_reason": "end_turn"
+}

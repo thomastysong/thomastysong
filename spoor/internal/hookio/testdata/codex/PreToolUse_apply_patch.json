@@ -1,0 +1,14 @@
+{
+  "cwd": "/work/repo",
+  "model": "gpt-5.2-codex",
+  "permission_mode": "default",
+  "session_id": "019a-codex-thread",
+  "transcript_path": "/home/u/.codex/sessions/2026/11/11/rollout-2026-11-11T10-00-00-019a.jsonl",
+  "turn_id": "turn-1",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "apply_patch",
+  "tool_input": {
+    "command": "*** Begin Patch\n*** Update File: src/main.rs\n@@\n-old\n+new\n*** Add File: .github/workflows/x.yml\n+on: push\n*** End Patch\n"
+  },
+  "tool_use_id": "call_patch"
+}

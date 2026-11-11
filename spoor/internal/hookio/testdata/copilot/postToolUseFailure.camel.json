@@ -1,0 +1,12 @@
+{
+  "sessionId": "cp-sess-1",
+  "timestamp": 1794391200000,
+  "cwd": "/work/app",
+  "toolName": "edit",
+  "toolArgs": {
+    "path": "/work/app/a.go",
+    "old_str": "x",
+    "new_str": "y"
+  },
+  "error": "String to replace not found: SECRET_TOKEN=hunter2"
+}

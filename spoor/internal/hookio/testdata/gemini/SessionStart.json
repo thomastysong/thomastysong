@@ -1,0 +1,8 @@
+{
+  "session_id": "gm-1",
+  "transcript_path": "/home/u/.gemini/tmp/abc/chats/session-1.json",
+  "cwd": "/work/site",
+  "timestamp": "2026-11-11T10:00:00.000Z",
+  "hook_event_name": "SessionStart",
+  "source": "startup"
+}

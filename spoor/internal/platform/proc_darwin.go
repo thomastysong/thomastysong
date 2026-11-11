@@ -147,8 +147,12 @@ func ProcEnv(pid int) (env map[string]string, err error) {
 	}
 	buf, err := procArgs(pid)
 	if err != nil {
-		// EINVAL is how XNU says "not your process" (and "no such process").
+		// EINVAL is how XNU says both "no such process" and "not your
+		// process"; the process table tells them apart.
 		if errors.Is(err, unix.EINVAL) || errors.Is(err, unix.EPERM) {
+			if kp, kerr := unix.SysctlKinfoProc("kern.proc.pid", pid); kerr != nil || kp == nil || int(kp.Proc.P_pid) != pid {
+				return nil, fmt.Errorf("platform: pid %d: %w", pid, os.ErrNotExist)
+			}
 			return nil, fmt.Errorf("platform: kern.procargs2 pid %d: %w", pid, os.ErrPermission)
 		}
 		return nil, fmt.Errorf("platform: kern.procargs2 pid %d: %w", pid, err)

@@ -114,7 +114,7 @@ type Sources struct {
 	Hooks       HookSource       `yaml:"hooks"`
 	Transcripts TranscriptSource `yaml:"transcripts"`
 	Processes   ProcessSource    `yaml:"processes"`
-	OsqueryLog  OsquerySource    `yaml:"osquery_log"`
+	OsqueryExec OsquerySource    `yaml:"osquery_exec"`
 	OTLP        OTLPSource       `yaml:"otlp"`
 	Scan        ScanSource       `yaml:"scan"`
 	Adapters    []AdapterSource  `yaml:"adapters"`
@@ -145,11 +145,15 @@ type ProcessSource struct {
 	ExecEvents *bool `yaml:"exec_events"`
 }
 
-// OsquerySource consumes exec rows from osquery's local results log.
+// OsquerySource pulls process exec rows from a running osqueryd over its
+// extension socket when the organisation has evented tables switched on.
+// Rows are filtered to agent descendants locally and nothing is scheduled in
+// Fleet: a Fleet-scheduled query over evented process tables would send every
+// command line on the host to the Fleet server, outside the privacy profile.
 type OsquerySource struct {
-	Enabled    *bool    `yaml:"enabled"`
-	Paths      []string `yaml:"paths"`
-	NameSuffix string   `yaml:"name_suffix"`
+	Enabled  *bool    `yaml:"enabled"`
+	Socket   string   `yaml:"socket"` // empty = try the well-known orbit and osquery sockets
+	Interval Duration `yaml:"interval"`
 }
 
 // OTLPSource is the loopback receiver for agent-native OpenTelemetry (experimental).
@@ -275,7 +279,7 @@ func Default(dataDir string) *Config {
 			Hooks:       HookSource{Enabled: on(), Poll: Duration(100 * time.Millisecond)},
 			Transcripts: TranscriptSource{Enabled: on(), Poll: Duration(2 * time.Second)},
 			Processes:   ProcessSource{Enabled: on(), Idle: Duration(2 * time.Second), Active: Duration(200 * time.Millisecond), ExecEvents: on()},
-			OsqueryLog:  OsquerySource{Enabled: on(), NameSuffix: "spoor_exec_events"},
+			OsqueryExec: OsquerySource{Enabled: on(), Interval: Duration(5 * time.Second)},
 			OTLP:        OTLPSource{Enabled: false, Addr: "127.0.0.1:4319"},
 			Scan:        ScanSource{Enabled: on(), Interval: Duration(time.Hour), FullEvery: Duration(24 * time.Hour), Projects: on()},
 		},

@@ -41,7 +41,7 @@ Changes: hooks write only to a per-user spool that nothing ships directly in the
 - osquery's audit-backed `process_events` captured **5 of 5** millisecond-lived processes with full command lines, and they reached the local results log within one 5 s interval. Its BPF publisher failed in the same VM while reporting `active=1`.
 - Disagreement between surfaces can be driven to zero (hook-free plus transcript-free plus relocated config) or forged upward (write a transcript for tool calls that never ran).
 
-Changes: the poller is described as what it is (agent presence, flags, long-lived children). Exec ground truth comes from the Linux process connector where available and from osquery evented tables by tailing osquery's local results log. A "hook bypass suspected" finding requires a root-observed surface; with only self-reported surfaces it is a low-severity, rate-limited signal that is never attributed across users.
+Changes: the design now speaks of two agent-reported surfaces (hooks, transcripts; vendor OpenTelemetry is a third of the same kind) plus one OS surface whose fidelity is reported in health. The poller is described as what it is (agent presence, flags, long-lived children such as MCP servers and tunnels). Exec ground truth comes from the Linux process connector where available, then from osquery evented tables pulled over osquery's own extension socket. The verifier rejected the first fix (a Fleet-scheduled `process_events` report): it would send every command line on the host to the Fleet server unredacted, and plain osquery enrolled in Fleet has no local results file to tail. Because a provider can report itself active while delivering nothing, the monitor execs a canary periodically and reports whether the exec feed saw it. A "hook bypass suspected" finding requires a root-observed surface; with only self-reported surfaces it is a low-severity, rate-limited signal that is never attributed across users.
 
 ### Hosting the daemon inside the osquery extension (A17) — broken
 The extension process exited 3 s after osqueryd was killed, taking any hosted collector with it. The extension is tables only.
@@ -98,6 +98,20 @@ Fleet answered `422 Scripts are disabled for this host` on the stock-osquery hos
 
 ### The thesis itself — broken as first written
 The first draft claimed that no open-source tool gives a real-time, vendor-neutral signal. Research found that perplexityai/numbat (hooks for 28 agents, on-endpoint rules, opt-in enforcement) and Agent Beacon (29 runtimes, signed packages) already exist, and that Fleet's own agent ships inventory tables. What survived a deliberate search for an equivalent: nobody proves the telemetry is complete, corroborates it with the OS, exposes findings and coverage as osquery tables, documents a tested Fluent Bit contract, or covers Kubernetes. The project is positioned as that assurance and integration layer, and it accepts numbat output as an input.
+
+## Findings the verification pass overturned or corrected
+
+The second reviewer was asked to refute, and did so in several places. These corrections are part of the record:
+
+| Finding | Correction |
+|---|---|
+| "`--bare` removes the hook surface and will become the default for `claude -p`" | Not confirmed. On the Claude Code release tested, managed-tier tool hooks still run under `--bare`; only the managed SessionStart hook and user/project hooks are skipped. `--bare` is recorded as a session attribute, session start is synthesized from the first event of an unseen session, and "hookless" is raised only when tool activity appears on another surface with no hook events. Only one release was tested, so this check belongs in CI per release. |
+| "Compare vendor OTel `hook_execution_complete` counts with hook events to prove the hook ran" | Unsound as stated: that event aggregates every matching hook and cannot tell a managed hook from a user hook. OTel is another agent-reported surface on an unauthenticated loopback port; it never satisfies a tamper check alone. |
+| "Write the agent's managed OTel settings at install" | Each agent has one OTLP endpoint per signal, so writing it would take over an organisation's existing telemetry. It is opt-in and refused when an endpoint is already pinned. |
+| "Capture the agent binary's SHA-256 on every hook event" | Hashing a large agent binary per event costs roughly 80 times the hook budget warm. Hooks record pid, start time, path and the ancestor chain; hashes come from a cache keyed by device, inode, size and mtime. |
+| "Drop the Gemini and Cursor dialects and take those agents through another sensor's output" | Rejected for Cursor (one of the three agents the brief names would then depend on a second binary). An adapter also reads a pre-1.0 schema from files the monitored user owns, so adapter records are stamped user-integrity and schema versions are checked. |
+| "Recast the project as only an assurance layer over other sensors" | Too far: it abandons the goal of a detection platform. The headline is an agent detection platform whose telemetry is attested; ingesting other sensors is an addition. |
+| "There is no Fleet channel on plain osquery" | Overstated: osquery's config channel reaches stock osquery on Fleet Free within one refresh. What is missing is a desired-state file or script primitive, which the signed bundle provides. |
 
 ## What held
 

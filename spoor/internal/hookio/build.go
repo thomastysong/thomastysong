@@ -31,12 +31,12 @@ func newEvent(agentID, typ, hookName string, raw []byte) *event.Event {
 // sessionFields is the per-dialect extraction of session context, already
 // resolved against the payload and the environment fallbacks.
 type sessionFields struct {
-	id, turnID, cwd, transcript, model  string
-	permissionMode                      string // agent vocabulary, mapped by permMode
-	subagentID, subagentType, parentID  string
-	projectDir                          string // session start directory, when the agent exposes it
-	agentVersion, agentSurface          string
-	parentAgentID                       string
+	id, turnID, cwd, transcript, model string
+	permissionMode                     string // agent vocabulary, mapped by permMode
+	subagentID, subagentType, parentID string
+	projectDir                         string // session start directory, when the agent exposes it
+	agentVersion, agentSurface         string
+	parentAgentID                      string
 }
 
 func applySession(ev *event.Event, s sessionFields) {

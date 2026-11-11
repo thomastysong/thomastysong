@@ -72,7 +72,8 @@ func (g gemini) build(p obj, env map[string]string, raw []byte) ([]*event.Event,
 		setPrompt(ev, p.str("prompt"))
 		req.Blocking = true
 	case "AfterAgent":
-		ev.Content.PromptText = p.str("prompt")
+		// The prompt is repeated here; it was already reported (and
+		// scanned) at BeforeAgent, so only the response is taken.
 		ev.Content.ToolOutput = p.str("prompt_response")
 	case "BeforeTool":
 		g.tool(ev, p)

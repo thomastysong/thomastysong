@@ -129,8 +129,8 @@ func (c cursor) build(p obj, env map[string]string, raw []byte) ([]*event.Event,
 
 	case "beforeShellExecution", "afterShellExecution":
 		// The hook names the action, so the tool is a shell whatever the
-		// payload calls it. tool_input is rebuilt from the flat fields so
-		// both hook generations hash the same call the same way.
+		// payload calls it. These hooks carry the arguments as flat
+		// top-level fields; they are gathered into a tool input object.
 		c.specificTool(ev, "Shell", event.ToolShell, pick(p, "command", "cwd"))
 		if name == "beforeShellExecution" {
 			req.Blocking = true
@@ -239,16 +239,14 @@ func (c cursor) mcpTool(ev *event.Event, p obj) {
 		ev.Tool.MCPTool = ev.Tool.Name
 	}
 	// The payload identifies the server by where it runs, not by its config
-	// name. A remote server's host is what a hunt needs; a stdio server's
-	// launch command can embed tokens, so it stays in Content.Raw only.
-	if u := p.str("url"); u != "" && (ev.Target == nil || ev.Target.Host == "") {
+	// name. A remote server's host is what a hunt needs. Only the host is
+	// taken: the URL's query and a stdio server's launch command can embed
+	// tokens, so those stay in Content.Raw.
+	if h := hostOf(p.str("url")); h != "" && (ev.Target == nil || ev.Target.Host == "") {
 		if ev.Target == nil {
 			ev.Target = &event.Target{}
 		}
-		if ev.Target.URL == "" {
-			ev.Target.URL = u
-		}
-		ev.Target.Host = hostOf(u)
+		ev.Target.Host = h
 	}
 	label(ev, "hook_scope", "specific")
 }

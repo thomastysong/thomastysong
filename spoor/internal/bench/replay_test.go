@@ -153,18 +153,43 @@ func TestReplayErrors(t *testing.T) {
 	// A hostile file (not JSON, overlong, binary) is reported, not fatal.
 	bad := filepath.Join(root, "-work-repo", "bad.jsonl")
 	os.WriteFile(bad, []byte("\xff\xfe{not json\n"+strings.Repeat("x", 1<<20)+"\n"), 0o600)
-	rep, err := r.Replay(ctx, ReplayOptions{Roots: []string{root}, User: owner()})
+	rep, err := r.Replay(ctx, ReplayOptions{Roots: []string{root}, User: owner(), Aliases: []Alias{{From: "-work-repo", To: "$W"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if rep.Stats.Files != 3 {
 		t.Errorf("files %d (problems %v)", rep.Stats.Files, rep.Problems)
 	}
+	// Problems name corpus paths, so they get the aliases too.
+	if p := strings.Join(rep.Problems, "\n"); !strings.Contains(p, "$W/bad.jsonl") || strings.Contains(p, "-work-repo") {
+		t.Errorf("problems not aliased: %q", p)
+	}
 	// Logs owned by another account are refused and reported.
 	if os.Getuid() >= 0 {
 		rep, err := r.Replay(ctx, ReplayOptions{Roots: []string{root}, User: event.User{Name: "x", ID: "4242"}})
 		if err != nil || rep.Stats.Files != 0 || rep.Stats.Unread != 3 || len(rep.Problems) == 0 {
 			t.Errorf("foreign-owned logs: %v %+v", err, rep.Stats)
+		}
+	}
+}
+
+// The engine cuts long evidence values, so a session id can end a value
+// part-way; an identifier alias replaces such a cut copy as well.
+func TestApplyAliasesCut(t *testing.T) {
+	const sid = "3f9c2e71-5b0a-4d2e-9c11-7a6b5d4e3f20"
+	as := []Alias{{From: "/srv/tmp/-home-user/" + sid + "/scratch", To: "$S"}, {From: "/srv/tmp", To: "$T"}, {From: sid, To: "<session>"}}
+	for in, want := range map[string]string{
+		"a /srv/tmp/-home-user/" + sid + "/scratch/x b":    "a $S/x b",
+		"w=/srv/tmp/-home-user/" + sid + "/y.jsonl":        "w=$T/-home-user/<session>/y.jsonl",
+		"w=x, /srv/tmp/-home-user/3f9c2e71-5b; c=1":        "w=x, $T/-home-user/<session>; c=1",
+		"w=/srv/tmp/-home-user/3f9c2e7 [...]":              "w=$T/-home-user/<session> [...]",
+		"w=/srv/tmp/-home-user/" + sid[:20]:                "w=$T/-home-user/<session>",
+		"/srv/tmp/-home-user/" + sid + "/scra":             "$T/-home-user/<session>/scra",
+		"hash 3f9c2e71ab00 and x3f9c2e71-5b and 3f9c2e7z.": "hash 3f9c2e71ab00 and x3f9c2e71-5b and 3f9c2e7z.",
+		"3f9c2 too short; /srv/tm; path cut":               "3f9c2 too short; /srv/tm; path cut",
+	} {
+		if got := applyAliases(in, as); got != want {
+			t.Errorf("applyAliases(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

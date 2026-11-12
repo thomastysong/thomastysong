@@ -309,6 +309,11 @@ func (r *Runner) Replay(ctx context.Context, o ReplayOptions) (*ReplayReport, er
 	for _, c := range []string{event.ClassAlert, event.ClassFinding, event.ClassSignal} {
 		rep.ThreadsAny[c] = NewRate(len(threadClass[c]), st.Threads)
 	}
+	// Problems name corpus files, whose paths hold the same machine
+	// prefixes and session ids as the samples.
+	for i, p := range rep.Problems {
+		rep.Problems[i] = applyAliases(p, o.Aliases)
+	}
 	rep.elapsed = time.Since(start)
 	return rep, nil
 }
@@ -453,6 +458,16 @@ func summarizeEvent(ev *event.Event, aliases []Alias) string {
 	return ""
 }
 
+// minAliasCut is the shortest cut copy of an identifier alias that is
+// replaced (see applyAliases).
+const minAliasCut = 6
+
+// applyAliases replaces each alias's From with its To, longest first. An
+// alias whose From is an identifier (no path separator, such as a session
+// id) also replaces a cut copy of it: the engine cuts long evidence values,
+// so a value can end part-way through the id ("$T/-home-user/142ab6a6-82;").
+// A cut copy is a prefix of From of at least minAliasCut bytes that starts
+// and ends at an identifier boundary.
 func applyAliases(s string, as []Alias) string {
 	sorted := append([]Alias(nil), as...)
 	sort.SliceStable(sorted, func(i, j int) bool { return len(sorted[i].From) > len(sorted[j].From) })
@@ -461,7 +476,48 @@ func applyAliases(s string, as []Alias) string {
 			s = strings.ReplaceAll(s, a.From, a.To)
 		}
 	}
+	for _, a := range sorted {
+		if len(a.From) > minAliasCut && !strings.ContainsAny(a.From, `/\`) {
+			s = replaceCut(s, a)
+		}
+	}
 	return s
+}
+
+// replaceCut replaces cut copies of a.From in s (see applyAliases).
+func replaceCut(s string, a Alias) string {
+	head := a.From[:minAliasCut]
+	if !strings.Contains(s, head) {
+		return s
+	}
+	var b strings.Builder
+	i := 0
+	for {
+		j := strings.Index(s[i:], head)
+		if j < 0 {
+			break
+		}
+		j += i
+		n := minAliasCut
+		for n < len(a.From) && j+n < len(s) && s[j+n] == a.From[n] {
+			n++
+		}
+		startOK := j == 0 || !idByte(s[j-1])
+		endOK := j+n == len(s) || !idByte(s[j+n])
+		b.WriteString(s[i:j])
+		if startOK && endOK {
+			b.WriteString(a.To)
+		} else {
+			b.WriteString(s[j : j+n])
+		}
+		i = j + n
+	}
+	b.WriteString(s[i:])
+	return b.String()
+}
+
+func idByte(c byte) bool {
+	return c == '-' || c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }
 
 func cleanText(s string) string {

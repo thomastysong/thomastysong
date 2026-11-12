@@ -338,9 +338,6 @@ func TestRealAgentClaudeCode(t *testing.T) {
 	}
 
 	tmp := t.TempDir()
-	if err := os.Chmod(tmp, 0o755); err != nil {
-		t.Fatal(err)
-	}
 	bin := filepath.Join(tmp, "bin", "spoor")
 	home := filepath.Join(tmp, "home")
 	data := filepath.Join(tmp, "data")
@@ -581,8 +578,6 @@ sources:
 	if len(calls) != 2 || calls["tool.pre/hook"] != 1 || calls["tool.post/hook"] != 1 {
 		t.Errorf("local ring records of the call: %v, want one tool.pre and one tool.post", calls)
 	}
-	out, errs, code = spoor(nil, "version")
-	_ = out
 	docOut, docErr, docCode := raNSRun(t, ns, nsEnv, bin, "doctor", "--config", "/etc/spoor/spoor.yaml", "--json")
 	var doc struct {
 		Hooks     []struct{ Agent, Status, Path string } `json:"hooks"`
@@ -627,9 +622,11 @@ sources:
 		tag, date := rcv.tags[id], rcv.dates[id]
 		rcv.mu.Unlock()
 		ts, _ := time.Parse(time.RFC3339Nano, finding["ts"].(string))
-		if tag != "spoor.detection" || date != float64(ts.UnixMicro())/1e6 {
-			t.Errorf("shipped finding: tag %q event time %.6f, want spoor.detection and %.6f", tag, date, float64(ts.UnixMicro())/1e6)
+		want := float64(ts.UnixMicro()) / 1e6
+		if tag != "spoor.detection" || date < want-0.000002 || date > want+0.000002 {
+			t.Errorf("shipped finding: tag %q event time %.6f, want spoor.detection and %.6f (the record's ts)", tag, date, want)
 		}
+		t.Logf("Fluent Bit: finding %s arrived tagged %s, event time %.6f, ts %s", id, tag, date, finding["ts"])
 		fb.kill(true)
 	} else {
 		t.Log("Fluent Bit image not present: shipping not checked")

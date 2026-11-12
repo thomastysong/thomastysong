@@ -50,20 +50,35 @@ func argRegexes() (*regexp.Regexp, *regexp.Regexp) {
 //   - NAME=value arguments with a secret-like NAME;
 //   - URL userinfo and secret-named query parameters;
 //   - program-specific flags, once the program has appeared in the vector:
-//     curl -u user:pw, mysql -pPW, sshpass -p PW and -pPW, sqlcmd/bcp/osql
-//     -P, ssh-keygen -N/-P, psexec/paexec -p, schtasks /rp and /p, keytool
+//     curl -u user:pw (and TOKEN:x-oauth-basic), mysql -pPW, sshpass -p PW
+//     and -pPW (its -P/-d/-f values are skipped), sqlcmd/bcp/osql -P,
+//     ssh-keygen -N/-P, psexec/paexec -p, schtasks /rp and /p, keytool
 //     -new, rar -pPW and -hpPW, redis-cli -a, ldapsearch -w, zip -P,
-//     openssl -k and -pass pass:PW, docker login -p, smbclient (and the
-//     other Samba tools) -U user%pw, lftp -u user,pw;
-//   - positional credentials: sqlplus user/password@db as the command,
-//     vault login TOKEN.
+//     openssl -k and -pass/-passin/-passout (pass:PW, or a value with no
+//     source prefix), docker login -p, smbclient (and the other Samba
+//     tools) -U user%pw, lftp -u user,pw;
+//   - positional credentials: sqlplus user/password@db (also
+//     user/"pass word"@db) when sqlplus is the command, directly or behind
+//     a wrapper (sudo, env, rlwrap, timeout ...); vault login TOKEN;
+//     Windows net use \\host\share PASSWORD and net user NAME PASSWORD
+//     (and Samba net [rpc] user add NAME PASSWORD);
+//   - option lists: each secret-named pair of "rw,username=bob,password=PW"
+//     (mount -o) or "a=1;token=X".
 //
 // In those positions the value is redacted whatever it looks like: a
 // one-character password is still the password. Variable references ($TOKEN,
 // %TOKEN%, @file), password sources (stdin, env:VAR, file:path) and prompt
-// requests ("*", "-") are kept. Every argument finally passes through
-// Redact, which catches credentials embedded anywhere else and leaves
-// existing redaction markers as they are.
+// requests ("*", "-") are kept, and so is a file path after a flag that is
+// a password only by its name (openvpn --auth-user-pass FILE). A plain "--"
+// ends the options of the programs before it, not flag recognition: what
+// follows is often handed to another program ("dotnet run -- --password
+// PW"). Values that already hold redaction markers keep them; whatever
+// else such a value holds is redacted around them.
+//
+// Every argument finally passes through Redact, including the parts a
+// structural rule keeps (the user of user:pw, a connect string, a kept
+// reference), so a credential Redact finds on its own never survives
+// RedactArgs. Existing redaction markers are left as they are.
 //
 // The result has the same length as args; args is not modified.
 func RedactArgs(args []string) (out []string) {
@@ -78,8 +93,11 @@ func RedactArgs(args []string) (out []string) {
 	if args == nil {
 		return nil
 	}
-	st := argScan{args: args, out: make([]string, len(args)), progs: map[string]int{}}
+	st := argScan{args: args, out: make([]string, len(args)), progs: map[string]int{}, progPos: true}
 	st.run()
+	for i, o := range st.out {
+		st.out[i], _ = Redact(o)
+	}
 	return st.out
 }
 
@@ -102,11 +120,26 @@ type argScan struct {
 	// the flag that set it was a Windows "/switch".
 	pending      flagMode
 	pendingSlash bool
-	endOfFlags   bool
 	// prev and prevPrev are the two latest operands.
 	prev, prevPrev string
 	// vaultLogin: "vault login" was seen and its token operand not yet.
 	vaultLogin bool
+	// progPos: the next operand is in command position (nothing but
+	// wrappers, their arguments and NAME=value assignments so far); skip
+	// counts the wrapper's own operands still to come; wrapper is the
+	// latest wrapper.
+	progPos bool
+	skip    int
+	wrapper string
+	// logon: the program in command position is sqlplus and its first
+	// operand, the logon, is next.
+	logon bool
+	// net is the "net use" / "net user" / "net password" subcommand whose
+	// password operand is still to come; netN counts its operands and
+	// netRemote says the share of "net use" was seen.
+	net       string
+	netN      int
+	netRemote bool
 }
 
 type seenTool struct {
@@ -126,7 +159,7 @@ func (st *argScan) run() {
 				continue
 			}
 		}
-		if !st.endOfFlags && a == "--" {
+		if a == "--" {
 			st.out[i] = a
 			if st.nestedCommand() {
 				// kubectl exec pod -- mysql -pSECRET: what follows is a new
@@ -134,14 +167,20 @@ func (st *argScan) run() {
 				st.restart(i + 1)
 				continue
 			}
-			st.endOfFlags = true
+			// A plain "--" ends the options of the programs before it, so
+			// their grammars stop here. It does not end flag recognition:
+			// runners hand what follows to the program they start
+			// ("dotnet run -- --password PW", "make run -- --token X"),
+			// whose flags are unknown here but named like what they carry.
+			// The cost is "grep -- --token src/" losing its path.
+			st.tools = st.tools[:0]
 			continue
 		}
-		if !st.endOfFlags && len(a) > 1 && a[0] == '-' {
+		if len(a) > 1 && a[0] == '-' {
 			st.out[i], st.pending = st.redactFlag(a, hasNext)
 			continue
 		}
-		if !st.endOfFlags && len(a) > 1 && a[0] == '/' {
+		if len(a) > 1 && a[0] == '/' {
 			if mode, ok := st.windowsSwitch(a); ok {
 				st.out[i] = a
 				if hasNext {
@@ -172,7 +211,7 @@ func takesValue(mode flagMode, slash bool, a string) bool {
 	case modeSecret:
 		// A credential that itself starts with "--" is not a realistic case.
 		return !(len(a) > 2 && a[0] == '-' && a[1] == '-')
-	case modePassword:
+	case modePassword, modePassArg, modeArg:
 		// Password-named flags often prompt when given no value, and some
 		// are commands ("keytool -storepasswd -new PW"), so a following
 		// flag is the next flag. Only flag-shaped words count: "-Xy7!" is
@@ -201,13 +240,26 @@ func flagShaped(a string) bool {
 }
 
 // noteOperand records an operand: the program and subcommand words that
-// select a grammar, and the "vault login" sequence.
+// select a grammar, the "vault login" and "net use" sequences, and the
+// program in command position.
 func (st *argScan) noteOperand(i int, a string) {
+	if shellSeparator(a) {
+		// A tokenised shell line: the next operand starts a command.
+		st.progPos, st.skip, st.wrapper, st.logon = true, 0, "", false
+		st.net = ""
+		st.lastOperand = i + 1
+		st.prevPrev, st.prev = st.prev, a
+		return
+	}
 	word := programWord(a)
+	if st.progPos {
+		st.commandPosition(word, a)
+	}
 	if word != "" {
 		if word == "login" && programWord(st.prev) == "vault" {
 			st.vaultLogin = true
 		}
+		st.netSubcommand(word)
 		st.progs[word] = i + 1
 		if spec := toolSpecs()[word]; spec != nil {
 			for k := range st.tools {
@@ -223,12 +275,121 @@ func (st *argScan) noteOperand(i int, a string) {
 	st.prevPrev, st.prev = st.prev, a
 }
 
+// commandPosition handles an operand while the command is still to come:
+// a wrapper ("sudo -u oracle", "env", "rlwrap", "timeout 30") and NAME=value
+// assignments leave the next operand in command position; anything else is
+// the command.
+func (st *argScan) commandPosition(word, a string) {
+	switch {
+	case st.skip > 0:
+		st.skip-- // timeout's duration, chroot's directory
+	case assignment(a):
+	case st.wrapper == "cmd" && len(a) >= 2 && len(a) <= 3 && a[0] == '/':
+		// cmd /c, /k, /s, /q: switches of cmd.exe, which reach RedactArgs
+		// as operands.
+	default:
+		if spec := toolSpecs()[word]; word != "" && spec != nil && spec.wraps {
+			st.wrapper, st.skip = word, spec.lead
+			return
+		}
+		st.progPos = false
+		st.logon = word == "sqlplus"
+	}
+}
+
+// netSubcommand starts the "net use", "net user" and "net password"
+// sequences (Windows net.exe, and Samba's net with an optional rpc, ads or
+// rap), whose passwords are operands.
+func (st *argScan) netSubcommand(word string) {
+	switch word {
+	case "use", "user", "password":
+	default:
+		return
+	}
+	isNet := func(w string) bool { w = programWord(w); return w == "net" || w == "net1" }
+	samba := false
+	switch asciiLower(st.prev) {
+	case "rpc", "ads", "rap":
+		samba = isNet(st.prevPrev)
+	}
+	if !isNet(st.prev) && !(samba && word != "use") {
+		return
+	}
+	st.net, st.netN, st.netRemote = word, 0, false
+}
+
+// netPassword handles an operand of "net use" / "net user" / "net password".
+//
+//	net use [device] \\host\share [password | *] [/user:name] ...
+//	net user name [password | *] [/add] ...
+//	net [rpc] user add name [password]      (Samba)
+//	net [rpc] user password name [password] (Samba)
+//	net [rpc] password name [password]      (Samba)
+//
+// Switches (/user:bob, /add, /persistent:no) reach here as operands and are
+// skipped; "*" prompts and is kept.
+func (st *argScan) netPassword(a string) (string, bool) {
+	if strings.HasPrefix(a, "/") && !strings.HasPrefix(a, "//") {
+		return "", false
+	}
+	switch st.net {
+	case "use":
+		if !st.netRemote {
+			st.netRemote = strings.HasPrefix(a, `\\`) || strings.HasPrefix(a, "//") || strings.Contains(a, "://")
+			return "", false
+		}
+	case "user", "password":
+		st.netN++
+		if st.netN == 1 && st.net == "user" {
+			switch asciiLower(a) {
+			case "add", "password":
+				st.netN = 0 // Samba: the user name follows
+				return "", false
+			case "delete", "del", "info", "rename", "list", "setprimarygroup", "deluser", "adduser":
+				st.net = "" // Samba subcommands without a password
+				return "", false
+			}
+		}
+		if st.netN < 2 {
+			return "", false // the user name
+		}
+	default:
+		return "", false
+	}
+	st.net = ""
+	if keepPasswordValue(a) {
+		return a, true
+	}
+	return markAroundMarkers(KindPassword, a), true
+}
+
+// shellSeparator reports the control operators of a tokenised shell line.
+func shellSeparator(a string) bool {
+	switch a {
+	case "&&", "||", ";", "|", "&", "|&":
+		return true
+	}
+	return false
+}
+
+// assignment reports a NAME=value operand ("env ORACLE_SID=x sqlplus").
+func assignment(a string) bool {
+	eq := strings.IndexByte(a, '=')
+	if eq <= 0 || eq > 128 {
+		return false
+	}
+	_, envName := argRegexes()
+	return envName.MatchString(a[:eq])
+}
+
 func (st *argScan) restart(start int) {
 	clear(st.progs)
 	st.tools = st.tools[:0]
 	st.start, st.lastOperand = start, 0
 	st.prev, st.prevPrev = "", ""
 	st.vaultLogin = false
+	st.progPos, st.skip, st.wrapper, st.logon = true, 0, "", false
+	st.net = ""
 }
 
 // toolMode returns the mode the grammar of a program seen earlier gives
@@ -249,10 +410,17 @@ func (st *argScan) toolMode(flag string) flagMode {
 
 // operand redacts an argument that is neither a flag nor a flag's value.
 func (st *argScan) operand(i int, a string) string {
-	// sqlplus user/password@db: only as the command itself, since
-	// "grep -r sqlplus src/main" has the same shape.
-	if i > st.start && programWord(st.args[st.start]) == "sqlplus" {
+	// sqlplus user/password@db: only the first operand of sqlplus in
+	// command position, since "grep -r sqlplus src/main" has the same
+	// shape.
+	if st.logon {
+		st.logon = false
 		if r, ok := redactSQLPlusLogon(a); ok {
+			return r
+		}
+	}
+	if st.net != "" {
+		if r, ok := st.netPassword(a); ok {
 			return r
 		}
 	}
@@ -264,7 +432,7 @@ func (st *argScan) operand(i int, a string) string {
 	// "config set <name> <value>" style: the value follows a secret name.
 	if st.prev != "" && pairContext(st.prevPrev, st.progs) &&
 		secretName(pairName(st.prev)) != nameNone && !keepAsWritten(a) {
-		return markerFor(kindForName(pairName(st.prev)), a)
+		return markAroundMarkers(kindForName(pairName(st.prev)), a)
 	}
 	return redactLoose(a)
 }
@@ -286,7 +454,7 @@ func (st *argScan) vaultToken(i int, a string) (string, bool) {
 	if keepPasswordValue(a) {
 		return a, true
 	}
-	return markerFor(KindVaultToken, a), true
+	return markAroundMarkers(KindVaultToken, a), true
 }
 
 // windowsSwitch recognises a "/switch" whose next argument is a password:
@@ -530,18 +698,27 @@ func defineFlag(flag string) bool {
 	return secretName(flag[2:]) != nameNone
 }
 
+// redactByMode redacts a flag's value by the flag's mode. A value that
+// already holds redaction markers keeps them (markAroundMarkers).
 func redactByMode(mode flagMode, v string) string {
 	switch mode {
 	case modeSecret:
 		if keepAsWritten(v) || passSource(v) {
 			return v
 		}
-		return markerFor(KindGenericSecret, v)
-	case modePassword, modeNextPass, modeAttached, modeAttachedOrNext:
+		return markAroundMarkers(KindGenericSecret, v)
+	case modePassword:
+		// A password by the flag's name only (genericMode, "/password",
+		// "-storepass:"): a file path is the file that holds it.
+		if keepNamedPasswordValue(v) {
+			return v
+		}
+		return markAroundMarkers(KindPassword, v)
+	case modeNextPass, modeAttached, modeAttachedOrNext:
 		if keepPasswordValue(v) {
 			return v
 		}
-		return markerFor(KindPassword, v)
+		return markAroundMarkers(KindPassword, v)
 	case modeUserPass:
 		return redactUserPass(v)
 	case modeUserPct:
@@ -549,10 +726,19 @@ func redactByMode(mode flagMode, v string) string {
 	case modeUserComma:
 		return redactUserSep(v, ',')
 	case modePassArg:
+		// openssl -pass/-passin/-passout take a password SOURCE: pass:PW,
+		// env:VAR, file:path, fd:N or stdin. Anything else is not a source
+		// openssl accepts; it is the password typed without "pass:".
 		if strings.HasPrefix(v, "pass:") {
-			return "pass:" + markerFor(KindPassword, v[5:])
+			if keepPasswordValue(v[5:]) {
+				return v
+			}
+			return "pass:" + markAroundMarkers(KindPassword, v[5:])
 		}
-		return v // env:NAME, file:path, fd:N, stdin
+		if keepPasswordValue(v) {
+			return v // env:NAME, file:path, fd:N, stdin, $VAR
+		}
+		return markAroundMarkers(KindPassword, v)
 	case modeHeader:
 		return redactHeader(v)
 	case modeData:
@@ -562,8 +748,8 @@ func redactByMode(mode flagMode, v string) string {
 }
 
 // redactUserSep handles "user<sep>password" (Samba user%password, lftp
-// user,password): the user is kept; a value without the separator is a user
-// name alone.
+// user,password): the user is kept (RedactArgs still passes it through
+// Redact); a value without the separator is a user name alone.
 func redactUserSep(v string, sep byte) string {
 	if keepPasswordValue(v) {
 		return v // %SMBCREDS%, $LFTP_LOGIN
@@ -575,11 +761,17 @@ func redactUserSep(v string, sep byte) string {
 	if keepPasswordValue(v[i+1:]) {
 		return v
 	}
-	return v[:i+1] + markerFor(KindPassword, v[i+1:])
+	return v[:i+1] + markAroundMarkers(KindPassword, v[i+1:])
 }
 
+// oauthBasicPassword is the fixed password of GitHub's "curl -u
+// TOKEN:x-oauth-basic", where the user part is the credential.
+const oauthBasicPassword = "x-oauth-basic"
+
 // redactUserPass handles "user:password" (curl -u). A lone value is redacted
-// only when it looks like a token ("curl -u <token>:").
+// only when it looks like a token ("curl -u <token>:"). The user is kept
+// (RedactArgs still passes it through Redact) unless the password is
+// x-oauth-basic, which makes the user the token.
 func redactUserPass(v string) string {
 	if keepAsWritten(v) {
 		return v
@@ -588,15 +780,21 @@ func redactUserPass(v string) string {
 	if i < 0 || i == len(v)-1 {
 		user := strings.TrimSuffix(v, ":")
 		if len(user) >= 20 && Entropy(user) >= 3.5 {
-			return markerFor(KindGenericSecret, user) + v[len(user):]
+			return markAroundMarkers(KindGenericSecret, user) + v[len(user):]
 		}
-		r, _ := Redact(v)
-		return r
+		return redactLoose(v)
 	}
-	if keepPasswordValue(v[i+1:]) {
+	user, pw := v[:i], v[i+1:]
+	if asciiLower(pw) == oauthBasicPassword {
+		if keepPasswordValue(user) {
+			return v
+		}
+		return markAroundMarkers(KindGenericSecret, user) + v[i:]
+	}
+	if keepPasswordValue(pw) {
 		return v
 	}
-	return v[:i+1] + markerFor(KindPassword, v[i+1:])
+	return v[:i+1] + markAroundMarkers(KindPassword, pw)
 }
 
 // redactHeader handles one "Name: value" header.
@@ -626,17 +824,17 @@ func redactHeader(h string) string {
 		if strings.EqualFold(strings.TrimSpace(scheme), "basic") {
 			kind = KindBasicAuthHeader
 		}
-		return lead + scheme + markerFor(kind, cred)
+		return lead + scheme + markAroundMarkers(kind, cred)
 	case lname == "cookie" || lname == "set-cookie":
 		if keepAsWritten(value) {
 			return h
 		}
-		return lead + markerFor(KindCookieHeader, value)
+		return lead + markAroundMarkers(KindCookieHeader, value)
 	case secretName(name) != nameNone:
 		if keepAsWritten(value) {
 			return h
 		}
-		return lead + markerFor(KindGenericSecret, value)
+		return lead + markAroundMarkers(KindGenericSecret, value)
 	}
 	return redactLoose(h)
 }
@@ -669,7 +867,7 @@ func redactData(d string) string {
 		if eq := strings.IndexByte(pair, '='); eq > 0 && eq < len(pair)-1 {
 			name := percentDecode(pair[:eq])
 			if (secretName(name) != nameNone || formSecretNames.has(asciiLower(name))) && !keepAsWritten(pair[eq+1:]) {
-				pair = pair[:eq+1] + markerFor(kindForName(name), pair[eq+1:])
+				pair = pair[:eq+1] + markAroundMarkers(kindForName(name), pair[eq+1:])
 			}
 		}
 		b.WriteString(pair)
@@ -698,7 +896,7 @@ func redactJSONText(s string) string {
 			continue
 		}
 		b.WriteString(s[last:loc[4]])
-		b.WriteString(markerFor(kindForName(name), value))
+		b.WriteString(markAroundMarkers(kindForName(name), value))
 		last = loc[5]
 	}
 	b.WriteString(s[last:])
@@ -717,16 +915,17 @@ func redactWindowsFlag(a string) (string, bool) {
 	name, v := a[1:i], a[i+1:]
 	switch {
 	case passwordFlag(name):
-		// /password:x, /storepass:x: a password, whatever it looks like.
-		if keepPasswordValue(v) {
+		// /password:x, /storepass:x: a password, whatever it looks like
+		// (but a file path is the file that holds it).
+		if keepNamedPasswordValue(v) {
 			return "", false
 		}
-		return a[:i+1] + markerFor(KindPassword, v), true
+		return a[:i+1] + markAroundMarkers(KindPassword, v), true
 	case secretName(name) != nameNone:
 		if keepAsWritten(v) {
 			return "", false
 		}
-		return a[:i+1] + markerFor(kindForName(name), v), true
+		return a[:i+1] + markAroundMarkers(kindForName(name), v), true
 	}
 	return "", false
 }

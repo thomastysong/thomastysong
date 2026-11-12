@@ -163,9 +163,9 @@ func TestCrossReferences(t *testing.T) {
 func eventRecord(et string, extra map[string]any) map[string]any {
 	r := map[string]any{
 		"schema_version": "0.5.0", "record_type": "event", "run_id": "run-x",
-		"endpoint":   map[string]any{"hostname": "h", "os": "linux", "arch": "amd64", "username": "u", "uid": "1001"},
-		"event_id":   "evt-" + et, "event_type": et, "source_agent": "claude-code", "source_type": "hook",
-		"timestamp":  "2026-11-12T10:00:00Z", "session_id": "s-1", "confidence": "high",
+		"endpoint": map[string]any{"hostname": "h", "os": "linux", "arch": "amd64", "username": "u", "uid": "1001"},
+		"event_id": "evt-" + et, "event_type": et, "source_agent": "claude-code", "source_type": "hook",
+		"timestamp": "2026-11-12T10:00:00Z", "session_id": "s-1", "confidence": "high",
 	}
 	for k, v := range extra {
 		r[k] = v
@@ -349,8 +349,8 @@ func TestHostileValues(t *testing.T) {
 		"tool_name":    "Bash\x00\x1b[31m",
 		"session_id":   "s\n1\r\x07" + strings.Repeat("x", 10000),
 		"source_agent": "CLAUDE-CODE‮",
-		"command":      7,                         // wrong type: read as absent
-		"endpoint":     "not an object",           // wrong type
+		"command":      7,                        // wrong type: read as absent
+		"endpoint":     "not an object",          // wrong type
 		"tags":         map[string]any{"a": "b"}, // wrong type
 		"tool_input":   strings.Repeat("[", 5000) + strings.Repeat("]", 5000),
 	})

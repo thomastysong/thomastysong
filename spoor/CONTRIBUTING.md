@@ -66,7 +66,7 @@ Some files are generated, and their tests fail until they are regenerated:
 
 | Change | Regenerate | Checked by |
 |---|---|---|
-| `internal/event` (the record types) | `go test ./internal/event -run TestSchema -update` (writes `docs/schema/event.schema.json` and the field reference in `docs/EVENTS.md`) | `go test ./internal/event`, which also validates `docs/schema/examples/*.ndjson` |
+| `internal/event` (the record types), the profile names in `internal/privacy/policy.go`, or the fields the skeleton writers set (`skeleton` in `internal/sink/shrink.go`, `skeleton` and `buildSkeleton` in `internal/privacy/emit.go`) | `go test ./internal/event -run TestSchema -update` (writes `docs/schema/event.schema.json` and the field reference in `docs/EVENTS.md`); a new field without a doc comment also needs a note in `fieldNotes` (`internal/event/schema_test.go`), and a new profile an entry in `neverWritten` there | `go test ./internal/event`, which also validates `docs/schema/examples/*.ndjson` |
 | record shapes the binary writes | `sudo env "PATH=$PATH" docs/schema/examples/regen.sh`, then update the examples quoted in `docs/EVENTS.md` | same |
 | `internal/rules/packs/*.yaml`, `internal/rules/lists.yaml` | `go generate ./internal/rules` (writes `packs/embedded.cache`) | `go test ./internal/rules` |
 | the shipped packs | the catalogue in `docs/RULES.md` (jq program shown there) | review |

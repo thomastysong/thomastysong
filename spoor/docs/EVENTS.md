@@ -22,7 +22,7 @@ The stream is the record's `kind`, so the tag Fluent Bit gives a record (`spoor.
 | `kind` (= stream) | Types | Written by | Shipped in |
 |---|---|---|---|
 | `activity` | `session.start`, `session.end`, `prompt.submit`, `tool.pre`, `tool.post`, `turn.end`, `subagent.start`, `subagent.stop`, `permission.decision`, `config.change`, `notification`, `context.compact`, `agent.process.start`, `agent.process.stop`, `process.exec`, `hook.payload_anomaly` | hooks (through the spool), transcript tailer, process monitor, osquery exec pull, OTel receiver, adapters | `standard`, `full`; in `minimal` only as detection context |
-| `detection` | `detection.finding`, `detection.context` | the rules engine and the coverage logic (findings); the privacy stage (context) | every profile |
+| `detection` | `detection.finding`, `detection.context` | the rules engine, the engine's hook-bypass check and relayed findings of other sensors ([RULES.md](RULES.md#detections-that-are-not-in-a-pack)); the privacy stage (context) | every profile |
 | `inventory` | `inventory.asset` | inventory scan | every profile |
 | `posture` | `posture.check` | inventory rules over the scan | every profile |
 | `health` | `health.heartbeat`, `health.error` | the pipeline (heartbeat), the daemon (errors) | every profile |
@@ -123,18 +123,18 @@ SIEM rules with an event-time lookback window miss late records if they schedule
 ## Truncation and skeleton records
 
 - The encoded line, newline included, is capped at `output.max_line_bytes` (default 16 KiB, accepted range 8 KiB to 64 KiB). The cap is on the encoded form because JSON escaping can turn one byte into six. Larger fields are cut, largest first; a cut value ends in a `[TRUNCATED:<n>B]` marker, and every cut field is named in `truncated`. When the sink cuts `target.command` it records the original length in `labels["target.command.len"]`. No hash of the full value is kept.
-- If redaction fails, or a record cannot be brought under the cap, a content-free **skeleton** is written instead: the routing fields only, `truncated: ["*"]`, and (from the privacy stage) a label naming the reason, `privacy_error` or `line_cap`. A skeleton's string values may be clipped, so the schema checks only its marker and routing fields (`$defs/Skeleton`). Heartbeat counter `records.linecap_dropped` counts records that could not be written at all.
+- If redaction fails, or a record cannot be brought under the cap, a content-free **skeleton** is written instead: `truncated: ["*"]`, the routing and identity fields, a few identity fields of `host`, `user`, `agent`, `session`, `tool`, `detection`, `check`, `asset` and `health`, never content, and (from the privacy stage) a label naming the reason, `privacy_error` or `line_cap`. The schema's `$defs/Skeleton` admits exactly the fields the two functions that write skeletons set (`internal/sink` and `internal/privacy`; the generator reads them from their source), in closed objects. A skeleton's strings may be clipped to a byte budget, so there a vocabulary field holds a value of its vocabulary, a prefix of one (`detectio`), or nothing. Heartbeat counter `records.linecap_dropped` counts records that could not be written at all.
 
 ## Detection records
 
-A `detection.finding` record is a copy of the triggering record (host, user, agent, session, tool, target, process, after the privacy stage) plus `detection`:
+A `detection.finding` record is a copy of the triggering record (host, user, agent, session, tool, target, process, after the privacy stage) plus `detection`. Most come from rules; the engine's hook-bypass check (`SPR-COV-901`, `SPR-COV-902`) and findings relayed from numbat (`rule_id` `numbat:<id>`, `source: adapter`) are described in [RULES.md](RULES.md#detections-that-are-not-in-a-pack).
 
 - `rule_id`, `title`, `class` (`signal` < `finding` < `alert`), `severity`, `confidence`, `maturity`, `category`, `tags` (ATT&CK, ATLAS and OWASP ids in Sigma style: `attack.t1059.004`, `atlas.aml.t0050`, `owasp.asi05`), `remedy`.
 - `evidence`: the fields the rule names, copied from a fixed allowlist of non-content fields (list values as JSON arrays in a string).
 - `event_ids`: the records that produced the match, oldest first; for a sequence rule, the chain.
 - `response` is what the rule asks for in guard mode (`none`, `ask`, `block`); `enforced` is true only when spoor actually returned that answer to the agent. With guard mode off (the default) `enforced` is absent.
 - `count`: how many matches the record stands for after deduplication (repeats inside `rules.suppress_for` are counted, not re-emitted); `dedup_key` groups repeats (written only with a tenant key, see the profile table); `escalate` marks findings worth a second look by a human or an LLM judge.
-- Labels stamped on every finding so that a rule change is attributable: `rule_pack`, `rule_pack_version`, `rules_hash` (first 12 hex digits of the rule set's hash), `rules_version` (every loaded `pack@version`), and `bundle_version` when a signed bundle is installed.
+- Labels stamped on every rule's finding so that a rule change is attributable: `rule_pack`, `rule_pack_version`, `rules_hash` (first 12 hex digits of the rule set's hash), `rules_version` (every loaded `pack@version`), and `bundle_version` when a signed bundle is installed. The engine's own findings carry `rules_hash`, `rules_version` and `bundle_version` only; relayed findings carry none of them.
 
 Classes below `rules.min_class` (default `finding`) are not written, but still count into the session summary. Rules are documented in [RULES.md](RULES.md).
 
@@ -339,7 +339,7 @@ An activity record in the `standard` profile. The hook received `curl -u deploy:
 }
 ```
 
-The final summary of the same session in `minimal`. The hook and the transcript both reported it (`surfaces`); the three tool calls the transcript confirmed after their hook records were written are counted in the labels:
+The final summary of the same session in `minimal`. The hook and the transcript both reported it (`surfaces`). The transcript confirmed three of the session's records after their hook records had been written: the prompt and the first tool call's `tool.pre` and `tool.post` (the transcript has those three lines). They are counted in the labels:
 
 <!-- example: minimal.ndjson -->
 ```json
@@ -431,13 +431,23 @@ After regenerating, update the quoted examples above (the test requires each to 
 
 ## The schema
 
-`docs/schema/event.schema.json` is generated from the Go types (field names, JSON tags, which fields are always written) and from the package's source (doc comments and the constants of every closed vocabulary):
+`docs/schema/event.schema.json` is generated from the Go types (field names, JSON tags, which fields are always written) and from the package's source (doc comments and the constants of every closed vocabulary), plus three facts read from the source where they are produced: the `detection.context` type and the profile names (`internal/privacy`), and the fields a skeleton carries (the skeleton writers in `internal/sink` and `internal/privacy`). A change to any of them makes `go test ./internal/event` fail until the schema is regenerated:
 
 ```
 go test ./internal/event -run TestSchema -update
 ```
 
-What it enforces: JSON types; required fields (those the encoder always writes); `additionalProperties: false` on every object whose Go type is a struct (open maps are only `labels`, `asset.detail`, `detection.evidence`, `health.counters`, `summary.tool_calls` and `tool.input`); the closed vocabularies declared as constants in `internal/event` plus `detection.context` from `internal/privacy` (kind, type, source, fidelity, integrity, tool kind, asset kind, scope, change, detection class, severity); `v` equal to 1; the time format. Values described only in a field comment (for example `outcome.status`, `coverage.state`) are documented below but not enforced. The test also validates every example line, checks the validator rejects records with an unknown field, a value outside a vocabulary, a missing required field or a malformed time, and fails when the committed schema or the field reference below differs from what the code generates.
+What it enforces:
+
+- JSON types; required fields: those the encoder always writes, and `privacy`, which the privacy stage stamps on every record it lets through (a record without it did not pass that stage).
+- `additionalProperties: false` on every object whose Go type is a struct. The open maps are only `labels`, `asset.detail`, `detection.evidence`, `health.counters`, `summary.tool_calls` and `tool.input`.
+- The closed vocabularies declared as constants in `internal/event`, plus `detection.context` and the profile names from `internal/privacy`: kind, type, source, fidelity, integrity, tool kind, asset kind, scope, change, detection class, severity, privacy. Values described only in a field comment (for example `outcome.status`, `coverage.state`) are documented below but not enforced.
+- `v` equal to 1.
+- The time format, with the range of every component checked, month and day together. A regular expression cannot know leap years, so the pattern admits February 29 in every year; the `Time` definition also says `format: date-time`, which this package's validator asserts (and so rejects 2026-02-29). A generic validator asserts it only when format assertion is switched on.
+- What each profile never writes, from the [profile table](#what-each-profile-ships): in `minimal` and `standard` no `prompt.text`, `tool.input`, `tool.output`, `target.query` or `session.transcript`, in `full` no `session.transcript`. The test fails when the table and the schema disagree.
+- A skeleton only as described [above](#truncation-and-skeleton-records): the marker `"*"` in `truncated` does not open the schema.
+
+The test also validates every example line; checks that the validator rejects records with an unknown field, a value outside a vocabulary, a missing required field, a malformed or impossible time, a field the record's profile never writes, or a skeleton with anything its writers do not set; and fails when the committed schema or the field reference below differs from what the code generates, or when a field in that reference has no description.
 
 To check other records against the schema (a live outbox, the local ring, a SIEM export as NDJSON), name files or directories in `SPOOR_SCHEMA_VALIDATE` (separated by `:`, or `;` on Windows):
 
@@ -445,7 +455,7 @@ To check other records against the schema (a live outbox, the local ring, a SIEM
 $ SPOOR_SCHEMA_VALIDATE=<data_dir>/outbox:<data_dir>/local go test ./internal/event -run TestSchemaValidatesGivenFiles -v
 ```
 
-It reports every line that does not validate, and the count it checked (`validated 248 records in 19 files` over the outputs of the runs made for this page).
+It reports every line that does not validate and the count it checked, and fails when it found no record at all, so a mistyped or empty directory is not a pass. Over the binary's outputs collected while this page was written (four example runs, a `spoor scan` and three `spoor detect` runs, one of them over hostile input) it printed `validated 273 records in 16 files`.
 
 `v` is the schema version. It changes only on a breaking change; new optional fields are not breaking, so consumers should ignore fields they do not know rather than reject the record.
 
@@ -453,7 +463,7 @@ It reports every line that does not validate, and the count it checked (`validat
 
 <!-- BEGIN GENERATED: field reference (go test ./internal/event -run TestSchema -update) -->
 
-Generated from the Go types in `internal/event` and their doc comments. "always" fields are written on every record of that object (an empty string or zero when unset); the others are left out when empty.
+Generated from the Go types in `internal/event` and their doc comments; a field without one is described by a note in `internal/event/schema_test.go` (`fieldNotes`) or by its type's comment. "always" fields are written on every record of that object (an empty string or zero when unset); the others are left out when empty.
 
 ### `Event` object
 
@@ -462,38 +472,38 @@ Event is the normalized record.
 | Field | Type | Present | Description |
 |---|---|---|---|
 | `v` | integer | always | Schema version, 1 (SchemaVersion). Bumped only on breaking changes; adding optional fields is not breaking. |
-| `id` | string | always |  |
-| `ts` | [`Time`](#time-string) | always |  |
+| `id` | string | always | Record id: UUID-shaped and starting with the record time in milliseconds, so ids sort by time. Version 7 ids are random; version 8 ids are derived from the record's natural key (StableID), so a replayed delivery, or the twin of a record from another surface, has the same id. Deduplicate deliveries on it. |
+| `ts` | [`Time`](#time-string) | always | When the thing happened, as its source says: the hook's clock, the log's timestamp, the triggering record's ts for a finding, the write time for heartbeats and summaries. |
 | `emitted` | [`Time`](#time-string) | when set | Emitted is when the record was written for shipping, set only when that is more than a minute after TS (a laptop that was offline, a backfilled transcript). Rules with event-time lookback windows can schedule on it. |
 | `seq` | integer ≥ 0 | when set | monotonic per (Writer, stream), for gap detection downstream |
 | `dedupe` | string | when set | Dedupe is identical for every record that describes the same action, whichever surface reported it (see DedupeKey). |
-| `kind` | [`Kind`](#kind-values) | always |  |
-| `type` | [`EventType`](#eventtype-values) | always |  |
-| `source` | [`Source`](#source-values) | always |  |
-| `fidelity` | [`Fidelity`](#fidelity-values) | when set |  |
+| `kind` | [`Kind`](#kind-values) | always | Kind is the top-level class of a record and selects the output stream. |
+| `type` | [`EventType`](#eventtype-values) | always | The record type within its kind. |
+| `source` | [`Source`](#source-values) | always | Source is the collection method that produced a record. |
+| `fidelity` | [`Fidelity`](#fidelity-values) | when set | Fidelity says whether the record was directly observed or reconstructed. |
 | `sources` | array of [`Source`](#source-values) | when set | Sources lists every surface that corroborated this event after cross-surface correlation (for example ["hook","transcript"]). |
-| `integrity` | [`Integrity`](#integrity-values) | when set |  |
+| `integrity` | [`Integrity`](#integrity-values) | when set | Integrity says who could have altered a record before it was written. Hooks run as the monitored user, so their records are advisory until a privileged collector corroborates them; anything a Fleet policy depends on must be root-integrity. |
 | `writer` | string | when set | Writer identifies the process that wrote the record (random per process start). Seq is monotonic per Writer, and heartbeats report per-writer counts, so a consumer can prove that nothing was lost or removed. |
-| `host` | [`Host`](#host-object) | when set |  |
-| `user` | [`User`](#user-object) | when set |  |
-| `agent` | [`Agent`](#agent-object) | when set |  |
-| `account` | [`Account`](#account-object) | when set |  |
-| `session` | [`Session`](#session-object) | when set |  |
-| `tool` | [`Tool`](#tool-object) | when set |  |
-| `target` | [`Target`](#target-object) | when set |  |
-| `prompt` | [`Prompt`](#prompt-object) | when set |  |
-| `outcome` | [`Outcome`](#outcome-object) | when set |  |
-| `process` | [`Process`](#process-object) | when set |  |
-| `container` | [`Container`](#container-object) | when set |  |
-| `repo` | [`Repo`](#repo-object) | when set |  |
+| `host` | [`Host`](#host-object) | when set | Host identifies the endpoint. ID should equal osquery's system_info.uuid so events join to Fleet hosts. |
+| `user` | [`User`](#user-object) | when set | User is the OS account the agent runs as. |
+| `agent` | [`Agent`](#agent-object) | when set | Agent identifies the AI agent product. |
+| `account` | [`Account`](#account-object) | when set | The identity the agent is signed in with. No collector in this release sets it; the Claude Code OpenTelemetry receiver records the organization as labels.org_id instead. |
+| `session` | [`Session`](#session-object) | when set | Session identifies one agent conversation. |
+| `tool` | [`Tool`](#tool-object) | when set | Tool describes the tool call. |
+| `target` | [`Target`](#target-object) | when set | Target is what the tool call acts on, extracted and normalized. |
+| `prompt` | [`Prompt`](#prompt-object) | when set | Prompt summarizes a user prompt without necessarily carrying it. |
+| `outcome` | [`Outcome`](#outcome-object) | when set | Outcome is the result of a tool call or turn. |
+| `process` | [`Process`](#process-object) | when set | Process describes an OS process. |
+| `container` | [`Container`](#container-object) | when set | Container locates the workload when the agent runs in a container. |
+| `repo` | [`Repo`](#repo-object) | when set | Repo describes the source repository of the session's working directory. |
 | `asset` | [`Asset`](#asset-object) | when set | Kind == inventory |
 | `check` | [`Check`](#check-object) | when set | Kind == posture |
 | `detection` | [`Detection`](#detection-object) | when set | Kind == detection |
 | `health` | [`Health`](#health-object) | when set | Kind == health |
 | `summary` | [`Summary`](#summary-object) | when set | Kind == summary |
-| `privacy` | string | when set | Privacy is the tier that was applied when the record was emitted. |
+| `privacy` | [`Profile`](#profile-values) | when set | Privacy is the tier that was applied when the record was emitted. |
 | `truncated` | array of string | when set | Truncated names fields whose values were cut, so truncation is never silent; the cut value itself ends in an "[TRUNCATED:&lt;n&gt;B]" marker (when a sink cuts target.command to fit its line cap it records the full length in Labels["target.command.len"] instead). No hash of the full value is kept: an unkeyed one would let a reader confirm guesses about the missing text. |
-| `labels` | object of string | when set |  |
+| `labels` | object of string | when set | Facts that have no field of their own, as strings (hook_event, end_reason, rule_pack, context_for, first_seen and the others named in docs/EVENTS.md). Values pass the same redaction as every other string. |
 
 ### `Host` object
 
@@ -501,8 +511,8 @@ Host identifies the endpoint. ID should equal osquery's system_info.uuid so even
 
 | Field | Type | Present | Description |
 |---|---|---|---|
-| `id` | string | when set |  |
-| `name` | string | when set |  |
+| `id` | string | when set | Host identifier, meant to equal osquery's system_info.uuid so that records join to Fleet hosts: host_id from the configuration, SPOOR_HOST_ID, the host_id file the osquery extension writes, or the hardware UUID (on Linux without one, machine-id). Empty when nothing is derivable; the heartbeat label host_id_source names the source. |
+| `name` | string | when set | Host name: SPOOR_HOST_NAME when it is set to a plausible name (the Kubernetes node sensor sets it to the node's name), else the kernel's host name. |
 | `os` | string | when set | linux \| darwin \| windows |
 | `arch` | string | when set | amd64 \| arm64 |
 
@@ -512,7 +522,7 @@ User is the OS account the agent runs as.
 
 | Field | Type | Present | Description |
 |---|---|---|---|
-| `name` | string | when set |  |
+| `name` | string | when set | Account name. With privacy.pseudonymize_users, a keyed pseudonym (removed when no key is configured). |
 | `id` | string | when set | uid on POSIX, SID on Windows |
 
 ### `Agent` object
@@ -522,9 +532,9 @@ Agent identifies the AI agent product.
 | Field | Type | Present | Description |
 |---|---|---|---|
 | `id` | string | always | catalog id, e.g. "claude-code" |
-| `name` | string | when set |  |
-| `version` | string | when set |  |
-| `pid` | integer | when set |  |
+| `name` | string | when set | Product name from the catalog, on process-monitor and inventory records. |
+| `version` | string | when set | Version as the surface or the scan reported it. |
+| `pid` | integer | when set | Process id of the agent, on process-monitor records. |
 | `surface` | string | when set | Surface is how the agent was run: cli \| ide \| desktop \| sdk \| ci \| cloud. |
 
 ### `Account` object
@@ -534,7 +544,7 @@ Account is the identity the agent is signed in with, when a surface reports it (
 | Field | Type | Present | Description |
 |---|---|---|---|
 | `id` | string | when set | ID is the vendor account identifier; emitted as a keyed digest unless the privacy profile is full. |
-| `org` | string | when set |  |
+| `org` | string | when set | Organization the account belongs to. |
 | `kind` | string | when set | Kind: organization \| personal \| api_key \| unknown. |
 
 ### `Session` object
@@ -543,15 +553,15 @@ Session identifies one agent conversation.
 
 | Field | Type | Present | Description |
 |---|---|---|---|
-| `id` | string | when set |  |
+| `id` | string | when set | The agent's own session id. |
 | `parent_id` | string | when set | parent session for subagents |
-| `turn_id` | string | when set |  |
-| `cwd` | string | when set |  |
+| `turn_id` | string | when set | Id of the current turn (a prompt and the work it caused), when the surface reports one. |
+| `cwd` | string | when set | Working directory of the session; a path under the acting user's home is written as ~/... |
 | `permission_mode` | string | when set | PermissionMode is the agent's own vocabulary, normalized to: default \| plan \| accept_edits \| auto \| dont_ask \| bypass. |
-| `model` | string | when set |  |
+| `model` | string | when set | Model the session uses, as the agent reports it. |
 | `transcript` | string | when set | path of the session log, when known |
-| `subagent_id` | string | when set |  |
-| `subagent_type` | string | when set |  |
+| `subagent_id` | string | when set | Id of the subagent thread the record belongs to; absent on the main thread. |
+| `subagent_type` | string | when set | Type or name of that subagent, as the agent reports it. |
 
 ### `Tool` object
 
@@ -560,16 +570,16 @@ Tool describes the tool call.
 | Field | Type | Present | Description |
 |---|---|---|---|
 | `name` | string | when set | agent's own tool name, e.g. "Bash" |
-| `kind` | [`ToolKind`](#toolkind-values) | when set |  |
+| `kind` | [`ToolKind`](#toolkind-values) | when set | ToolKind is the cross-agent normalized class of a tool call. |
 | `use_id` | string | when set | agent's tool-call id; join key across surfaces |
 | `mcp_server` | string | when set | for Kind == mcp |
-| `mcp_tool` | string | when set |  |
+| `mcp_tool` | string | when set | Tool name on that MCP server, for kind mcp. |
 | `input_sha256` | string | when set | InputSHA256 is the hash of the canonical JSON of the tool input, so identical calls correlate without shipping content. |
 | `input_keys` | array of string | when set | InputKeys lists top-level argument names (metadata tier). |
 | `input` | object (any JSON) | when set | Input is the redacted tool input; present only in tiers redacted/full. |
 | `output` | string | when set | Output is the redacted, truncated tool output; tiers redacted/full only. |
-| `output_sha256` | string | when set |  |
-| `output_len` | integer | when set |  |
+| `output_sha256` | string | when set | Keyed digest of the tool output (HMAC with the tenant key); absent without a key. |
+| `output_len` | integer | when set | Size of the tool output in bytes; rounded up to a power of four outside the full profile. |
 
 ### `Target` object
 
@@ -582,7 +592,7 @@ Target is what the tool call acts on, extracted and normalized.
 | `paths` | array of string | when set | additional paths referenced |
 | `url` | string | when set | userinfo, query and fragment stripped unless tier is full |
 | `host` | string | when set | network host |
-| `hosts` | array of string | when set |  |
+| `hosts` | array of string | when set | Further distinct network hosts the call refers to; host holds the first. |
 | `query` | string | when set | web search query; tiers redacted/full only |
 
 ### `Prompt` object
@@ -591,7 +601,7 @@ Prompt summarizes a user prompt without necessarily carrying it.
 
 | Field | Type | Present | Description |
 |---|---|---|---|
-| `len` | integer | always |  |
+| `len` | integer | always | Length of the prompt in bytes; rounded up to a power of four outside the full profile (labels.len_bucketed). |
 | `sha256` | string | when set | keyed hash when a tenant key is configured |
 | `text` | string | when set | tiers redacted/full only |
 
@@ -602,9 +612,9 @@ Outcome is the result of a tool call or turn.
 | Field | Type | Present | Description |
 |---|---|---|---|
 | `status` | string | when set | Status: ok \| error \| denied \| interrupted \| unknown. |
-| `error` | string | when set |  |
-| `duration_ms` | integer | when set |  |
-| `exit_code` | integer | when set |  |
+| `error` | string | when set | Error text the agent reported, redacted; at most 256 bytes outside the full profile. |
+| `duration_ms` | integer | when set | Duration of the call in milliseconds, when the surface reports it. |
+| `exit_code` | integer | when set | Exit status of the command, when the surface reports it. |
 | `decision` | string | when set | Decision: allow \| deny \| ask, when a permission decision was observed. |
 | `decision_source` | string | when set | user \| policy \| hook \| spoor |
 
@@ -614,13 +624,13 @@ Process describes an OS process.
 
 | Field | Type | Present | Description |
 |---|---|---|---|
-| `pid` | integer | when set |  |
-| `ppid` | integer | when set |  |
-| `name` | string | when set |  |
-| `exe` | string | when set |  |
+| `pid` | integer | when set | Process id. On hook records, the process that invoked the hook (the agent, or a shell it started); on process-monitor and exec records, the process itself. |
+| `ppid` | integer | when set | Parent process id. |
+| `name` | string | when set | Process name as the kernel reports it, which the process can set itself. |
+| `exe` | string | when set | Path of the executable. |
 | `args` | array of string | when set | secrets redacted |
-| `start_time` | [`Time`](#time-string) | when set |  |
-| `user` | string | when set |  |
+| `start_time` | [`Time`](#time-string) | when set | Start time of the process; with pid, the join key to EDR process telemetry. |
+| `user` | string | when set | Account the process runs as. |
 | `ancestors` | array of string | when set | Ancestors is the chain of process names from parent to root. |
 | `env_markers` | array of string | when set | EnvMarkers are agent marker variable NAMES found in the environment (values are never emitted except session ids copied into Session). |
 | `flags` | array of string | when set | Flags are risky argv flags recognized by the catalog, e.g. "--dangerously-skip-permissions". |
@@ -631,14 +641,14 @@ Container locates the workload when the agent runs in a container.
 
 | Field | Type | Present | Description |
 |---|---|---|---|
-| `id` | string | when set |  |
+| `id` | string | when set | Container id, from the process's cgroup (process monitor) or from the container a scan looks into. |
 | `runtime` | string | when set | docker \| containerd \| cri-o \| podman |
-| `image` | string | when set |  |
-| `name` | string | when set |  |
-| `pod` | string | when set |  |
-| `pod_uid` | string | when set |  |
-| `namespace` | string | when set |  |
-| `node` | string | when set |  |
+| `image` | string | when set | Image of the container. Not set by the collectors in this release. |
+| `name` | string | when set | Name of the container. Not set by the collectors in this release. |
+| `pod` | string | when set | Kubernetes pod name. Not set by the collectors in this release. |
+| `pod_uid` | string | when set | Kubernetes pod UID, from the cgroup path; absent outside Kubernetes. |
+| `namespace` | string | when set | Kubernetes namespace. Not set by the collectors in this release. |
+| `node` | string | when set | Kubernetes node name. Not set by the collectors in this release. |
 
 ### `Repo` object
 
@@ -646,9 +656,9 @@ Repo describes the source repository of the session's working directory.
 
 | Field | Type | Present | Description |
 |---|---|---|---|
-| `root` | string | when set |  |
+| `root` | string | when set | Root directory of the repository. Not set by the collectors in this release. |
 | `remote` | string | when set | credentials stripped |
-| `branch` | string | when set |  |
+| `branch` | string | when set | Branch, when a surface reports it (Claude Code OpenTelemetry, numbat records). |
 
 ### `Asset` object
 
@@ -656,29 +666,29 @@ Asset is one inventory record. ID is stable across scans for the same (host, kin
 
 | Field | Type | Present | Description |
 |---|---|---|---|
-| `id` | string | always |  |
-| `kind` | [`AssetKind`](#assetkind-values) | always |  |
-| `name` | string | always |  |
-| `vendor` | string | when set |  |
-| `version` | string | when set |  |
+| `id` | string | always | Stable across scans for the same host, kind, identity, owner and location, so downstream can upsert on it. |
+| `kind` | [`AssetKind`](#assetkind-values) | always | AssetKind classifies an inventory record. |
+| `name` | string | always | Name of the asset: the product, the declared server, skill or plugin, or the file. |
+| `vendor` | string | when set | Vendor or publisher, when known. |
+| `version` | string | when set | Version, when known. |
 | `catalog_id` | string | when set | CatalogID is the catalog entry that identified the asset ("" when unknown). |
 | `parent` | string | when set | Parent is the catalog id of the agent that owns this item (an MCP server declared in Cursor's config has Parent "cursor"). |
 | `path` | string | when set | install path or declaring file |
 | `scope` | [`Scope`](#scope-values) | when set | for declared items |
 | `owner` | string | when set | OS user the item belongs to |
-| `running` | boolean | when set |  |
-| `pid` | integer | when set |  |
+| `running` | boolean | when set | True when the scan saw a process of the product running. |
+| `pid` | integer | when set | The lowest pid of those processes. |
 | `sha256` | string | when set | SHA256 is the content hash: binary hash for agents, definition hash for MCP servers and hooks, folder hash for skills. |
 | `evidence` | array of string | when set | Evidence lists how identity was established, e.g. "package:npm", "bundle_id", "path", "process", "signature". Two independent classes are required for Confidence "high". |
 | `confidence` | string | when set | high \| medium \| low |
 | `signer` | string | when set | Signer is the code-signing identity when verified (team id / publisher). |
-| `first_seen` | [`Time`](#time-string) | when set |  |
-| `last_seen` | [`Time`](#time-string) | when set |  |
-| `change` | [`Change`](#change-values) | when set |  |
+| `first_seen` | [`Time`](#time-string) | when set | Not set by the scanner in this release (last_seen and change are). |
+| `last_seen` | [`Time`](#time-string) | when set | Time of the scan that saw the asset. |
+| `change` | [`Change`](#change-values) | when set | How the asset differs from the previous scan: new (also when there is no previous state), changed, unchanged (written by a full scan only) or removed (gone since the previous scan, reported by a full scan). |
 | `risk_flags` | array of string | when set | RiskFlags are closed-vocabulary posture hints computed at scan time. |
-| `mcp` | [`MCP`](#mcp-object) | when set |  |
+| `mcp` | [`MCP`](#mcp-object) | when set | MCP holds normalized launch facts for a declared MCP server, so a central team can hunt for a bad package or endpoint across the fleet. |
 | `telemetry` | [`Telemetry`](#telemetry-object) | when set | Telemetry describes how well spoor can see this agent (agents only). |
-| `detail` | object of string | when set |  |
+| `detail` | object of string | when set | Other facts about this kind of asset, as strings: for example project, plugin, marketplace, pinned, enabled, status or hooks_shadowed_by. |
 
 ### `MCP` object
 
@@ -691,16 +701,16 @@ MCP holds normalized launch facts for a declared MCP server, so a central team c
 | `args` | array of string | when set | secrets redacted |
 | `runner` | string | when set | Runner is the package launcher when one is used: npx \| bunx \| uvx \| pipx \| pip \| docker \| podman \| node \| python \| deno \| binary. |
 | `ecosystem` | string | when set | npm \| pypi \| oci \| "" |
-| `package` | string | when set |  |
-| `version` | string | when set |  |
+| `package` | string | when set | Package the runner launches (an npm or PyPI name, an image). |
+| `version` | string | when set | Version or tag of that package, when the declaration names one. |
 | `pinned` | boolean | always | Pinned is true only for an exact version or an image digest. |
-| `url_host` | string | when set |  |
-| `url_path` | string | when set |  |
+| `url_host` | string | when set | Host of the endpoint the client connects to (a remote transport, or the endpoint a stdio bridge is given). |
+| `url_path` | string | when set | Path of that endpoint, redacted. |
 | `env_keys` | array of string | when set | names only, never values |
-| `header_keys` | array of string | when set |  |
-| `has_inline_secret` | boolean | when set |  |
+| `header_keys` | array of string | when set | Names of the HTTP headers the declaration sets, never their values. |
+| `has_inline_secret` | boolean | when set | True when a credential-shaped literal is written into the declaration itself (command line, arguments, environment or header values, headers helper, OAuth client secret, or a token in the URL) rather than referenced. The value is never written. |
 | `auth_mode` | string | when set | none \| env \| header \| oauth \| inherited |
-| `enabled` | boolean | when set |  |
+| `enabled` | boolean | when set | Whether the client has the server switched on, when its configuration says (false for a server on its disabled list). |
 
 ### `Telemetry` object
 
@@ -719,17 +729,17 @@ Check is one posture check result.
 | Field | Type | Present | Description |
 |---|---|---|---|
 | `id` | string | always | rule id of the posture rule |
-| `title` | string | when set |  |
+| `title` | string | when set | Title of the rule or check. |
 | `status` | string | always | pass \| fail \| unknown |
-| `severity` | [`Severity`](#severity-values) | when set |  |
-| `agent_id` | string | when set |  |
-| `asset_id` | string | when set |  |
-| `scope` | [`Scope`](#scope-values) | when set |  |
+| `severity` | [`Severity`](#severity-values) | when set | Severity of the rule or check. |
+| `agent_id` | string | when set | Catalog id of the agent the checked item belongs to. |
+| `asset_id` | string | when set | asset.id of the inventory record that failed the check. |
+| `scope` | [`Scope`](#scope-values) | when set | Scope is where a configuration item is declared. |
 | `subject` | string | when set | file path or setting key checked |
-| `expected` | string | when set |  |
-| `actual` | string | when set |  |
-| `owner` | string | when set |  |
-| `remedy` | string | when set |  |
+| `expected` | string | when set | What the check requires, when it says (the scanner's file-owner check does). |
+| `actual` | string | when set | What was found: for an inventory rule, the evidence fields as name=value pairs separated by "; " (at most 512 bytes). |
+| `owner` | string | when set | Account the checked item belongs to. |
+| `remedy` | string | when set | What to do about it. |
 
 ### `Detection` object
 
@@ -737,23 +747,23 @@ Detection is a rule match.
 
 | Field | Type | Present | Description |
 |---|---|---|---|
-| `rule_id` | string | always |  |
-| `title` | string | always |  |
+| `rule_id` | string | always | Id of the rule that matched: a rule from a pack, an id the engine itself writes (SPR-COV-901, SPR-COV-902) or a relayed one (numbat:&lt;id&gt;). See docs/RULES.md. |
+| `title` | string | always | Title of the rule. |
 | `class` | [`DetectionClass`](#detectionclass-values) | when set | Class is how much attention the match deserves: "signal" (counted into the session summary, not shipped by default), "finding" (shipped, no page) or "alert" (expected to be silent on ordinary developer work). |
-| `severity` | [`Severity`](#severity-values) | always |  |
+| `severity` | [`Severity`](#severity-values) | always | Severity of the rule. |
 | `confidence` | string | when set | low \| medium \| high |
 | `maturity` | string | when set | experimental \| stable |
-| `category` | string | when set |  |
+| `category` | string | when set | Category of the rule, for example execution. |
 | `tags` | array of string | when set | Tags carries framework mappings in Sigma tag style: attack.t1059.004, atlas.aml.t0051, owasp.asi05. |
 | `evidence` | object of string | when set | Evidence is a small redacted map of the field values that matched. |
 | `event_ids` | array of string | when set | EventIDs are the ids of the events that produced the match, oldest first; for sequence rules this is the chain. |
 | `flags` | array of string | when set | Flags are the session flags that were required and present. |
 | `response` | string | when set | Response is what the rule asks for (none \| ask \| block); Enforced says whether spoor actually returned that decision to the agent. |
-| `enforced` | boolean | when set |  |
+| `enforced` | boolean | when set | True only when spoor returned the response to the agent (guard mode); absent otherwise. |
 | `dedup_key` | string | when set | DedupKey groups repeats of the same finding; Count is how many matches this record stands for after suppression. |
-| `count` | integer | when set |  |
+| `count` | integer | when set | How many matches this record stands for: repeats inside rules.suppress_for are counted and carried on the next emission instead of being written again. |
 | `escalate` | boolean | when set | Escalate marks findings that are suspicious but not conclusive and are good candidates for a downstream LLM or human judge. |
-| `remedy` | string | when set |  |
+| `remedy` | string | when set | What to do about it. |
 
 ### `Health` object
 
@@ -761,18 +771,18 @@ Health is the sensor heartbeat. It is deliberately content-free.
 
 | Field | Type | Present | Description |
 |---|---|---|---|
-| `sensor_version` | string | always |  |
+| `sensor_version` | string | always | Version of the spoor binary that wrote the record. |
 | `mode` | string | always | Mode: daemon \| extension \| hook \| scan. |
-| `uptime_s` | integer | when set |  |
-| `counters` | object of integer ≥ 0 | when set |  |
-| `surfaces` | array of [`SurfaceStatus`](#surfacestatus-object) | when set |  |
-| `coverage` | array of [`Coverage`](#coverage-object) | when set |  |
-| `rules_count` | integer | when set |  |
-| `rules_hash` | string | when set |  |
-| `catalog_version` | string | when set |  |
-| `last_scan` | [`Time`](#time-string) | when set |  |
+| `uptime_s` | integer | when set | Seconds since the writing pipeline started. |
+| `counters` | object of integer ≥ 0 | when set | Counters and gauges by name (see Counters in docs/EVENTS.md). |
+| `surfaces` | array of [`SurfaceStatus`](#surfacestatus-object) | when set | SurfaceStatus reports one collector. |
+| `coverage` | array of [`Coverage`](#coverage-object) | when set | Coverage is the per-agent, per-user visibility statement: which surfaces are actually delivering. "Not collected" must never read as "clean". |
+| `rules_count` | integer | when set | Number of loaded rules. |
+| `rules_hash` | string | when set | SHA-256 of the loaded rule set; findings carry its first 12 hex digits as labels.rules_hash. |
+| `catalog_version` | string | when set | Version of the agent catalog. |
+| `last_scan` | [`Time`](#time-string) | when set | Time of the last inventory scan. Not set by the heartbeat writer in this release. |
 | `reason` | string | when set | Reason is a closed-vocabulary code for health.error records. |
-| `detail` | string | when set |  |
+| `detail` | string | when set | Free-text detail of a health.error. |
 
 ### `SurfaceStatus` object
 
@@ -782,11 +792,11 @@ SurfaceStatus reports one collector.
 |---|---|---|---|
 | `name` | string | always | hooks \| transcripts \| processes \| scan |
 | `status` | string | always | Status: ok \| degraded \| failed \| disabled. |
-| `last_event` | [`Time`](#time-string) | when set |  |
-| `events` | integer ≥ 0 | when set |  |
-| `errors` | integer ≥ 0 | when set |  |
-| `schema_drift` | boolean | when set |  |
-| `reason` | string | when set |  |
+| `last_event` | [`Time`](#time-string) | when set | When the collector last delivered, by the sensor's clock (the arrival of its last record; for the process monitor its last self-check, for the scan the scan's time), not a time a record claims. |
+| `events` | integer ≥ 0 | when set | Records the collector delivered. |
+| `errors` | integer ≥ 0 | when set | Errors the collector counted. |
+| `schema_drift` | boolean | when set | True when the collector met input in a shape it does not know (an agent changed its log or telemetry format). |
+| `reason` | string | when set | Why the status is not ok, as a code: for example config, kill_switch, checkpoint or procs_unreadable. |
 
 ### `Coverage` object
 
@@ -794,8 +804,8 @@ Coverage is the per-agent, per-user visibility statement: which surfaces are act
 
 | Field | Type | Present | Description |
 |---|---|---|---|
-| `agent_id` | string | always |  |
-| `user` | string | when set |  |
+| `agent_id` | string | always | Catalog id of the agent. |
+| `user` | string | when set | Account the row is about: its name, or its uid or SID when the name is unknown. |
 | `hooks` | string | when set | see Telemetry.Hooks |
 | `transcript` | string | when set | see Telemetry.Transcript |
 | `processes` | integer | when set | running agent processes seen |
@@ -807,23 +817,23 @@ Summary is the per-session rollup: enough to answer fleet-wide questions ("which
 
 | Field | Type | Present | Description |
 |---|---|---|---|
-| `started` | [`Time`](#time-string) | when set |  |
-| `ended` | [`Time`](#time-string) | when set |  |
+| `started` | [`Time`](#time-string) | when set | ts of the session's earliest activity record. |
+| `ended` | [`Time`](#time-string) | when set | ts of its latest activity record, on the final summary only. |
 | `final` | boolean | when set | true when the session ended; false for periodic rollups |
-| `events` | integer | always |  |
-| `prompts` | integer | when set |  |
-| `subagents` | integer | when set |  |
+| `events` | integer | always | Activity records counted into the summary. |
+| `prompts` | integer | when set | prompt.submit records. |
+| `subagents` | integer | when set | subagent.start records. |
 | `tool_calls` | object of integer | when set | ToolCalls counts tool calls by normalized kind. |
 | `hosts` | array of string | when set | Hosts are distinct network hosts contacted through tools (capped). |
-| `host_classes` | array of string | when set |  |
+| `host_classes` | array of string | when set | Distinct classes of the network hosts contacted. |
 | `path_classes` | array of string | when set | PathClasses are the distinct sensitive path classes touched. |
-| `mcp_servers` | array of string | when set |  |
+| `mcp_servers` | array of string | when set | Distinct MCP servers called. |
 | `installs` | array of string | when set | Installs are packages installed by the agent as "manager:name". |
 | `detections` | array of string | when set | rule ids |
-| `max_severity` | [`Severity`](#severity-values) | when set |  |
+| `max_severity` | [`Severity`](#severity-values) | when set | Highest severity among detections, signals included. |
 | `flags` | array of string | when set | session flags set by rules |
 | `surfaces` | array of [`Source`](#source-values) | when set | Surfaces that reported this session and the resulting coverage state (covered \| partial \| blind). |
-| `coverage` | string | when set |  |
+| `coverage` | string | when set | What the reporting surfaces amount to: covered (hooks and another surface), partial (hooks, or transcript or OpenTelemetry, alone) or blind (only the process monitor or osquery). |
 | `denied` | integer | when set | tool calls denied by user, policy or guard |
 | `blocked` | integer | when set | tool calls blocked by spoor guard mode |
 
@@ -846,14 +856,14 @@ Kind is the top-level class of a record and selects the output stream.
 
 ### `EventType` values
 
-Event.Type: the activity types (Kind activity) and the types of the other kinds. detection.context is declared in internal/privacy.
+Event.Type: the activity types (Kind activity) and the types of the other kinds. detection.context is declared in internal/privacy. The Types table in docs/EVENTS.md says what each one means.
 
 | Value | Constant | Meaning |
 |---|---|---|
 | `session.start` | `TypeSessionStart` |  |
 | `session.end` | `TypeSessionEnd` |  |
-| `prompt.submit` | `TypePromptSubmit` |  |
-| `tool.pre` | `TypeToolPre` | before execution; the only type guard mode can block |
+| `prompt.submit` | `TypePromptSubmit` | guard mode can block this and tool.pre |
+| `tool.pre` | `TypeToolPre` | before execution; guard mode can block it (and prompt.submit) |
 | `tool.post` | `TypeToolPost` | after execution, success or failure (see Outcome) |
 | `turn.end` | `TypeTurnEnd` |  |
 | `subagent.start` | `TypeSubagentStart` |  |
@@ -885,7 +895,7 @@ Source is the collection method that produced a record.
 | `process` | `SourceProcess` | observed from the OS process table |
 | `scan` | `SourceScan` | discovery / posture scan of files and packages |
 | `otel` | `SourceOTel` | agent-native OpenTelemetry received locally |
-| `osquery` | `SourceOsquery` | rows from osquery evented tables read from its local results log |
+| `osquery` | `SourceOsquery` | exec rows from osquery evented tables, pulled from osqueryd over its extension socket |
 | `adapter` | `SourceAdapter` | records converted from another sensor's output |
 | `sensor` | `SourceSensor` | produced by spoor itself (detections, health, correlation) |
 
@@ -991,5 +1001,15 @@ Detection classes, lowest to highest (ClassRank).
 | `signal` | `ClassSignal` |  |
 | `finding` | `ClassFinding` |  |
 | `alert` | `ClassAlert` |  |
+
+### `Profile` values
+
+Profile names what leaves the endpoint.
+
+| Value | Constant | Meaning |
+|---|---|---|
+| `minimal` | `privacy.ProfileMinimal` | ProfileMinimal (the default) ships detections, inventory, posture, health and session summaries. Activity stays in the local ring and is attached to a detection as redacted context. |
+| `standard` | `privacy.ProfileStandard` | ProfileStandard also ships activity, with field-level redaction and no prompt text, tool input or tool output. |
+| `full` | `privacy.ProfileFull` | ProfileFull adds prompt text, tool input and the head of tool output, all redacted. |
 
 <!-- END GENERATED: field reference -->

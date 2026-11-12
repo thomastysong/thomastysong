@@ -54,7 +54,7 @@ const (
 	SourceProcess    Source = "process"    // observed from the OS process table
 	SourceScan       Source = "scan"       // discovery / posture scan of files and packages
 	SourceOTel       Source = "otel"       // agent-native OpenTelemetry received locally
-	SourceOsquery    Source = "osquery"    // rows from osquery evented tables read from its local results log
+	SourceOsquery    Source = "osquery"    // exec rows from osquery evented tables, pulled from osqueryd over its extension socket
 	SourceAdapter    Source = "adapter"    // records converted from another sensor's output
 	SourceSensor     Source = "sensor"     // produced by spoor itself (detections, health, correlation)
 )
@@ -71,9 +71,9 @@ const (
 const (
 	TypeSessionStart       = "session.start"
 	TypeSessionEnd         = "session.end"
-	TypePromptSubmit       = "prompt.submit"
-	TypeToolPre            = "tool.pre"  // before execution; the only type guard mode can block
-	TypeToolPost           = "tool.post" // after execution, success or failure (see Outcome)
+	TypePromptSubmit       = "prompt.submit" // guard mode can block this and tool.pre
+	TypeToolPre            = "tool.pre"      // before execution; guard mode can block it (and prompt.submit)
+	TypeToolPost           = "tool.post"     // after execution, success or failure (see Outcome)
 	TypeTurnEnd            = "turn.end"
 	TypeSubagentStart      = "subagent.start"
 	TypeSubagentStop       = "subagent.stop"

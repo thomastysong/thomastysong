@@ -1,6 +1,6 @@
 # Rules
 
-spoor's detections are rules in a small YAML language, evaluated on the endpoint over parsed facts about each record (the parsed shell command, path and host classes, session flags) rather than over raw text. This page covers the language, how to write, test and lint a rule, how rule content is signed and distributed, and the catalogue of the packs that ship in the binary with links to their measured quality.
+spoor's detections are rules in a small YAML language, evaluated on the endpoint over parsed facts about each record (the parsed shell command, path and host classes, session flags) rather than over raw text. This page covers the language, how to write, test and lint a rule, how rule content is signed and distributed, the catalogue of the packs that ship in the binary with links to their measured quality, and the few detections that are written by spoor's code rather than by a rule ([Detections that are not in a pack](#detections-that-are-not-in-a-pack)).
 
 The authoritative reference for the language is the package comment of `internal/rules` (`go doc ./internal/rules`); this page follows it and the loader (`internal/rules/model.go`, `compile.go`). Records produced by rules are described in [EVENTS.md](EVENTS.md#detection-records).
 
@@ -39,7 +39,7 @@ A pack is one YAML document with `pack` (name), `version`, `description` and `ru
 
 | Key | Required | Values (default) | Meaning |
 |---|---|---|---|
-| `id` | yes | letters, digits, `.`, `_`, `-`; at most 64 | Shipped rules use `SPR-<AREA>-<NNN>`. Use your own prefix. |
+| `id` | yes | letters, digits, `.`, `_`, `-`; at most 64 | Shipped rules use `SPR-<AREA>-<NNN>`. Use your own prefix. `SPR-COV-9xx` and `SPR-SCAN-*` are taken by ids spoor's code writes ([below](#detections-that-are-not-in-a-pack)); the loader does not stop a rule from using them, so do not. |
 | `title`, `description` | | text | `title` becomes `detection.title`. |
 | `kind` | | `activity` (default), `inventory` | Activity rules see activity records; inventory rules see `inventory.asset` records and produce `posture.check` records. |
 | `class` | | `signal`, `finding` (default), `alert` | See [Classes](#classes). |
@@ -557,6 +557,26 @@ go run ./cmd/spoor rules list --no-host-rules --json | jq -r -f catalogue.jq
 | SPR-SUPPLY-006 | activity | finding | medium | none | Worm indicator named on a command line or inventory file written | T1195.002 | AML.T0010.005 | ASI04 |
 
 <!-- END GENERATED: rule catalogue -->
+
+## Detections that are not in a pack
+
+Three ids are written by spoor's own code, not by a rule, so `spoor rules list`, `spoor rules test` and the catalogue above do not show them, and neither `rules.disable` nor suppressions apply to them. The `SPR-COV-9xx` range is reserved for the engine (`internal/engine`, `coverage.go`) and `SPR-SCAN-` for the inventory scanner (`internal/discovery`, `trust.go`).
+
+| ID | Record | Class, severity | Written when |
+|---|---|---|---|
+| `SPR-COV-901` | `detection.finding` | finding, high (confidence medium) | Hook bypass suspected. All three hold for one session: the process monitor (a root-observed surface, not one the user can write) currently sees the agent running for that account; hooks are expected for that agent and account; and at least 3 of the session's tool calls (distinct tool-call ids) reached spoor from the transcript or OpenTelemetry and had no hook record when their 10-second hold for a hook twin ran out, or the agent's OpenTelemetry reported at least 3 more tool-hook runs than spoor received hook records. A hook record that arrives later takes its call off the count. At most one per session. |
+| `SPR-COV-902` | `detection.finding` | signal, low (confidence low) | The same, but no root-observed process backs it (self-reported surfaces only). A signal: with the default `rules.min_class` it is not written, and it is counted in `summary.detections`. At most one per session. |
+| `SPR-SCAN-001` | `posture.check` | high when another account wrote the file, medium when only its permissions let other accounts write it | The scan refused to read an agent configuration file inside an account's home (the home itself or a project below it) because neither the account nor root owns it, someone else can write it, or it is a root-owned file with more than one link in another account's home. The file is reported as a `project_config` asset with the risk flag `untrusted_owner`, the check says what was expected (`owned by the account or root and writable by nobody else`) and what was found, and spoor does not read the file until it is fixed. Past 64 refused files in one directory or 256 for one account, one more check with the title "More agent configuration files written or writable by other accounts" counts the rest (high when any of them was written by another account). |
+
+"Hooks are expected" means, in the daemon, that discovery's hook state for the agent and account (`asset.telemetry.hooks`) is `managed`, `user` or `modified`. Without discovery, as in `spoor detect`, hooks count as expected once they have delivered for that agent and account before, and a root-observed process is a root-integrity `agent.process.start` record from the process monitor or osquery in the input (an unprivileged pipeline keeps no record at root integrity, so it can only write the signal).
+
+The two hook-bypass records carry:
+
+- `detection`: the title (`Hook bypass suspected: a root-observed agent made tool calls its hooks did not report`, or `Agent tool calls without hook records (self-reported surfaces only)`), category `coverage`, maturity `experimental`, tags `attack.t1562.001` (Impair Defenses: Disable or Modify Tools) and `spoor.coverage`, `event_ids` with up to 16 of the unmatched tool calls, `count: 1`, and the remedy "Run `spoor hooks status` for this user and agent; check for a higher-precedence managed settings source, a removed or edited hook entry, or an agent started in a hook-free mode."
+- labels `hooks_state` (the hook state discovery reported), `surfaces` (the surfaces that reported the session, comma-separated), `unmatched_tool_calls`, `otel_hook_mismatch` and `root_observed` (`true` or `false`), plus `rules_hash`, `rules_version` and `bundle_version` like any finding, but no `rule_pack` or `rule_pack_version`.
+- `integrity`: the pipeline's own for `SPR-COV-901` (`root` when it runs privileged, as the daemon does), `user` for `SPR-COV-902`; `source: sensor`, `fidelity: inferred`. Like a rule's finding of class `finding` or above, `SPR-COV-901` is followed by `detection.context` records (up to `privacy.context_events` of the session's last records).
+
+Findings relayed from another sensor are not rules either: numbat findings read with `spoor detect --format numbat` (or a configured adapter) keep numbat's verdict, with `rule_id` `numbat:<numbat rule id>` (a `:` cannot occur in a spoor rule id), `source: adapter` and `class: finding`; spoor does not re-evaluate them.
 
 ## Measured quality
 

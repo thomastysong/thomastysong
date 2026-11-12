@@ -6,7 +6,9 @@ spoor is security software that runs as root on developers' machines and reads i
 
 Report privately. Do not open a public issue, pull request or discussion for a vulnerability.
 
-- Contact: **TODO (maintainer): publish a private reporting channel here before the first release.** <!-- TODO(maintainer): a security contact address or the repository's private vulnerability reporting link. Do not ship this file without it. -->
+- **Where:** GitHub's private vulnerability reporting for this repository, at <https://github.com/thomastysong/spoor/security/advisories/new> (the repository's **Security** tab, **Report a vulnerability**). The report and its discussion are visible only to you and the maintainers until an advisory is published. It needs a GitHub account.
+- **If you cannot use it:** open an issue that asks for a private contact and says nothing about the problem itself; a maintainer will answer with one.
+<!-- VERIFY (maintainer): private vulnerability reporting has to be switched on in the repository settings (Code security, Private vulnerability reporting) for the link above to work; this could not be checked from the build environment. Add a security e-mail address above as well if you want one. -->
 
 Please include the spoor version (`spoor version`), the operating system and architecture, the deployment mode (daemon, `spoor scan` with the state database, daemonless hook, container, CI), the privacy profile, and the smallest input that shows the problem. Do not send real credentials, real prompts or real transcripts: build synthetic ones (a high-entropy string in a `password=` or `token=` context is enough for anything about redaction). If the issue concerns another project spoor reads or ships to (an agent, osquery, Fleet, Fluent Bit), say so; we will coordinate with that project rather than publish a workaround alone.
 

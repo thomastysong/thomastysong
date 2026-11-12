@@ -150,7 +150,7 @@ func TestWrittenScriptsEditInContext(t *testing.T) {
 			t.Errorf("%.40q: held %q (facts %v)", c, w.Keep, w.Facts != nil)
 		}
 	}
-	ws = WrittenScripts(writeEvent(event.ToolFileWrite, "/tmp/w/notes.md", map[string]any{"content": "rm -rf ~/\n"}), linuxCtx, ScriptOptions{})
+	ws := WrittenScripts(writeEvent(event.ToolFileWrite, "/tmp/w/notes.md", map[string]any{"content": "rm -rf ~/\n"}), linuxCtx, ScriptOptions{})
 	if len(ws) != 1 || ws[0].Keep != "" {
 		t.Errorf("non-script held: %+v", ws)
 	}

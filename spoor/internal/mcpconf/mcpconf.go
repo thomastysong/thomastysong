@@ -112,6 +112,9 @@ func (e *SyntaxError) Error() string {
 // Env and Headers carry values and are LOCAL ONLY. They are tagged json:"-"
 // so that marshalling a Server by accident cannot ship a credential.
 type Server struct {
+	// Name and Project identify the server. Parse cuts a name over 256
+	// bytes, and a project over 1024, to its head, "~" and a rank that is
+	// the same in every process (see builder.cutIdentity).
 	Name       string
 	SourcePath string
 	Project    string            // project path when declared under projects.<path> or found in a project file

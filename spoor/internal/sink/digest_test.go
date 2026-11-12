@@ -128,3 +128,146 @@ func TestCommandLengthLabel(t *testing.T) {
 		t.Errorf("an uncut command got a length label: %v", got.Labels)
 	}
 }
+
+// truncTail parses the "[TRUNCATED:<n>B]" marker a cut value ends in.
+func truncTail(s string) (n int, ok bool) {
+	i := strings.LastIndex(s, "[TRUNCATED:")
+	if i < 0 || !strings.HasSuffix(s, "B]") {
+		return 0, false
+	}
+	_, err := fmt.Sscanf(s[i:], "[TRUNCATED:%dB]", &n)
+	return n, err == nil
+}
+
+// The event contract (event.Event.Truncated): a cut value ends in a
+// "[TRUNCATED:<n>B]" marker stating how many bytes went, except
+// target.command, whose full length is in Labels instead, and no digest
+// of the cut text is kept. The general passes and the skeleton used to cut
+// without a marker, and the skeleton dropped the command's length.
+func TestShrinkCutsCarryContractMarker(t *testing.T) {
+	big := strings.Repeat("A", 30000)
+	cmd := "make " + strings.Repeat("y", 30000)
+	e := kindEvent(event.KindDetection, "mark")
+	e.Target.Command = cmd
+	e.Prompt = &event.Prompt{Text: big}
+	e.Outcome = &event.Outcome{Status: "error", Error: big}
+	e.Labels["blob"] = big
+	line, err := fitLine(e, FormatNative, 16<<10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := decodeLine(t, line)
+	if has(got.Truncated, "*") {
+		t.Fatalf("needed the skeleton: %v", got.Truncated)
+	}
+	for name, v := range map[string]string{"prompt.text": got.Prompt.Text, "outcome.error": got.Outcome.Error, "labels.blob": got.Labels["blob"]} {
+		n, ok := truncTail(v)
+		if !ok || len(v) > 4096 {
+			t.Errorf("%s: %d bytes, no contract marker: %.40q", name, len(v), v[max(0, len(v)-40):])
+			continue
+		}
+		if head := v[:strings.LastIndex(v, "[TRUNCATED:")]; len(head)+n != len(big) || !strings.HasPrefix(big, head) {
+			t.Errorf("%s: marker says %d bytes cut, head is %d of %d", name, n, len(head), len(big))
+		}
+	}
+	if _, ok := truncTail(got.Target.Command); ok || !strings.HasPrefix(cmd, got.Target.Command) {
+		t.Errorf("target.command should be a plain head: %.40q", got.Target.Command)
+	}
+	if got.Labels[LabelCommandLen] != fmt.Sprint(len(cmd)) {
+		t.Errorf("length label %q", got.Labels[LabelCommandLen])
+	}
+
+	// Step 4: the skeleton keeps the command's length, and a value it
+	// clips ends in the marker too.
+	e = kindEvent(event.KindDetection, "skel-"+strings.Repeat("i", 200))
+	e.Target.Command = cmd
+	for i := 0; i < 2000; i++ {
+		e.Labels[fmt.Sprintf("k%05d", i)] = strings.Repeat("v", 200)
+	}
+	line, err = fitLine(e, FormatNative, 1536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(line) > 1536 {
+		t.Fatalf("line is %d bytes", len(line))
+	}
+	got = decodeLine(t, line)
+	if !has(got.Truncated, "*") {
+		t.Fatalf("expected the skeleton: %.200s", line)
+	}
+	if got.Labels[LabelCommandLen] != fmt.Sprint(len(cmd)) || len(got.Labels) != 1 {
+		t.Errorf("skeleton labels %v", got.Labels)
+	}
+	if n, ok := truncTail(got.ID); !ok || len(got.ID) > 64 || len(e.ID)-n != strings.LastIndex(got.ID, "[TRUNCATED:") {
+		t.Errorf("skeleton id %q", got.ID)
+	}
+}
+
+func TestSkelString(t *testing.T) {
+	cases := []struct {
+		in   string
+		n    int
+		want string
+	}{
+		{"short", 16, "short"},
+		{"a\x01b", 16, "a_b"},
+		{strings.Repeat("x", 100), 64, strings.Repeat("x", 48) + "[TRUNCATED:52B]"},
+		// An enum field too small for the marker still gets one.
+		{strings.Repeat("x", 20000), 16, "[TRUNCATED:20000B]"},
+	}
+	for _, c := range cases {
+		if got := skelString(c.in, c.n); got != c.want {
+			t.Errorf("skelString(%.10q, %d) = %q, want %q", c.in, c.n, got, c.want)
+		}
+	}
+}
+
+func TestCutString(t *testing.T) {
+	orig := strings.Repeat("a", 30000)
+	// Repeated passes: the count is always relative to the original.
+	v := orig
+	for _, n := range []int{4096, 1024, 256} {
+		v = cutString(v, n)
+		c, ok := truncTail(v)
+		head := v[:strings.LastIndex(v, "[TRUNCATED:")]
+		if !ok || len(v) > n || len(head)+c != len(orig) {
+			t.Fatalf("n=%d: %d bytes, head %d + count %d != %d", n, len(v), len(head), c, len(orig))
+		}
+	}
+	// A value privacy cut in the middle: a marker that falls in the cut
+	// part adds what it stood for; one that stays is kept whole.
+	mid := strings.Repeat("h", 300) + "[TRUNCATED:5000B]" + strings.Repeat("t", 300)
+	want := 300 + 5000 + 300
+	for n := 256; n < len(mid); n++ {
+		got := cutString(mid, n)
+		if len(got) > n {
+			t.Fatalf("n=%d: %d bytes", n, len(got))
+		}
+		total := 0
+		for _, sp := range markerSpans(got) {
+			total += sp.count - (sp.end - sp.start)
+		}
+		if total+len(got) != want {
+			t.Fatalf("n=%d: %q stands for %d bytes, want %d", n, got[max(0, len(got)-60):], total+len(got), want)
+		}
+		if k := strings.LastIndex(got[:strings.LastIndex(got, "[TRUNCATED:")], "["); k >= 0 && !strings.Contains(got[k:], "]") {
+			t.Fatalf("n=%d: split marker %q", n, got[k:])
+		}
+	}
+	// A redaction marker is never split.
+	red := strings.Repeat("r", 230) + "[REDACTED:generic_secret:hmac=k1:0123456789abcdef]" + strings.Repeat("s", 300)
+	for n := 256; n < 320; n++ {
+		got := cutString(red, n)
+		if i := strings.Index(got, "[REDACTED"); i >= 0 && !strings.HasPrefix(got[i:], "[REDACTED:generic_secret:hmac=k1:0123456789abcdef]") {
+			t.Fatalf("n=%d: split redaction marker %q", n, got[i:])
+		}
+	}
+	// Hostile: a value full of '[' costs linear time and still gets a
+	// marker; a forged count cannot overflow.
+	hostile := strings.Repeat("[", 1<<20) + "[TRUNCATED:9999999999999999999B]"
+	if got := cutString(hostile, 1024); len(got) > 1024 {
+		t.Fatalf("%d bytes", len(got))
+	} else if _, ok := truncTail(got); !ok {
+		t.Fatalf("no marker: %q", got[len(got)-30:])
+	}
+}

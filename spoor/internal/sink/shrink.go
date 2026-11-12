@@ -45,7 +45,11 @@ const minCommandKeep = 256
 //  3. every remaining string, list and map is capped, in three passes with
 //     tighter limits each time.
 //  4. as a last resort only identity fields survive, sanitized and clipped,
-//     with Truncated ["*"].
+//     with Truncated ["*"] and the command's length in Labels.
+//
+// A cut string ends in the event contract's "[TRUNCATED:<n>B]" marker (see
+// event.Event.Truncated), except target.command, whose full length is in
+// Labels instead.
 //
 // The caller's event is never modified.
 func fitLine(e *event.Event, f string, max int) ([]byte, error) {
@@ -162,7 +166,7 @@ func fit(e *event.Event, max int, enc func(*event.Event) ([]byte, error)) ([]byt
 	}
 
 	// Step 4: identity only.
-	c = skeleton(c)
+	c = skeleton(c, len(full))
 	if fits() {
 		return line, nil
 	}
@@ -273,7 +277,11 @@ func (w *capWalker) walk(v reflect.Value, path string) {
 		}
 	case reflect.String:
 		if v.Len() > w.maxStr && v.CanSet() {
-			v.SetString(clipString(v.String(), w.maxStr))
+			if path == "target.command" {
+				v.SetString(clipString(v.String(), w.maxStr)) // its length goes to Labels
+			} else {
+				v.SetString(cutString(v.String(), w.maxStr))
+			}
 			w.note(path)
 		}
 	case reflect.Slice:
@@ -334,7 +342,7 @@ func (w *capWalker) stringMap(v reflect.Value, path string) {
 		}
 		val := v.MapIndex(k)
 		if val.Len() > w.maxStr {
-			val = reflect.ValueOf(clipString(val.String(), w.maxStr)).Convert(t.Elem())
+			val = reflect.ValueOf(cutString(val.String(), w.maxStr)).Convert(t.Elem())
 			changed = true
 		}
 		out.SetMapIndex(k, val)
@@ -348,49 +356,53 @@ func (w *capWalker) stringMap(v reflect.Value, path string) {
 // skeleton returns an event with identity fields only. Strings are reduced
 // to a conservative printable subset and clipped so the encoded size has a
 // fixed upper bound no matter what the input held (JSON escaping can expand
-// a hostile byte sixfold).
-func skeleton(c *event.Event) *event.Event {
+// a hostile byte sixfold). cmdLen is the length of the event's command,
+// which the skeleton drops; it is kept in Labels like any command cut.
+func skeleton(c *event.Event, cmdLen int) *event.Event {
 	const n = 64
 	s := &event.Event{
-		V: c.V, ID: safeString(c.ID, n), TS: c.TS, Seq: c.Seq,
-		Kind: event.Kind(safeString(string(c.Kind), 16)), Type: safeString(c.Type, n),
-		Source: event.Source(safeString(string(c.Source), 16)), Fidelity: event.Fidelity(safeString(string(c.Fidelity), 16)),
-		Privacy:   safeString(c.Privacy, 16),
+		V: c.V, ID: skelString(c.ID, n), TS: c.TS, Seq: c.Seq,
+		Kind: event.Kind(skelString(string(c.Kind), 16)), Type: skelString(c.Type, n),
+		Source: event.Source(skelString(string(c.Source), 16)), Fidelity: event.Fidelity(skelString(string(c.Fidelity), 16)),
+		Privacy:   skelString(c.Privacy, 16),
 		Truncated: []string{"*"},
 	}
+	if cmdLen > 0 {
+		s.Labels = map[string]string{LabelCommandLen: strconv.Itoa(cmdLen)}
+	}
 	if h := c.Host; h != nil {
-		s.Host = &event.Host{ID: safeString(h.ID, n), Name: safeString(h.Name, n), OS: safeString(h.OS, 16), Arch: safeString(h.Arch, 16)}
+		s.Host = &event.Host{ID: skelString(h.ID, n), Name: skelString(h.Name, n), OS: skelString(h.OS, 16), Arch: skelString(h.Arch, 16)}
 	}
 	if u := c.User; u != nil {
-		s.User = &event.User{Name: safeString(u.Name, n), ID: safeString(u.ID, n)}
+		s.User = &event.User{Name: skelString(u.Name, n), ID: skelString(u.ID, n)}
 	}
 	if a := c.Agent; a != nil {
-		s.Agent = &event.Agent{ID: safeString(a.ID, n), Version: safeString(a.Version, 32), PID: a.PID}
+		s.Agent = &event.Agent{ID: skelString(a.ID, n), Version: skelString(a.Version, 32), PID: a.PID}
 	}
 	if x := c.Session; x != nil {
-		s.Session = &event.Session{ID: safeString(x.ID, n)}
+		s.Session = &event.Session{ID: skelString(x.ID, n)}
 	}
 	if t := c.Tool; t != nil {
 		s.Tool = &event.Tool{
-			Name: safeString(t.Name, n), Kind: event.ToolKind(safeString(string(t.Kind), 16)), UseID: safeString(t.UseID, n),
-			InputSHA256: safeString(t.InputSHA256, n), OutputSHA256: safeString(t.OutputSHA256, n), OutputLen: t.OutputLen,
+			Name: skelString(t.Name, n), Kind: event.ToolKind(skelString(string(t.Kind), 16)), UseID: skelString(t.UseID, n),
+			InputSHA256: skelString(t.InputSHA256, n), OutputSHA256: skelString(t.OutputSHA256, n), OutputLen: t.OutputLen,
 		}
 	}
 	if d := c.Detection; d != nil {
 		s.Detection = &event.Detection{
-			RuleID: safeString(d.RuleID, n), Title: safeString(d.Title, n), Severity: safeString(d.Severity, 16),
-			Confidence: safeString(d.Confidence, 16), Response: safeString(d.Response, 16), Enforced: d.Enforced,
-			DedupKey: safeString(d.DedupKey, n), Count: d.Count,
+			RuleID: skelString(d.RuleID, n), Title: skelString(d.Title, n), Severity: skelString(d.Severity, 16),
+			Confidence: skelString(d.Confidence, 16), Response: skelString(d.Response, 16), Enforced: d.Enforced,
+			DedupKey: skelString(d.DedupKey, n), Count: d.Count,
 		}
 	}
 	if k := c.Check; k != nil {
-		s.Check = &event.Check{ID: safeString(k.ID, n), Status: safeString(k.Status, 16), Severity: safeString(k.Severity, 16)}
+		s.Check = &event.Check{ID: skelString(k.ID, n), Status: skelString(k.Status, 16), Severity: skelString(k.Severity, 16)}
 	}
 	if a := c.Asset; a != nil {
-		s.Asset = &event.Asset{ID: safeString(a.ID, n), Kind: event.AssetKind(safeString(string(a.Kind), 32)), Name: safeString(a.Name, n)}
+		s.Asset = &event.Asset{ID: skelString(a.ID, n), Kind: event.AssetKind(skelString(string(a.Kind), 32)), Name: skelString(a.Name, n)}
 	}
 	if h := c.Health; h != nil {
-		s.Health = &event.Health{SensorVersion: safeString(h.SensorVersion, 32), Mode: safeString(h.Mode, 16), Reason: safeString(h.Reason, n)}
+		s.Health = &event.Health{SensorVersion: skelString(h.SensorVersion, 32), Mode: skelString(h.Mode, 16), Reason: skelString(h.Reason, n)}
 	}
 	return s
 }
@@ -431,6 +443,104 @@ func safeByte(c byte) bool {
 		return true
 	}
 	return false
+}
+
+// skelString is safeString for the skeleton: a value it clips ends in a
+// truncMarker. The marker alone may exceed n for the 16-byte enum fields,
+// which only a hostile event fills, so the skeleton's bound grows by at
+// most one marker per field.
+func skelString(s string, n int) string {
+	if len(s) <= n {
+		return safeString(s, n)
+	}
+	room := max(n-len(truncMarker(len(s))), 0)
+	return safeString(s[:room], room) + truncMarker(len(s)-room)
+}
+
+// truncMarker is the event contract's cut marker: how many bytes were cut,
+// and no digest of them (an unkeyed one would let a reader confirm guesses
+// about the missing text).
+func truncMarker(n int) string { return "[TRUNCATED:" + strconv.Itoa(n) + "B]" }
+
+// cutString cuts s to at most n bytes, rune-safe, ending in a truncMarker.
+// n is at least the shortest shrink pass (256 bytes), so the marker fits.
+//
+// The marker counts every byte of the original value that is now missing.
+// A value can arrive already cut (by package privacy, or by an earlier
+// pass here, which ends it in a marker), so the bytes a marker that falls
+// in the cut part stood for are added to the count. The cut never splits
+// a marker: a "[TRUNCATED:" or "[REDACTED" marker is kept whole or dropped
+// whole.
+func cutString(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	spans := markerSpans(s)
+	// missing is how many bytes of the original value s[from:] stands for.
+	missing := func(from int) int {
+		m := len(s) - from
+		for _, sp := range spans {
+			if sp.start >= from && sp.count >= 0 {
+				m += sp.count - (sp.end - sp.start)
+			}
+		}
+		return m
+	}
+	room := n - len(truncMarker(missing(0))) // the widest marker this cut can need
+	if room < 0 {
+		return clipString(s, n)
+	}
+	h := len(clipString(s, room))
+	for _, sp := range spans {
+		if h > sp.start && h < sp.end {
+			h = sp.start
+			break
+		}
+	}
+	return s[:h] + truncMarker(missing(h))
+}
+
+// maxMarkerLen bounds what is read as one marker, so a hostile value full
+// of '[' costs linear time.
+const maxMarkerLen = 160
+
+// markerSpan is one "[TRUNCATED:<n>B]" marker (count n) or "[REDACTED..]"
+// marker (count -1) in a string.
+type markerSpan struct{ start, end, count int }
+
+func markerSpans(s string) []markerSpan {
+	var out []markerSpan
+	for off := 0; off < len(s); {
+		i := strings.IndexByte(s[off:], '[')
+		if i < 0 {
+			break
+		}
+		i += off
+		j := strings.IndexByte(s[i:min(len(s), i+maxMarkerLen)], ']')
+		if j < 0 {
+			off = i + 1
+			continue
+		}
+		body := s[i : i+j+1]
+		count := -1
+		if digits, ok := strings.CutPrefix(body, "[TRUNCATED:"); ok {
+			digits, ok = strings.CutSuffix(digits, "B]")
+			c, err := strconv.Atoi(digits)
+			// 12 digits bound the sum of every count in a value well
+			// inside an int.
+			if !ok || err != nil || c < 0 || len(digits) > 12 {
+				off = i + 1
+				continue
+			}
+			count = c
+		} else if !strings.HasPrefix(body, "[REDACTED") {
+			off = i + 1
+			continue
+		}
+		out = append(out, markerSpan{start: i, end: i + j + 1, count: count})
+		off = i + j + 1
+	}
+	return out
 }
 
 // clipString cuts s to at most n bytes without splitting a UTF-8 sequence.

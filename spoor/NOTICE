@@ -42,12 +42,14 @@ limitations under the License.
 ===============================================================
 
 No source code of the projects below was copied into spoor. Where spoor
-reuses their data (identifiers, paths, names, lists) or reimplements one of
-their algorithms so that results interoperate, the project is credited here
-and next to the code that uses it. All reused data was re-checked against
-primary sources while spoor was built and was changed where it was found to
-be wrong or too broad; the files named below are modified works in that
-sense. "Read" dates are when the source was consulted.
+reuses their data (identifiers, paths, names, lists, record examples, one
+configuration file) or reimplements one of their algorithms so that results
+interoperate, the project is credited here and next to the code that uses
+it. Reused catalog data was checked against the primary sources named in
+each catalog entry and changed where it was wrong or too broad; what could
+not be confirmed is listed in the entry's `unverified` field. The files
+named below are modified works in that sense. "Read" dates are when the
+source was consulted.
 
 uber/ADR (ADR: Agentic AI Detection and Response)
   https://github.com/uber/adr, commit 6b33dff (2026-10-16), read 2026-11-11

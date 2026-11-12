@@ -32,7 +32,7 @@ func unkeyedFP8(s string) string {
 // The cut is moved through every offset of the marker here.
 func TestCapStringNeverSplitsMarker(t *testing.T) {
 	secret := "hunter2" + "hunter2"
-	head := unkeyedFP8(secret)[:5] // 20 bits of the unkeyed SHA-256 of the secret
+	fp := unkeyedFP8(secret)
 	keys := [][]byte{nil, bytes.Repeat([]byte{9}, 32)}
 	whole := 0
 	for n := 900; n <= 1024; n++ {
@@ -79,8 +79,8 @@ func TestCapStringNeverSplitsMarker(t *testing.T) {
 				}
 				off = i
 			}
-			if strings.Contains(js, head) && strings.Contains(js, "generic_secret:"+head[:1]) {
-				t.Fatalf("n=%d key=%v: the fingerprint shipped", n, key != nil)
+			if strings.Contains(js, fp) {
+				t.Fatalf("n=%d key=%v: the whole unkeyed fingerprint shipped", n, key != nil)
 			}
 		}
 	}

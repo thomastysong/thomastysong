@@ -17,10 +17,11 @@ import (
 // matches. The key is 32 random bytes drawn once per process, held only in
 // memory and never written anywhere, so two different cut values still
 // differ within a run (a declaration cannot hide behind another with the
-// same head), and nothing can be recomputed from the log. The cost: a value
-// longer than its cap reads differently in the next process, so an inventory
-// item with such a name gets a new id after a restart. Only values past the
-// caps (256 bytes for a name) are affected.
+// same head), and nothing can be recomputed from the log. A value cut this
+// way reads differently in the next process, so it is used only for
+// reported fields (command, arguments, package, URL, key names). The
+// fields that identify an asset, Server.Name and Server.Project, are cut
+// without any digest by builder.cutIdentity, the same in every process.
 var runKey = sync.OnceValue(func() []byte {
 	k := make([]byte, 32)
 	// crypto/rand.Read does not return on failure (Go 1.24+): the process

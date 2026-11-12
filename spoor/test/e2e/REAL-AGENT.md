@@ -234,8 +234,10 @@ TLS with the bearer header. No activity record was shipped.
 TLS to a private CA: the first attempt mounted the test CA over
 `/etc/ssl/certs/ca-certificates.crt` and every flush failed with
 `[tls] error: error:0A000086:SSL routines::certificate verify failed`. The
-image's trust store is a hashed directory (`/etc/ssl/certs/<hash>.0`, no
-bundle file); mounting a directory with the CA as `<subject hash>.0` worked.
+image does ship a bundle (`/etc/ssl/certs/ca-certificates.crt`, 222 KB), but
+Fluent Bit did not trust a CA placed there; it found the CA only as
+`<subject hash>.0` in `/etc/ssl/certs`, so mounting a directory with the CA
+under that name worked (both re-checked by the audit).
 `outputs/http.yaml` exposes no `tls.ca_file`, so a receiver behind a private
 CA needs the CA in the container's trust store this way.
 
@@ -301,9 +303,9 @@ Before the fix below (run 1) spoor turned that into
 
 ## 7. Hook overhead inside the agent
 
-Claude Code's debug log times every hook command it runs ("finished with
+Claude Code's debug log times every hook command it runs except SessionEnd ("finished with
 status 0 (N ms)", whole milliseconds, spawn to exit as Claude Code sees
-it). 10 runs each, interleaved, in the same namespace with the daemon
+it). 10 runs each (observe and control interleaved, the guard runs after them), in the same namespace with the daemon
 running: spoor in observe mode, spoor in guard mode, and a control HOME
 whose hooks on the same events are the exec form `/bin/sh -c 'cat >/dev/null'`
 (a process that only drains stdin).

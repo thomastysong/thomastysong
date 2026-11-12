@@ -200,7 +200,7 @@ func (c *correlator) decide(p *Pipeline, ev *event.Event, s *session, now time.T
 			p.ctr.held++
 			if len(c.held) > maxHeld {
 				p.ctr.heldOverflow++
-				p.releaseOne(c.held[0], now)
+				p.releaseOne(c.held[0], now, false)
 				c.held = c.held[1:]
 			}
 			return corrHeld
@@ -235,10 +235,13 @@ func (p *Pipeline) releaseHeld(now time.Time, all bool) {
 	i := 0
 	for ; i < len(c.held); i++ {
 		h := c.held[i]
-		if !all && now.Sub(h.at) < HoldFor {
+		due := now.Sub(h.at) >= HoldFor
+		if !all && !due {
 			break
 		}
-		p.releaseOne(h, now)
+		// Released early (shutdown), a record has not had its chance to be
+		// matched and does not count as a call the hook missed.
+		p.releaseOne(h, now, due)
 	}
 	c.held = c.held[i:]
 	if cap(c.held) > 1024 && len(c.held) < cap(c.held)/4 {
@@ -246,7 +249,7 @@ func (p *Pipeline) releaseHeld(now time.Time, all bool) {
 	}
 }
 
-func (p *Pipeline) releaseOne(h *held, now time.Time) {
+func (p *Pipeline) releaseOne(h *held, now time.Time, unmatched bool) {
 	if h.done {
 		return
 	}
@@ -261,7 +264,7 @@ func (p *Pipeline) releaseOne(h *held, now time.Time) {
 	var s *session
 	if el, ok := p.sessions[h.skey]; ok {
 		s = el.Value.(*session)
-		if toolRecord(h.ev) && h.ev.Tool != nil && h.ev.Tool.UseID != "" {
+		if unmatched && toolRecord(h.ev) && h.ev.Tool != nil && h.ev.Tool.UseID != "" {
 			s.unmatchedCall(h.ev.Tool.UseID, h.ev.ID)
 		}
 	}

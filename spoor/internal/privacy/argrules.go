@@ -173,6 +173,12 @@ func passFlag(a string) (sep bool, val string, ok bool) {
 	if i := strings.IndexAny(body, "=:"); i >= 0 {
 		name, val, sep = body[:i], body[i+1:], true
 	}
+	for i := 0; i < len(name); i++ {
+		// A flag name, not a path ("/etc/nginx/.htpasswd" is an argument).
+		if c := name[i]; !(isIdentStart(c) || c >= '0' && c <= '9' || c == '-') {
+			return false, "", false
+		}
+	}
 	low := strings.ToLower(name)
 	if sep && (passSource(val) || passSource(val+":")) {
 		// keytool -storepass:env VAR, --password=stdin: the value names

@@ -33,6 +33,7 @@ var protectedSlots = map[string]bool{
 	"labels." + LabelContextKind:    true,
 	"labels." + LabelContextType:    true,
 	"labels." + LabelContextEventID: true,
+	"labels." + LabelContextPolicy:  true,
 }
 
 // jsonLen is the encoded size of s as encoding/json writes it (HTML
@@ -130,14 +131,9 @@ func (r *run) fitLine() {
 // the labels this package stamps (a context record must still say which
 // finding it belongs to).
 func (r *run) toSkeleton(reason string) {
-	sk := r.p.skeleton(r.out, r.s, r.out.Privacy, reason)
-	if sk == nil {
-		return
+	if sk := r.p.skeleton(r.out, r.s, r.out.Privacy, reason, r.stamp); sk != nil {
+		r.out = sk
 	}
-	for k, v := range r.stamp {
-		sk.Labels[k] = v
-	}
-	r.out = sk
 }
 
 type sized struct {

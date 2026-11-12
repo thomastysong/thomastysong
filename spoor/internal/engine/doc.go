@@ -110,6 +110,10 @@
 //     or transcript record since it started, after BlindAfter; an agent
 //     that sits idle at its prompt for a minute after start is therefore
 //     reported blind until its first record.
+//   - Sessions live in memory: after a daemon restart a session's next
+//     record starts it again (a second synthesized session.start, a fresh
+//     summary series with the same session id; the state database folds
+//     summaries by session).
 //   - Without Options.Hooked, hooks count as expected for an agent and
 //     account once they have delivered before; Hooked is what makes a
 //     never-delivering managed hook visible.

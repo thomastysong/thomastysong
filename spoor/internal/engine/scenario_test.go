@@ -121,8 +121,9 @@ func TestScenarios(t *testing.T) {
 				t.Fatalf("want one finding:\n%s", dump(h.out.where(func(e *event.Event) bool { return e.Detection != nil })))
 			}
 			d := f[0].Detection
-			if d.Class != event.ClassFinding || d.Severity != event.SevHigh || d.Evidence["unmatched_tool_calls"] != "4" ||
-				d.Evidence["root_observed"] != "true" || len(d.EventIDs) != 4 || f[0].User.Name != "dev" {
+			l := f[0].Labels
+			if d.Class != event.ClassFinding || d.Severity != event.SevHigh || l[LabelUnmatchedCalls] != "4" ||
+				l[LabelRootObserved] != "true" || l[LabelHooksState] != "managed" || len(d.EventIDs) != 4 || f[0].User.Name != "dev" {
 				t.Errorf("finding %+v user %+v", d, f[0].User)
 			}
 			if f[0].Integrity != event.IntegrityRoot {

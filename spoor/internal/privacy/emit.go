@@ -1,6 +1,7 @@
 package privacy
 
 import (
+	"encoding/json"
 	"strings"
 
 	"github.com/thomastysong/spoor/internal/event"
@@ -40,7 +41,7 @@ func (p *Policy) Emit(e *event.Event) (out *event.Event, ship bool, ok bool) {
 	}
 	defer func() {
 		if recover() != nil {
-			out = p.skeleton(e, s, string(s.profile), "privacy_error")
+			out = p.skeleton(e, s, string(s.profile), "privacy_error", nil)
 			ok = out != nil
 			ship = ship && ok
 		}
@@ -153,12 +154,28 @@ func (r *run) finish() {
 	if len(r.trunc) > 0 {
 		names := make([]string, 0, len(r.trunc))
 		for _, t := range r.trunc {
-			names = append(names, capBytes(cleanUTF8(t), 64))
+			names = append(names, r.truncName(t))
 		}
 		out.Truncated = names
 	} else {
 		out.Truncated = nil
 	}
+}
+
+// truncName prepares a "truncated" entry. It is written after the safety
+// pass, and its names are not all ours: the input record's own list is
+// copied in, and "tool.input.<key>" carries a key from agent-supplied tool
+// input. So every name gets the safety pass's treatment, redaction before
+// the cap so a secret cannot straddle it.
+func (r *run) truncName(t string) string {
+	t = cleanUTF8(t)
+	if len(t) > maxTextScan {
+		t = t[:safeCut(t, maxTextScan)]
+	}
+	if len(t) >= 8 {
+		t = redactText(t)
+	}
+	return capBytes(r.home.rewrite(rewriteMarkers(t, r.s.key)), 64)
 }
 
 func (r *run) setLabel(k, v string) {
@@ -169,14 +186,58 @@ func (r *run) setLabel(k, v string) {
 }
 
 // skeleton is the record written when redaction failed or a line cannot be
-// brought under the cap: identity and routing only, no content.
-func (p *Policy) skeleton(e *event.Event, s settings, privacyName, reason string) (out *event.Event) {
+// brought under the cap: identity and routing only, no content, plus the
+// labels this package stamps (a context record must still say which
+// finding it belongs to). It is itself forced under the line budget: its
+// fields come from the input and a 128-byte field of "<" encodes to 768
+// bytes, so seventeen of them would not fit a small MaxLine. The values
+// get the pattern pass too, since on the error path they are raw input.
+func (p *Policy) skeleton(e *event.Event, s settings, privacyName, reason string, stamp map[string]string) (out *event.Event) {
 	defer func() {
 		if recover() != nil {
 			out = nil
 		}
 	}()
-	c := func(v string) string { return capBytes(cleanUTF8(v), 128) }
+	budget := s.lineBudget()
+	base := func(v string) string {
+		if v == "" {
+			return ""
+		}
+		return rewriteMarkers(safeRedactText(capBytes(cleanUTF8(v), 128)), s.key)
+	}
+	sk := buildSkeleton(e, privacyName, reason, stamp, base)
+	if skeletonFits(sk, budget) {
+		return sk
+	}
+	// Give every non-empty value the same encoded width: the overhead is
+	// measured with each value replaced by one byte, the rest is shared.
+	n := 0
+	probe := buildSkeleton(e, privacyName, reason, stamp, func(v string) string {
+		if base(v) == "" {
+			return ""
+		}
+		n++
+		return "x"
+	})
+	if b, err := json.Marshal(probe); err == nil && n > 0 {
+		per := (budget-len(b))/n + 1 // encoded content bytes per value ("x" is 1)
+		if per >= 8 {
+			sk = buildSkeleton(e, privacyName, reason, stamp, func(v string) string { return capEncoded(base(v), per) })
+			if skeletonFits(sk, budget) {
+				return sk
+			}
+		}
+	}
+	// Routing only.
+	return &event.Event{
+		V: e.V, TS: e.TS, Emitted: e.Emitted, Seq: e.Seq,
+		Kind:    event.Kind(capEncoded(base(string(e.Kind)), 32)),
+		Privacy: privacyName, Truncated: []string{"*"},
+		Labels: map[string]string{reason: "true"},
+	}
+}
+
+func buildSkeleton(e *event.Event, privacyName, reason string, stamp map[string]string, c func(string) string) *event.Event {
 	sk := &event.Event{
 		V: e.V, ID: c(e.ID), TS: e.TS, Emitted: e.Emitted, Seq: e.Seq,
 		Kind: event.Kind(c(string(e.Kind))), Type: c(e.Type), Source: event.Source(c(string(e.Source))),
@@ -184,6 +245,9 @@ func (p *Policy) skeleton(e *event.Event, s settings, privacyName, reason string
 		Writer: c(e.Writer), Privacy: privacyName,
 		Truncated: []string{"*"},
 		Labels:    map[string]string{reason: "true"},
+	}
+	for k, v := range stamp {
+		sk.Labels[k] = c(v)
 	}
 	if e.Host != nil {
 		sk.Host = &event.Host{ID: c(e.Host.ID), OS: c(e.Host.OS), Arch: c(e.Host.Arch)}
@@ -201,6 +265,37 @@ func (p *Policy) skeleton(e *event.Event, s settings, privacyName, reason string
 		}
 	}
 	return sk
+}
+
+func skeletonFits(sk *event.Event, budget int) bool {
+	b, err := json.Marshal(sk)
+	return err == nil && len(b) <= budget
+}
+
+// capEncoded cuts s to its longest prefix (on a rune boundary) whose JSON
+// encoding, quotes excluded, is at most n bytes.
+func capEncoded(s string, n int) string {
+	acc := 0
+	for i := 0; i < len(s); {
+		e, size := encRune(s, i)
+		if acc+e > n {
+			return s[:i]
+		}
+		acc += e
+		i += size
+	}
+	return s
+}
+
+// safeRedactText is redactText for the error path: a panic in the pattern
+// pass yields the failure marker, never the input.
+func safeRedactText(v string) (out string) {
+	defer func() {
+		if recover() != nil {
+			out = failMarker
+		}
+	}()
+	return redactText(v)
 }
 
 // isMarkerOnly reports a value that is entirely one marker.

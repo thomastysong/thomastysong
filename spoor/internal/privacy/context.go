@@ -1,6 +1,8 @@
 package privacy
 
 import (
+	"strings"
+
 	"github.com/thomastysong/spoor/internal/event"
 )
 
@@ -15,12 +17,20 @@ import (
 // A context record is routed by its kind, like every record, so it is
 // re-kinded: Kind "detection", Type TypeContext, and labels that say what
 // it was (context_kind, context_type), which event it shows
-// (context_event_id) and which finding it belongs to (context_for). It
-// gets its own deterministic id: the same activity record can be shipped
-// on the activity stream (standard profile) and be context for several
-// findings, and consumers dedupe at-least-once deliveries on the id. Seq
-// and Writer are cleared because they are per stream and set by the
-// writer.
+// (context_event_id), which finding it belongs to (context_for) and which
+// field policy rendered it (context_policy, always "standard"); Privacy
+// names the configured profile, as on every record. It gets its own
+// deterministic id: the same activity record can be shipped on the
+// activity stream (standard profile) and be context for several findings,
+// and consumers dedupe at-least-once deliveries on the id. Seq and Writer
+// are cleared because they are per stream and set by the writer.
+//
+// Every context record carries context_for: a record that cannot be
+// joined to its finding is activity shipped for no case, which minimal
+// promises not to do. So Context needs the finding in prev and ContextFor
+// needs its id; without one they return nil. The engine holds the finding
+// separately from its per-session ring and calls ContextFor
+// (internal/engine/process.go).
 
 // TypeContext is the Type of a detection-context record.
 const TypeContext = "detection.context"
@@ -34,6 +44,7 @@ const (
 	LabelContextKind    = "context_kind"
 	LabelContextType    = "context_type"
 	LabelContextEventID = "context_event_id"
+	LabelContextPolicy  = "context_policy"
 )
 
 // Context returns up to n preceding session events (oldest first),
@@ -41,16 +52,17 @@ const (
 // detection-stream records labelled labels.context_for=<detection id>.
 //
 // The detection is found in prev itself: the newest detection record in
-// prev is the finding, the events before it are its context, and when the
-// finding names a session only events of that session qualify. Without a
-// detection in prev every event qualifies and context_for is not set;
-// callers that hold the detection id separately use ContextFor. Nil
+// prev (one with an id) is the finding, the events before it are its
+// context, and when the finding names a session only events of that
+// session qualify. Without a detection in prev the result is nil, since
+// records without context_for could not be joined to anything; callers
+// that hold the detection separately from the ring use ContextFor. Nil
 // entries, excluded events and records that ship in every profile anyway
 // (detections, inventory, posture, health, summaries) are skipped.
 func (p *Policy) Context(prev []*event.Event, n int) []*event.Event {
 	for i := len(prev) - 1; i >= 0; i-- {
 		d := prev[i]
-		if d == nil || d.Kind != event.KindDetection {
+		if d == nil || d.Kind != event.KindDetection || d.ID == "" || d.Type == TypeContext {
 			continue
 		}
 		sess := ""
@@ -59,17 +71,19 @@ func (p *Policy) Context(prev []*event.Event, n int) []*event.Event {
 		}
 		return p.context(d.ID, sess, prev[:i], n)
 	}
-	return p.context("", "", prev, n)
+	return nil
 }
 
 // ContextFor is Context with the detection id given explicitly: every
-// qualifying event in prev is a candidate, whatever its session.
+// qualifying event in prev is a candidate, whatever its session. An empty
+// id yields nil.
 func (p *Policy) ContextFor(detectionID string, prev []*event.Event, n int) []*event.Event {
 	return p.context(detectionID, "", prev, n)
 }
 
 func (p *Policy) context(detectionID, session string, prev []*event.Event, n int) (out []*event.Event) {
-	if n <= 0 || len(prev) == 0 {
+	detID := capBytes(cleanUTF8(detectionID), 128)
+	if n <= 0 || len(prev) == 0 || strings.TrimSpace(detID) == "" {
 		return nil
 	}
 	if n > MaxContext {
@@ -91,7 +105,6 @@ func (p *Policy) context(detectionID, session string, prev []*event.Event, n int
 		}
 		picked = append(picked, e)
 	}
-	detID := capBytes(cleanUTF8(detectionID), 128)
 	for i := len(picked) - 1; i >= 0; i-- {
 		if c := p.contextOne(picked[i], s, detID); c != nil {
 			out = append(out, c)
@@ -110,10 +123,10 @@ func (p *Policy) contextOne(e *event.Event, s settings, detID string) (out *even
 		LabelContextKind:    clip(string(e.Kind)),
 		LabelContextType:    clip(e.Type),
 		LabelContextEventID: clip(e.ID),
+		LabelContextFor:     detID,
+		LabelContextPolicy:  string(ProfileStandard),
 	}
-	if detID != "" {
-		stamp[LabelContextFor] = detID
-	}
+	privacyName := string(s.profile)
 	// Re-kind a shallow copy before rendering, so the line cap measures
 	// the record as it is written. Rendering clones before it changes
 	// anything, so the copy sharing pointers with e is harmless.
@@ -126,13 +139,8 @@ func (p *Policy) contextOne(e *event.Event, s settings, detID string) (out *even
 	c.Emitted = event.Time{}
 	defer func() {
 		if recover() != nil {
-			out = p.skeleton(&c, s, string(ProfileStandard), "privacy_error")
-			if out != nil {
-				for k, v := range stamp {
-					out.Labels[k] = v
-				}
-			}
+			out = p.skeleton(&c, s, privacyName, "privacy_error", stamp)
 		}
 	}()
-	return p.renderStamped(&c, s, levelStandard, string(ProfileStandard), stamp)
+	return p.renderStamped(&c, s, levelStandard, privacyName, stamp)
 }

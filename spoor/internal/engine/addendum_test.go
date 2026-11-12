@@ -339,7 +339,7 @@ func TestOTelHookRunMismatch(t *testing.T) {
 	h.advance(11 * time.Second)
 	h.tick()
 	f := h.out.rule(RuleHookBypass)
-	if len(f) != 1 || f[0].Detection.Evidence["otel_hook_mismatch"] != "3" {
+	if len(f) != 1 || f[0].Labels[LabelOTelHookMismatch] != "3" {
 		t.Fatalf("want a finding with mismatch 3: %s", dump(h.out.all()))
 	}
 }
@@ -602,5 +602,30 @@ func TestCorrelatorBounds(t *testing.T) {
 	c.expire(t0.Add(corrTTL + time.Minute))
 	if len(c.entries) != 1 || c.entries["held"] == nil {
 		t.Errorf("expiry must keep only the record still waiting for its hook: %d", len(c.entries))
+	}
+}
+
+func TestCloseReleasesHeldWithoutBypass(t *testing.T) {
+	h := newHarness(t, func(c *config.Config, o *Options) {
+		c.Rules.MinClass = "signal"
+		o.Hooked = func(string, string) string { return "managed" }
+		o.RootSaw = func(string, string) bool { return true }
+	})
+	for i := 0; i < 5; i++ {
+		h.ingest(transcript(event.TypeToolPre, "cl", shell("c"+strconv.Itoa(i), "ls")))
+	}
+	h.advance(2 * time.Second)
+	if err := h.p.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(h.local.ofType(event.TypeToolPre)); n != 5 {
+		t.Errorf("held records must be processed on close, got %d", n)
+	}
+	if ids := ruleIDs(h.out.all()); slices.Contains(ids, RuleHookBypass) || slices.Contains(ids, RuleHookBypassSignal) {
+		t.Errorf("shutdown raised a bypass detection: %v", ids)
+	}
+	sums := h.out.ofType(event.TypeSessionSummary)
+	if len(sums) != 1 || sums[0].Summary.Final {
+		t.Errorf("a daemon shutdown writes a rolling summary, not a final one: %+v", sums)
 	}
 }

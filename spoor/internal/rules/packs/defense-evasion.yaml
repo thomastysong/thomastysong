@@ -1,0 +1,498 @@
+# Defense evasion: stopping or blinding security tooling, the sensor and
+# the agent's own guard rails. ATT&CK v19+ moved most of these to the
+# Defense Impairment tactic (T1685, T1686, T1690); the revoked T1562 ids
+# are not used.
+pack: defense-evasion
+version: "2026.11.0"
+description: Security tooling, the sensor, agent guard rails, logs and path tricks.
+rules:
+  - id: SPR-EVADE-001
+    title: Security tool stopped or killed
+    description: >-
+      A command stops, unloads or kills an EDR agent, osquery, Fleet's
+      orbit, Fluent Bit, auditd, Santa or this sensor. An agent asked to
+      write code does not need to; an agent told by injected content to
+      "fix" a monitoring problem will try.
+    kind: activity
+    class: finding
+    severity: high
+    confidence: high
+    maturity: stable
+    category: defense_evasion
+    tags: [attack.t1685, attack.t1685.007, owasp.asi10]
+    references:
+      - "research/threats.md section 2 row 25: agents disabled monitoring (Oct 2026)"
+      - "research/threats.md section 3 R37"
+    falsepositives:
+      - "IT administrators restarting their own agents"
+      - "Operations work on the monitoring stack itself (restarting osqueryd after a config change)"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      shell.defense_evasion: stop_security_tool
+    response: ask
+    dedup: [shell.argv]
+    evidence: [target.command, shell.defense_evasion]
+    remedy: Confirm with the user; security tooling should be restarted by its owner, not by an agent.
+    tests:
+      - name: systemctl stop falcon
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "systemctl stop falcon-sensor" } }
+        expect: match
+      - name: pkill osqueryd
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "pkill -f \"osqueryd --flagfile\"" } }
+        expect: match
+      - name: status query
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "systemctl status osqueryd" } }
+        expect: no_match
+      - name: stopping an app container
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "docker stop web-1" } }
+        expect: no_match
+
+  - id: SPR-EVADE-002
+    title: Sensor files deleted or modified
+    description: >-
+      A command deletes or writes spoor's own configuration, state, spool
+      or binary. Whoever can change the sensor decides what it reports.
+    kind: activity
+    class: alert
+    severity: critical
+    confidence: high
+    maturity: stable
+    category: defense_evasion
+    tags: [attack.t1685, attack.t1685.007, atlas.aml.t0138, owasp.asi10]
+    references:
+      - "research/threats.md section 2 row 25"
+      - "research/threats.md section 3 R37"
+    falsepositives:
+      - "Uninstalling the sensor"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      any:
+        - shell.defense_evasion: sensor_tamper
+        - all:
+            - tool.kind|in: [file_write, file_edit]
+            - path.classes: sensor_files
+    response: ask
+    dedup: [shell.deletes, target.path]
+    evidence: [target.command, target.path, shell.deletes, shell.writes]
+    remedy: Restore the sensor from its package and find out why the agent touched it.
+    tests:
+      - name: state directory removed
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf /var/lib/spoor" } }
+        expect: match
+      - name: config directory removed
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf /etc/spoor" } }
+        expect: match
+      - name: reading the sensor config
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cat /etc/spoor/spoor.yaml" } }
+        expect: no_match
+      - name: project build output removed
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf ./bin ./dist" } }
+        expect: no_match
+
+  - id: SPR-EVADE-003
+    title: Managed agent policy written or removed
+    description: >-
+      A tool or command writes or deletes a managed (administrator) policy
+      file of an agent: /etc/claude-code/managed-settings.json,
+      /etc/codex/requirements.toml, C:\ProgramData\ClaudeCode\... Managed
+      policy is where an organisation pins its hooks and permission rules;
+      an agent changing it is switching off its own supervision.
+    kind: activity
+    class: alert
+    severity: critical
+    confidence: high
+    maturity: stable
+    category: defense_evasion
+    tags: [attack.t1685.007, atlas.aml.t0081, owasp.asi10]
+    references:
+      - "research/threats.md section 2 row 11: CVE-2026-35603 (world-writable managed-settings.json)"
+      - "research/threats.md section 3 R36"
+    falsepositives:
+      - "An administrator deploying policy from an agent session"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      any:
+        - shell.write_classes: agent_managed_policy
+        - shell.delete_classes: agent_managed_policy
+        - all:
+            - tool.kind|in: [file_write, file_edit]
+            - path.classes: agent_managed_policy
+    response: ask
+    dedup: [target.path, shell.writes, shell.deletes]
+    evidence: [target.path, target.command, shell.writes, shell.deletes]
+    remedy: Restore the managed policy from configuration management; it should only change through MDM or Fleet.
+    tests:
+      - name: managed settings overwritten
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "echo '{}' > /etc/claude-code/managed-settings.json" } }
+        expect: match
+      - name: managed settings deleted
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm /etc/claude-code/managed-settings.json" } }
+        expect: match
+      - name: Write tool on managed settings
+        event: { type: tool.pre, tool: { kind: file_write, name: Write }, target: { path: /etc/claude-code/managed-settings.json } }
+        expect: match
+      - name: reading managed settings
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cat /etc/claude-code/managed-settings.json" } }
+        expect: no_match
+      - name: user settings edited
+        event: { type: tool.pre, tool: { kind: file_edit, name: Edit }, target: { path: /home/tester/.claude/settings.json } }
+        expect: no_match
+
+  - id: SPR-EVADE-004
+    title: Agent hook configuration edited from the shell
+    description: >-
+      A shell command rewrites an agent settings or hooks file (sed -i, jq
+      ... > settings.json, deleting a hook script). Edits through the
+      agent's own file tools are visible as diffs; shell rewrites of hook
+      configuration are how a guard gets removed quietly.
+    kind: activity
+    class: finding
+    severity: medium
+    confidence: medium
+    maturity: experimental
+    category: defense_evasion
+    tags: [attack.t1685.007, atlas.aml.t0081, owasp.asi10]
+    references:
+      - "research/threats.md section 3 R36 (removal of managed hook entries)"
+    falsepositives:
+      - "Scripts that update a settings file the user asked to change"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      any:
+        - shell.defense_evasion: agent_hook_tamper
+        - shell.delete_classes: agent_hook
+    allow:
+      shell.write_classes: agent_managed_policy
+    dedup: [shell.writes, shell.deletes]
+    evidence: [target.command, shell.writes, shell.deletes]
+    remedy: Diff the settings file and confirm the hook entries are intact.
+    tests:
+      - name: sed deletes the spoor hook
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "sed -i '/spoor/d' ~/.claude/settings.json" } }
+        expect: match
+      - name: hook script removed
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm ~/.claude/hooks/spoor.sh" } }
+        expect: match
+      - name: reading settings
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "jq .hooks ~/.claude/settings.json" } }
+        expect: no_match
+      - name: editing project source with sed
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "sed -i 's/foo/bar/' internal/config/config.go" } }
+        expect: no_match
+
+  - id: SPR-EVADE-005
+    title: Operating-system security control disabled
+    description: >-
+      Gatekeeper, SIP, SELinux, Windows Defender, the host firewall or the
+      audit subsystem is switched off.
+    kind: activity
+    class: finding
+    severity: high
+    confidence: high
+    maturity: stable
+    category: defense_evasion
+    tags: [attack.t1685, attack.t1686, owasp.asi10]
+    references:
+      - "research/threats.md section 3 R37"
+    falsepositives:
+      - "Disposable lab machines"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      shell.defense_evasion|contains_any: [disable_gatekeeper, disable_sip, defender_tamper, firewall_disable, selinux_disable, audit_disable]
+    dedup: [shell.defense_evasion]
+    evidence: [target.command, shell.defense_evasion]
+    remedy: Re-enable the control and find out what the agent was trying to get past.
+    tests:
+      - name: setenforce 0
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "setenforce 0" } }
+        expect: match
+      - name: Defender realtime off
+        event: { type: tool.pre, tool: { kind: shell, name: PowerShell }, target: { command: "Set-MpPreference -DisableRealtimeMonitoring $true" } }
+        expect: match
+      - name: firewall status
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "ufw status verbose" } }
+        expect: no_match
+      - name: selinux mode query
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "getenforce" } }
+        expect: no_match
+
+  - id: SPR-EVADE-006
+    title: Shell history or system logs cleared
+    description: >-
+      History is cleared or switched off (history -c, unset HISTFILE,
+      deleting the history file) or system logs are vacuumed or deleted.
+    kind: activity
+    class: finding
+    severity: medium
+    confidence: high
+    maturity: stable
+    category: defense_evasion
+    tags: [attack.t1070.003, attack.t1690, attack.t1685.006, atlas.aml.t0138]
+    references:
+      - "research/threats.md section 3 R37 (unset HISTFILE)"
+    falsepositives:
+      - "Disk clean-up on a build machine"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      shell.defense_evasion|contains_any: [history_clear, log_clear]
+    dedup: [shell.defense_evasion]
+    evidence: [target.command, shell.defense_evasion]
+    remedy: Check what ran just before the clean-up.
+    tests:
+      - name: unset HISTFILE
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "unset HISTFILE" } }
+        expect: match
+      - name: journal vacuum
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "journalctl --vacuum-time=1s" } }
+        expect: match
+      - name: reading the journal
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "journalctl -u nginx --since today" } }
+        expect: no_match
+      - name: listing history
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "history | tail -20" } }
+        expect: no_match
+
+  - id: SPR-EVADE-007
+    title: Sandbox switched off for a tool call
+    description: >-
+      The agent asked to run a shell command outside its sandbox
+      (dangerouslyDisableSandbox). Users do allow this for Docker or network
+      work, so it is a signal; after a refusal it is part of SPR-SEQ-003.
+    kind: activity
+    class: signal
+    severity: medium
+    confidence: high
+    maturity: stable
+    category: defense_evasion
+    tags: [attack.t1685.007, owasp.asi10]
+    references:
+      - "research/threats.md section 2 row 24 (dangerouslyDisableSandbox after a deny)"
+      - "research/threats.md section 3 R36"
+    when:
+      type: tool.pre
+    match:
+      tool.input_keys: dangerouslyDisableSandbox
+    evidence: [target.command, tool.input_keys]
+    remedy: No action on its own.
+    tests:
+      - name: sandbox disabled
+        event: { type: tool.pre, tool: { kind: shell, name: Bash, input_keys: [command, dangerouslyDisableSandbox] }, target: { command: "docker ps" } }
+        expect: match
+      - name: ordinary call
+        event: { type: tool.pre, tool: { kind: shell, name: Bash, input_keys: [command, description] }, target: { command: "docker ps" } }
+        expect: no_match
+      - name: other tool
+        event: { type: tool.pre, tool: { kind: file_read, name: Read, input_keys: [file_path] }, target: { path: /home/tester/project/a.go } }
+        expect: no_match
+
+  - id: SPR-EVADE-008
+    title: Agent configuration written to disable hooks or the sandbox
+    description: >-
+      Content written to an agent or IDE control file switches hooks off
+      (disableAllHooks), disables the sandbox or approves every tool. That
+      removes the guard rails for every later session.
+    kind: activity
+    class: finding
+    severity: high
+    confidence: high
+    maturity: stable
+    category: defense_evasion
+    tags: [attack.t1685.007, atlas.aml.t0081, owasp.asi10]
+    references:
+      - "research/threats.md section 3 R36, R08"
+    falsepositives:
+      - "A personal sandbox configured on purpose"
+    when:
+      type: tool.pre
+    match:
+      write.autorun_kinds|contains_any: [hooks_disabled, sandbox_disabled]
+    dedup: [target.path]
+    evidence: [target.path, write.autorun_kinds]
+    remedy: Revert the setting; if it is wanted, set it in managed policy where it is reviewed.
+    tests:
+      - name: disableAllHooks written
+        event:
+          type: tool.pre
+          tool: { kind: file_edit, name: Edit }
+          target: { path: /home/tester/.claude/settings.json }
+          content: { tool_input: { file_path: /home/tester/.claude/settings.json, old_string: "{", new_string: "{\"disableAllHooks\": true," } }
+        expect: match
+      - name: model setting written
+        event:
+          type: tool.pre
+          tool: { kind: file_edit, name: Edit }
+          target: { path: /home/tester/.claude/settings.json }
+          content: { tool_input: { file_path: /home/tester/.claude/settings.json, old_string: "{", new_string: "{\"model\": \"sonnet\"," } }
+        expect: no_match
+      - name: same text in a source file
+        event:
+          type: tool.pre
+          tool: { kind: file_write, name: Write }
+          target: { path: /home/tester/project/docs/settings.md }
+          content: { file_content: "Set disableAllHooks to true to turn hooks off." }
+        expect: no_match
+
+  - id: SPR-EVADE-009
+    title: Control file path spelled to evade matching
+    description: >-
+      The target differs from an agent control file only by case, a
+      trailing dot or space, an NTFS alternate data stream or an 8.3 short
+      name. On Windows and macOS those name the same file, which is how
+      .cUrsor/mcp.json and .mcp.json. slipped past approval checks.
+    kind: activity
+    class: alert
+    severity: high
+    confidence: high
+    maturity: stable
+    category: defense_evasion
+    tags: [atlas.aml.t0081, owasp.asi05]
+    references:
+      - "research/threats.md section 2 row 5: CVE-2025-59944 (case bypass)"
+      - "research/threats.md section 2 row 21: .mcp.json. trailing-dot bypass"
+      - "research/threats.md section 3 R12"
+    falsepositives:
+      - "None known: a tool that means the control file uses its canonical name"
+    when:
+      type: tool.pre
+    match:
+      path.normalization_evasion: true
+    response: ask
+    dedup: [target.path]
+    evidence: [target.path]
+    remedy: Treat it as a write to the control file itself and review the content.
+    tests:
+      - name: case variant on Windows
+        event: { type: tool.pre, tool: { kind: file_write, name: Write }, target: { path: "C:\\Users\\t\\project\\.cUrsor\\mcp.json" }, session: { cwd: "C:\\Users\\t\\project" }, host: { os: windows } }
+        expect: match
+      - name: trailing dot on Windows
+        event: { type: tool.pre, tool: { kind: file_write, name: Write }, target: { path: "C:\\Users\\t\\project\\.mcp.json." }, session: { cwd: "C:\\Users\\t\\project" }, host: { os: windows } }
+        expect: match
+      - name: case variant on Linux is a different file
+        event: { type: tool.pre, tool: { kind: file_write, name: Write }, target: { path: /home/tester/project/.cUrsor/mcp.json }, host: { os: linux } }
+        expect: no_match
+      - name: canonical name on Windows
+        event: { type: tool.pre, tool: { kind: file_write, name: Write }, target: { path: "C:\\Users\\t\\project\\.cursor\\mcp.json" }, session: { cwd: "C:\\Users\\t\\project" }, host: { os: windows } }
+        expect: no_match
+
+  - id: SPR-EVADE-010
+    title: Git hooks skipped
+    description: >-
+      git commit or push with --no-verify, HUSKY=0 or core.hooksPath
+      pointed away. Very common on work-in-progress commits, so a signal
+      that only matters next to other detections.
+    kind: activity
+    class: signal
+    severity: low
+    confidence: high
+    maturity: stable
+    category: defense_evasion
+    tags: [owasp.asi02]
+    references:
+      - "research/threats.md section 3 R38"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      shell.git_ops: commit_no_verify
+    evidence: [target.command]
+    remedy: No action on its own.
+    tests:
+      - name: no-verify commit
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "git commit --no-verify -m wip" } }
+        expect: match
+      - name: plain commit
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "git commit -m 'fix parser'" } }
+        expect: no_match
+      - name: status
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "git status --short" } }
+        expect: no_match
+
+  - id: SPR-EVADE-011
+    title: Agent session log deleted or rewritten
+    description: >-
+      A command deletes, truncates or writes an agent transcript (Claude
+      Code projects/*.jsonl, Codex rollouts, Copilot or Gemini session
+      logs). The transcript is the second surface next to hooks; an agent
+      erasing it is erasing its own tracks.
+    kind: activity
+    class: finding
+    severity: high
+    confidence: high
+    maturity: stable
+    category: defense_evasion
+    tags: [attack.t1070.004, atlas.aml.t0138, owasp.asi10]
+    references:
+      - "research/threats.md section 2 row 25 (agent denied what it did)"
+    falsepositives:
+      - "Users cleaning up old sessions to save space"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      any:
+        - shell.delete_classes: agent_transcript
+        - shell.write_classes: agent_transcript
+        - all:
+            - tool.kind|in: [file_write, file_edit]
+            - path.classes: agent_transcript
+    dedup: [shell.deletes, shell.writes, target.path]
+    evidence: [target.command, target.path, shell.deletes, shell.writes]
+    remedy: Recover the log from backup if possible and review the session that removed it.
+    tests:
+      - name: transcript removed
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf ~/.claude/projects/-home-x/abc.jsonl" } }
+        expect: match
+      - name: rollout truncated
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "truncate -s 0 ~/.codex/sessions/2026/11/rollout-x.jsonl" } }
+        expect: match
+      - name: transcript read for analysis
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "wc -l ~/.claude/projects/-home-x/*.jsonl" } }
+        expect: no_match
+      - name: project jsonl fixture written
+        event: { type: tool.pre, tool: { kind: file_write, name: Write }, target: { path: /home/tester/project/testdata/session.jsonl } }
+        expect: no_match
+
+  - id: SPR-EVADE-012
+    title: Symbolic link planted to a sensitive file
+    description: >-
+      ln -s creates a link whose target is an SSH key or authorized_keys,
+      a shell profile, an agent settings file or a system credential file.
+      An approval prompt shows the link's harmless name; the write lands on
+      the target (GhostApproval).
+    kind: activity
+    class: finding
+    severity: high
+    confidence: medium
+    maturity: experimental
+    category: defense_evasion
+    tags: [attack.t1098.004, owasp.asi05]
+    references:
+      - "research/threats.md section 2 row 17: GhostApproval CVE-2026-12958"
+      - "research/threats.md section 2 row 16: DuneSlide symlink canonicalisation"
+      - "research/threats.md section 3 R13"
+    falsepositives:
+      - "Dotfile managers that link profiles into place"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      any_command:
+        name: ln
+        all:
+          - args|any_re: ["^-[a-zA-Z]*s", "^--symbolic"]
+          - args|any_re: "(\\.ssh/|authorized_keys|/etc/(passwd|shadow|sudoers)|\\.aws/credentials|\\.(bash|zsh)rc|\\.zshenv|\\.profile|\\.claude/settings|\\.git-credentials|\\.netrc)"
+    evidence: [target.command]
+    remedy: Remove the link and check which tool was about to write through it.
+    tests:
+      - name: link to authorized_keys
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "ln -s ~/.ssh/authorized_keys project_settings.json" } }
+        expect: match
+      - name: link to a build directory
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "ln -sf ../shared/config ./config" } }
+        expect: no_match
+      - name: hard link of a source file
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "ln src/a.go src/b.go" } }
+        expect: no_match

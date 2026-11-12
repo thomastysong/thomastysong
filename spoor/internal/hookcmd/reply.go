@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/thomastysong/spoor/internal/hookio"
 )
@@ -22,7 +23,10 @@ func validReply(out []byte, max int) (reply []byte, ok bool) {
 	if len(t) == 0 {
 		return nil, true
 	}
-	if t[0] != '{' || !json.Valid(t) {
+	// encoding/json tolerates invalid UTF-8 inside strings; JSON text
+	// exchanged between programs must be UTF-8 (RFC 8259), and a healthy
+	// worker's encoder never produces anything else.
+	if t[0] != '{' || !utf8.Valid(t) || !json.Valid(t) {
 		return nil, false
 	}
 	// json.Valid accepts exactly one value, so a second object or trailing

@@ -26,9 +26,12 @@ TimeoutStopSec=20s
 # root:spoor directory as foreign and re-owns it, recursively, to root:root
 # at every start, which also takes the per-user spool directories away from
 # their users. The packages create the group before the service starts.
+# 0711: users may traverse (not list) the data directory to reach their own
+# spool directory and the public rule bundle; the outbox (root:spoor 0750)
+# and the state database (0600) inside stay restricted.
 Group=spoor
 StateDirectory=spoor
-StateDirectoryMode=0750
+StateDirectoryMode=0711
 RuntimeDirectory=spoor
 RuntimeDirectoryMode=0755
 UMask=0027

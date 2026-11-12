@@ -2,6 +2,7 @@ package rules
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -90,10 +91,52 @@ func BenchmarkCompute(b *testing.B) {
 	}
 }
 
-// BenchmarkHookStartup is what one `spoor hook` invocation pays before its
-// first evaluation: parse the embedded content (cold, as in a fresh
-// process), take the guard subset and build an engine. Budget: 15 ms.
+// hookFirstEvent is the first event a hook process evaluates: a benign
+// shell command (no detection, so no content hash either).
+func hookFirstEvent() *event.Event { return ev(event.TypeToolPre, shell(typicalCommand)) }
+
+// hookStartup is what one `spoor hook` invocation pays before it answers:
+// the work of LoadEmbedded in a fresh process (the embedded cache: rule
+// stubs, bodies compiled on first use), the guard subset unless full, an
+// engine, and the first evaluation, which compiles the rules it reaches.
+func hookStartup(tb testing.TB, full bool) (*Set, *Engine) {
+	s, cached, err := compileEmbedded()
+	if err != nil {
+		tb.Fatal(err)
+	}
+	if !cached {
+		tb.Fatal("the embedded cache was not used (stale?): run go generate ./internal/rules")
+	}
+	set := s
+	if !full {
+		set = s.GuardSubset()
+	}
+	e := NewEngine(set, Options{OS: "linux", Home: "/home/u"})
+	e.Eval(hookFirstEvent())
+	return s, e
+}
+
+// BenchmarkHookStartup is guard-mode start-up with the shipped packs.
+// Budget: 15 ms.
 func BenchmarkHookStartup(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		hookStartup(b, false)
+	}
+}
+
+// BenchmarkHookStartupFull is the same for a hook that evaluates every
+// rule.
+func BenchmarkHookStartupFull(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		hookStartup(b, true)
+	}
+}
+
+// BenchmarkHookStartupYAML is the fallback when the cache is stale: parse
+// the YAML and compile every rule whole.
+func BenchmarkHookStartupYAML(b *testing.B) {
 	files := embeddedFiles(b)
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -102,7 +145,7 @@ func BenchmarkHookStartup(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		NewEngine(s.GuardSubset(), Options{})
+		NewEngine(s.GuardSubset(), Options{}).Eval(hookFirstEvent())
 	}
 }
 
@@ -150,23 +193,65 @@ func TestPerformanceBudgets(t *testing.T) {
 	if per > 3*time.Millisecond {
 		t.Errorf("Eval %v per event is over 10x the 300µs budget", per)
 	}
-	// What a guard-mode hook actually pays: the first LoadEmbedded of a
-	// process (served from the pre-parsed cache when it is fresh;
-	// TestEmbeddedCacheFresh is the gate for that), guard subset, engine.
-	start = time.Now()
-	fromCache := false
-	for i := 0; i < 20; i++ {
-		s, cached, err := compileEmbedded()
-		if err != nil {
-			t.Fatal(err)
+	// What a hook actually pays with the shipped packs (hookStartup). The
+	// minimum of several runs is what the code costs, the rest is the
+	// machine, so it is judged against the budget itself: 15 ms in guard
+	// mode (the spec's budget), twice that for a hook evaluating every rule.
+	for _, mode := range []struct {
+		name   string
+		full   bool
+		budget time.Duration
+	}{{"guard subset", false, 15 * time.Millisecond}, {"full set", true, 30 * time.Millisecond}} {
+		var runs []time.Duration
+		for i := 0; i < 10; i++ {
+			start := time.Now()
+			hookStartup(t, mode.full)
+			runs = append(runs, time.Since(start))
 		}
-		fromCache = cached
-		NewEngine(s.GuardSubset(), Options{})
+		sort.Slice(runs, func(i, j int) bool { return runs[i] < runs[j] })
+		t.Logf("hook start-up, %s (embedded cache, engine, first Eval): min %v, median %v (budget %v)", mode.name, runs[0], runs[len(runs)/2], mode.budget)
+		if runs[0] > mode.budget {
+			t.Errorf("hook start-up with the %s: %v is over the %v budget", mode.name, runs[0], mode.budget)
+		}
 	}
-	per = time.Since(start) / 20
-	t.Logf("hook start-up (embedded content + guard subset + engine, cache used: %v): %v (budget 15ms)", fromCache, per)
-	if per > 150*time.Millisecond {
-		t.Errorf("hook start-up %v is over 10x the 15ms budget", per)
+	// What keeps start-up inside the budget, checked without a clock: rules
+	// are compiled only when an engine reaches them, NewEngine leaves the
+	// content hash to the first detection, and the decoder leaves rule
+	// subtrees (tests first of all) undecoded.
+	s, _ := hookStartup(t, false)
+	guard := s.GuardSubset()
+	stubs, compiled := 0, 0
+	for _, r := range s.rules {
+		if r.lazy == nil {
+			continue
+		}
+		stubs++
+		if r.match != nil {
+			compiled++
+			if guard.byID[r.ID] == nil {
+				t.Errorf("%s was compiled by a guard-mode start-up it is not part of", r.ID)
+			}
+		}
+	}
+	t.Logf("guard start-up: %d of %d embedded rules loaded as stubs, %d compiled (guard subset: %d)", stubs, len(s.rules), compiled, guard.Count())
+	if stubs == 0 {
+		t.Error("no embedded rule was loaded lazily")
+	}
+	if NewEngine(guard, Options{}).hashSet == nil {
+		t.Error("NewEngine hashed the rule set")
+	}
+	for _, r := range s.rules {
+		if r.lazy == nil || guard.byID[r.ID] != nil {
+			continue
+		}
+		tree := r.lazy.tree
+		tree.mu.Lock()
+		_, deferred := tree.deferred[r.lazy.tests]
+		tree.mu.Unlock()
+		if !deferred {
+			t.Errorf("%s: its tests were decoded during a guard-mode start-up", r.ID)
+		}
+		break
 	}
 	// The YAML fallback is reported, not judged: with the real packs it is
 	// the reason the cache exists.
@@ -195,7 +280,7 @@ func TestPerformanceBudgets(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		NewEngine(s.GuardSubset(), Options{})
+		NewEngine(s.GuardSubset(), Options{}).Eval(hookFirstEvent())
 	}
 	per = time.Since(start) / 5
 	t.Logf("hook start-up from cache, 300 rules: %v (budget 15ms)", per)

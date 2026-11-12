@@ -293,6 +293,10 @@ type hookState struct {
 	Status string      `json:"status"`
 	Hash   string      `json:"hash,omitempty"`
 	Detail string      `json:"detail,omitempty"`
+	// Binaries are the programs spoor's entries in the file run; doctor
+	// fills them in and reports one that is missing (hooks.binary_missing).
+	Binaries      []string `json:"binaries,omitempty"`
+	BinaryProblem string   `json:"binary_problem,omitempty"`
 }
 
 func toHookStates(st []hookinstall.State, user string) []hookState {

@@ -116,6 +116,7 @@ func (a *app) cmdDoctor(args []string) int {
 	var cf cfgFlags
 	cf.register(fs)
 	asUser := fs.String("as-user", "", "check that this account (the shipper's) can read the outbox")
+	home := fs.String("home", "", "audit the user-tier hooks of this home only (default: every account visible to the caller)")
 	fbConfig := fs.String("fluent-bit-config", "", "Fluent Bit configuration file to check (YAML or classic, includes followed)")
 	asJSON := fs.Bool("json", false, "print JSON")
 	if pos, code, done := a.parse(fs, args); done {
@@ -123,7 +124,7 @@ func (a *app) cmdDoctor(args []string) int {
 	} else if len(pos) > 0 {
 		return a.usageErr("doctor", "unexpected argument %q", pos[0])
 	}
-	r := a.doctor(cf, *asUser, *fbConfig)
+	r := a.doctor(cf, *asUser, *fbConfig, *home)
 	if *asJSON {
 		if code := a.printJSON(r); code != exitOK {
 			return code
@@ -137,7 +138,7 @@ func (a *app) cmdDoctor(args []string) int {
 	return exitOK
 }
 
-func (a *app) doctor(cf cfgFlags, asUser, fbConfig string) *doctorReport {
+func (a *app) doctor(cf cfgFlags, asUser, fbConfig, home string) *doctorReport {
 	r := &doctorReport{Version: readBuildInfo(), Privileged: platform.IsPrivileged(), Content: deploySets(), Counts: map[string]int{}}
 	cfg, path, err := loadConfig(cf)
 	r.Config, r.ConfigFile = path, configExists(path)
@@ -163,7 +164,7 @@ func (a *app) doctor(cf cfgFlags, asUser, fbConfig string) *doctorReport {
 	a.doctorKillSwitch(r, path)
 	a.doctorHost(r, cfg)
 	a.doctorDirs(r, cfg)
-	a.doctorHooks(r, cfg)
+	a.doctorHooks(r, cfg, home)
 	a.doctorRules(r, cfg)
 	a.doctorBundle(r, cfg)
 	a.doctorHeartbeat(r, cfg)
@@ -289,19 +290,24 @@ func (a *app) doctorDirs(r *doctorReport, cfg *config.Config) {
 	if !permsChecked {
 		summary += " (Windows: access is decided by ACLs, not checked here)"
 	}
-	r.add("dirs", status, summary, strings.Join(problems, "; "))
+	r.add("dirs", status, summary, strings.Join(problems, "\n"))
 }
 
-func (a *app) doctorHooks(r *doctorReport, cfg *config.Config) {
+func (a *app) doctorHooks(r *doctorReport, cfg *config.Config, home string) {
 	cat, err := catalog.Load()
 	if err != nil {
 		r.add("hooks", "fail", "catalog does not load", err.Error())
 		return
 	}
 	var states []hookState
-	if r.Privileged {
+	switch {
+	case home != "":
+		var st []hookinstall.State
+		st, err = hookinstall.Status(cat, hookinstall.Options{Home: home})
+		states = toHookStates(st, filepath.Base(home))
+	case r.Privileged:
 		states, err = allHookStates(cat, nil, "")
-	} else {
+	default:
 		var st []hookinstall.State
 		st, err = hookinstall.Status(cat, hookinstall.Options{Home: a.homeDir(), Env: a.relocationEnv(cat)})
 		states = toHookStates(st, currentUser().Name)
@@ -313,6 +319,24 @@ func (a *app) doctorHooks(r *doctorReport, cfg *config.Config) {
 	}
 	counts := map[string]int{}
 	var notes []string
+	missingBin := 0
+	for i := range states {
+		s := &states[i]
+		if s.Hash != "" {
+			bins, berr := installedBinaries(s.Path)
+			s.Binaries = bins
+			for _, b := range bins {
+				if why := binaryProblem(b); why != "" {
+					s.BinaryProblem = b + ": " + why
+					missingBin++
+					notes = append(notes, fmt.Sprintf("hooks.binary_missing: %s %s hook runs %s, which is %s (the guarded hook exits silently: no records)", s.Agent, s.Scope, b, why))
+				}
+			}
+			if berr != nil {
+				notes = append(notes, fmt.Sprintf("%s: cannot read %s: %v", s.Agent, s.Path, berr))
+			}
+		}
+	}
 	for _, s := range states {
 		counts[s.Status]++
 		switch s.Status {
@@ -330,7 +354,7 @@ func (a *app) doctorHooks(r *doctorReport, cfg *config.Config) {
 	}
 	status := "ok"
 	switch {
-	case counts[hookinstall.StatusInsecure] > 0:
+	case counts[hookinstall.StatusInsecure] > 0 || missingBin > 0:
 		status = "fail"
 	case counts[hookinstall.StatusShadowed]+counts[hookinstall.StatusModified] > 0:
 		status = "warn"
@@ -338,7 +362,7 @@ func (a *app) doctorHooks(r *doctorReport, cfg *config.Config) {
 		status = "warn"
 		notes = append(notes, "no agent has spoor hooks: run `spoor hooks install`")
 	}
-	r.add("hooks", status, "hook registrations: "+strings.Join(parts, ", "), strings.Join(notes, "; "))
+	r.add("hooks", status, "hook registrations: "+strings.Join(parts, ", "), strings.Join(notes, "\n"))
 }
 
 func (a *app) doctorRules(r *doctorReport, cfg *config.Config) {
@@ -520,7 +544,7 @@ func (a *app) doctorFluentBit(r *doctorReport, cfg *config.Config, fbConfig stri
 	if v.Findings == nil {
 		v.Findings = []fbFinding{}
 	}
-	r.add("fluent_bit", status, summary, strings.Join(details, "; "))
+	r.add("fluent_bit", status, summary, strings.Join(details, "\n"))
 }
 
 func (a *app) doctorDaemon(r *doctorReport, cfg *config.Config) {
@@ -547,7 +571,7 @@ func (a *app) printDoctor(r *doctorReport) {
 	for _, c := range r.Checks {
 		fmt.Fprintf(a.stdout, "[%-4s] %-12s %s\n", strings.ToUpper(c.Status), c.ID, c.Summary)
 		if c.Detail != "" && c.Status != "ok" {
-			for _, d := range strings.Split(c.Detail, "; ") {
+			for _, d := range strings.Split(c.Detail, "\n") {
 				fmt.Fprintf(a.stdout, "       %-12s %s\n", "", clip(d, 200))
 			}
 		}

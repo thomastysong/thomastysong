@@ -175,3 +175,68 @@ hook timeout as "proceed" (Claude Code unless `onFailure: block`).
 macOS and Windows (the package cross-compiles; process start and the
 Windows Toolhelp32 snapshot in the caller-chain capture are unmeasured),
 cold page cache after install, and spools on network file systems.
+
+## The full `spoor` binary (cmd/spoor), measured 2026-11-12
+
+Everything above was measured with a harness that links only
+`hookcmd`. The released program is `cmd/spoor`, one binary that is also
+the daemon, the osquery extension and the operator CLI, and Go runs the
+init of every linked package before `main`. These rows measure that binary
+as the agent runs it. Same VM and method as above: a throwaway harness
+outside the repository runs each case 300 times after 10 discarded
+warm-ups, all cases interleaved round-robin; payload
+`internal/hookio/testdata/claude/PreToolUse.json`; both binaries built
+`CGO_ENABLED=0 go build -trimpath` from the same tree at the same moment
+(embedded rule cache fresh: `TestEmbeddedCacheFresh` passed); spool on
+local ext4 in a pre-created per-user spool directory. Load average 2.8 at
+the start and 3.3 at the end of the run (4 vCPU shared with other
+builders), so p99 is still noisy.
+
+p50 / p90 / p99, ms, n = 300 each, 0 non-zero exits in 3,000 runs:
+
+| case | direct | `sh -c` | `bash -lc` |
+|---|---|---|---|
+| empty hook (`/bin/true`) | 1.35 / 1.92 / 3.43 | 2.65 / 3.65 / 5.93 | 10.36 / 12.93 / 16.05 |
+| hook-only harness (12.9 MB), observe, supervised | 12.12 / 16.25 / 20.07 | 12.84 / 15.70 / 21.61 | |
+| **`spoor` (31.2 MB), observe, supervised** | **18.06 / 22.68 / 28.39** | **18.89 / 23.95 / 28.46** | **27.16 / 33.87 / 39.49** |
+| `spoor`, guard (default 150 ms deadline), supervised | 29.23 / 35.77 / 42.48 | | |
+| `spoor`, kill switch on (start + init + one stat) | 7.27 / 9.62 / 11.85 | | |
+
+The shell rows run the command line hookinstall renders,
+`[ -x BIN ] || exit 0; exec BIN hook --agent claude-code --config CFG`.
+
+So the one-binary design costs about 6 ms p50 per hooked event over a
+hook-only binary (18.1 against 12.1 ms direct): the call starts two spoor
+processes and each pays the larger init and the page faults of a binary
+2.4 times the size. `GODEBUG=inittrace=1`, 5 runs each: package init is
+3.8 to 6.3 ms per process for `spoor` against 1.7 to 2.3 ms for the
+hook-only binary. The largest additions are
+`go.opentelemetry.io/otel/trace` (~1.0 ms, linked through
+`github.com/osquery/osquery-go`, which the osquery extension and
+`internal/osqexec` need), `internal/catalog` (~0.34 ms),
+`klauspost/compress/internal/snapref` (~0.18 ms), `modernc.org/libc`
+plus `modernc.org/sqlite/lib` (~0.2 ms; the state database) and
+`internal/daemon` (~0.11 ms); `internal/mcpconf` (~0.5 ms) and
+`internal/rules` (~0.2 ms) are paid by both. Stripping symbols
+(`-ldflags "-s -w"`, 22.1 MB) did not change latency (23.70 against 23.33
+ms p50 in an earlier interleaved run, made while `internal/bench` was
+still linked).
+
+Two changes were made in `cmd/spoor` because of this measurement:
+
+- `internal/bench` is not linked into the default build (build tag
+  `spoor_bench`): its package init cost 1.9 to 3.3 ms per process, twice
+  per hooked event, for a command that needs the source tree's scenario
+  corpus anyway. Before that change the same comparison read 23.3 against
+  14.0 ms p50.
+- `cmd/spoor` itself has no package-level work left (its maps are built
+  on demand); `main` no longer appears in the init trace.
+
+The remaining gap is the link set of the daemon and the extension. The
+"slim launcher" above is the way to remove it: a second, hook-only binary
+(about the 12.9 MB harness) that hookinstall registers, re-executing
+itself as the worker, would give the hook-only row. It costs a second
+binary in packaging and in the hook command, so it is the integrator's
+call. `modernc.org/sqlite` is in the full binary's init (the
+import-graph test in BUILD-C was not written: one binary cannot keep it
+out of the hook path; this measurement stands in for it).

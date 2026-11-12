@@ -93,9 +93,14 @@ func TestCacheEquivalentToYAML(t *testing.T) {
 			t.Errorf("%q: yaml %v/%s cache %v/%s", cmd, detIDs(ra.Detections), ra.Response, detIDs(rb.Detections), rb.Response)
 		}
 	}
-	// Error positions survive: line numbers are part of the cached tree.
+	// Error positions survive: line numbers are part of the cached tree,
+	// deferred subtrees included.
+	lr := fromCache.byID["SPR-BEN-005"]
+	if err := lr.ensure(); err != nil {
+		t.Fatal(err)
+	}
 	ra := fromYAML.byID["SPR-BEN-005"].match.line
-	rb := fromCache.byID["SPR-BEN-005"].match.line
+	rb := lr.match.line
 	if ra == 0 || ra != rb {
 		t.Errorf("line numbers: yaml %d cache %d", ra, rb)
 	}
@@ -187,7 +192,7 @@ func FuzzDecodeCache(f *testing.F) {
 
 // BenchmarkHookStartupCached300 is guard-mode start-up with 300 rules (two
 // inline tests each) served from the cache: digest the YAML, decode,
-// compile, guard subset, engine. Budget: 15 ms.
+// compile, guard subset, engine, first Eval. Budget: 15 ms.
 func BenchmarkHookStartupCached300(b *testing.B) {
 	files := map[string][]byte{"packs/bench.yaml": []byte("pack: bench\nversion: \"1\"\nrules:\n" + benchRules(300))}
 	c, err := EncodeCache(files)
@@ -205,6 +210,6 @@ func BenchmarkHookStartupCached300(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		NewEngine(s.GuardSubset(), Options{})
+		NewEngine(s.GuardSubset(), Options{}).Eval(hookFirstEvent())
 	}
 }

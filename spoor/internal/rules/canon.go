@@ -2,7 +2,7 @@ package rules
 
 import (
 	"encoding/json"
-	"sort"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 )
@@ -86,7 +86,13 @@ func appendCanonical(b []byte, n *yaml.Node, depth int) ([]byte, bool) {
 			}
 			order = append(order, 2*i)
 		}
-		sort.Slice(order, func(x, y int) bool { return n.Content[order[x]].Value < n.Content[order[y]].Value })
+		// Insertion sort: mappings are small, and sort.Slice would move
+		// order to the heap.
+		for i := 1; i < len(order); i++ {
+			for j := i; j > 0 && n.Content[order[j]].Value < n.Content[order[j-1]].Value; j-- {
+				order[j], order[j-1] = order[j-1], order[j]
+			}
+		}
 		for i := 1; i < len(order); i++ {
 			if n.Content[order[i]].Value == n.Content[order[i-1]].Value {
 				return b, false // duplicate keys: the reference keeps the last
@@ -163,20 +169,74 @@ func plainDecimal(s string) bool {
 }
 
 // appendJSONString appends s as encoding/json writes it (HTML-safe
-// escaping). Strings of plain printable ASCII are copied; anything else
-// goes through encoding/json itself.
+// escaping). The escapes it writes itself have been stable in
+// encoding/json since Go 1: \" \\ \u003c \u003e \u0026 \u2028 \u2029;
+// control bytes, DEL and invalid UTF-8 go through encoding/json.
 func appendJSONString(b []byte, s string) []byte {
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c < 0x20 || c >= 0x7f || c == '"' || c == '\\' || c == '<' || c == '>' || c == '&' {
-			j, err := json.Marshal(s)
-			if err != nil {
-				break
-			}
-			return append(b, j...)
-		}
-	}
+	mark := len(b)
 	b = append(b, '"')
-	b = append(b, s...)
+	start := 0
+	for i := 0; i < len(s); {
+		c := s[i]
+		if jsonPlain[c] {
+			i++
+			continue
+		}
+		if c < utf8.RuneSelf {
+			if c < 0x20 || c == 0x7f {
+				return appendJSONStringRef(b[:mark], s)
+			}
+			var esc string
+			switch c {
+			case '"':
+				esc = `\"`
+			case '\\':
+				esc = `\\`
+			case '<':
+				esc = `\u003c`
+			case '>':
+				esc = `\u003e`
+			case '&':
+				esc = `\u0026`
+			default:
+				i++
+				continue
+			}
+			b = append(b, s[start:i]...)
+			b = append(b, esc...)
+			i++
+			start = i
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && size == 1 {
+			return appendJSONStringRef(b[:mark], s)
+		}
+		if r == '\u2028' || r == '\u2029' {
+			b = append(b, s[start:i]...)
+			b = append(b, `\u202`...)
+			b = append(b, "0123456789abcdef"[r&0xF])
+			start = i + size
+		}
+		i += size
+	}
+	b = append(b, s[start:]...)
 	return append(b, '"')
+}
+
+// jsonPlain marks the bytes encoding/json copies as they are: printable
+// ASCII other than '"', '\\', '<', '>' and '&'.
+var jsonPlain = func() (t [256]bool) {
+	for c := 0x20; c < 0x7f; c++ {
+		t[c] = true
+	}
+	for _, c := range `"\<>&` {
+		t[c] = false
+	}
+	return t
+}()
+
+func appendJSONStringRef(b []byte, s string) []byte {
+	j, _ := json.Marshal(s) // a string always marshals
+	return append(b, j...)
 }

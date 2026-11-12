@@ -92,12 +92,12 @@ Rules are the most useful contribution and the easiest to get wrong. The languag
 
 Never commit a credential in a provider's real format, not even a fake one: test fixtures that matched provider formats have been rejected by push protection, and a scanner cannot tell a fixture from a leak. This covers AWS access key ids (`AKIA`/`ASIA` followed by 16 characters) and 40-character secret access keys, GitHub tokens (`ghp_`, `gho_`, `github_pat_` at full length), Anthropic, OpenAI and Slack token formats, PEM private key blocks, and JWTs with real-looking signatures.
 
-- In Go tests, build such values at run time (`"AKIA" + ...`, seeded random bytes), as `internal/privacy/canary_test.go` does.
+- In Go tests, build such values at run time from a prefix and seeded random characters, as `internal/discovery/fixture_test.go` (`"AKIA" + randString(...)`) and `internal/privacy/canary_test.go` do.
 - In YAML, Markdown and fixtures, use a generic high-entropy secret in a `password=`, `token=` or `Bearer` context, which the classifiers still detect, or a visibly broken form.
 - Check before you push:
 
   ```
-  grep -rnE 'AKIA[0-9A-Z]{16}|aws_secret_access_key *[=:] *[A-Za-z0-9/+]{40}|sk-ant-api03-|ghp_[A-Za-z0-9]{36}|-----BEGIN [A-Z ]*PRIVATE KEY' <changed paths>
+  grep -rnE 'AKIA[0-9A-Z]{16}|aws_secret_access_key *[=:] *[A-Za-z0-9/+]{40}|sk-ant-api0[3]-|ghp_[A-Za-z0-9]{36}|-----BEGIN [A-Z ]*PRIVATE KEY' <changed paths>
   ```
 
   It must print nothing.

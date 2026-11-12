@@ -19,3 +19,5 @@ coverage.*
 # go build ./cmd/spoor writes the binary here
 /spoor
 /spoor.exe
+/cmd/spoor/spoor
+/cmd/spoor/spoor.exe

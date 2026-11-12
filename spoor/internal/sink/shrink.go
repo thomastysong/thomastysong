@@ -1,8 +1,6 @@
 package sink
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"reflect"
 	"sort"
@@ -13,12 +11,17 @@ import (
 	"github.com/thomastysong/spoor/internal/event"
 )
 
-// Label keys that keep the identity of a command cut by the shrinker, so
-// truncation is never silent and two cut commands can still be compared.
-const (
-	LabelCommandSHA256 = "target.command.sha256"
-	LabelCommandLen    = "target.command.len"
-)
+// LabelCommandLen records the length in bytes of a command the shrinker
+// cut, so the cut is visible and its size known.
+//
+// No digest of the full command is kept. An unkeyed one is a guessing
+// oracle: a log reader hashes candidate commands until one matches and so
+// recovers the cut tail, secrets included (the privacy red team recovered
+// 4 of 6 prompts from a 1,600-entry dictionary that way). A digest keyed per
+// process would only correlate cuts made by one writer process, and the
+// hook's writer lives for one event, so nothing downstream could use it;
+// event.Dedupe and Tool.UseID already join the records of one action.
+const LabelCommandLen = "target.command.len"
 
 // maxNumericMap is the most entries a map of numbers may keep in an event
 // that is being shrunk.
@@ -37,8 +40,8 @@ const minCommandKeep = 256
 // least forensic loss, and the cut fields are named in Truncated:
 //
 //  1. tool.input and tool.output are dropped (their hashes and lengths stay).
-//  2. target.command loses its tail; a hash of the full command is kept in
-//     Labels.
+//  2. target.command loses its tail; the full command's length is kept in
+//     Labels (LabelCommandLen), never a digest of it.
 //  3. every remaining string, list and map is capped, in three passes with
 //     tighter limits each time.
 //  4. as a last resort only identity fields survive, sanitized and clipped,
@@ -188,15 +191,13 @@ func rawSize(e *event.Event) int {
 	return n
 }
 
-// withCommandLabels returns a copy of labels that records the hash and
-// length of the full command.
+// withCommandLabels returns a copy of labels that records the length of
+// the full command (see LabelCommandLen for why nothing else).
 func withCommandLabels(labels map[string]string, full string) map[string]string {
-	out := make(map[string]string, len(labels)+2)
+	out := make(map[string]string, len(labels)+1)
 	for k, v := range labels {
 		out[k] = v
 	}
-	sum := sha256.Sum256([]byte(full))
-	out[LabelCommandSHA256] = hex.EncodeToString(sum[:])
 	out[LabelCommandLen] = strconv.Itoa(len(full))
 	return out
 }

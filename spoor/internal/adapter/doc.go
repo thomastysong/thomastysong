@@ -47,6 +47,16 @@
 //     cited events and an enforcement record's findings resolve to the ids
 //     of the converted records. The originals are kept in
 //     Labels numbat_event_id, numbat_finding_id and numbat_decision_id.
+//   - No id or label is an unkeyed hash of record content. A record
+//     without a numbat id, the oversize stand-in and every indicator are
+//     identified by HMAC-SHA-256 under a random key drawn once per process
+//     and never stored (runkey.go): stable within one run, different in the
+//     next, so a log reader cannot confirm guesses about a prompt, a
+//     command, an e-mail address or a URL query by recomputing an id.
+//     numbat's project_path_hash (an unsalted SHA-256 of the path, by
+//     numbat's own documentation) is relayed under the same key, so it
+//     still joins findings and indicators within a run; diff_sha256 is not
+//     relayed (diff_bytes is), and the stand-in keeps the line's size only.
 //   - Tool.UseID is numbat's tool_call_id, the agent's own call id. Dedupe
 //     is left empty (indicators excepted) so the engine pairs a converted
 //     record with a native hook or transcript record of the same call.

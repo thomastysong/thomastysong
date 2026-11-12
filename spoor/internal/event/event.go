@@ -177,9 +177,11 @@ type Event struct {
 	// Privacy is the tier that was applied when the record was emitted.
 	Privacy string `json:"privacy,omitempty"`
 	// Truncated names fields whose values were cut, so truncation is never
-	// silent; the cut value itself ends in an "[TRUNCATED:<n>B]" marker. No
-	// hash of the full value is kept: an unkeyed one would let a reader
-	// confirm guesses about the missing text.
+	// silent; the cut value itself ends in an "[TRUNCATED:<n>B]" marker
+	// (when a sink cuts target.command to fit its line cap it records the
+	// full length in Labels["target.command.len"] instead). No hash of the
+	// full value is kept: an unkeyed one would let a reader confirm guesses
+	// about the missing text.
 	Truncated []string          `json:"truncated,omitempty"`
 	Labels    map[string]string `json:"labels,omitempty"`
 

@@ -177,9 +177,9 @@ func (c *nctx) tool(ev *event.Event, act numbatAction) {
 	if et == "file.delete" {
 		setLabel(ev, "file_op", "delete")
 	}
-	if r.DiffSHA256 != "" {
-		setLabel(ev, "diff_sha256", string(r.DiffSHA256))
-	}
+	// numbat's diff_sha256 is an unkeyed hash of the change a tool made, so
+	// it is not relayed: a reader could confirm a guessed edit (a password
+	// written into a config file) by hashing it. The size is kept.
 	if r.DiffBytes.ok {
 		setLabel(ev, "diff_bytes", itoa(r.DiffBytes.v))
 	}

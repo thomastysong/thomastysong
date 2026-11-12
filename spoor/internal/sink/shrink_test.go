@@ -2,8 +2,6 @@ package sink
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -99,14 +97,14 @@ func TestFitLine(t *testing.T) {
 		if len(got.Target.Command) < 4096 {
 			t.Errorf("command cut far more than needed: %d bytes kept", len(got.Target.Command))
 		}
-		sum := sha256.Sum256([]byte(e.Target.Command))
-		if got.Labels[LabelCommandSHA256] != hex.EncodeToString(sum[:]) || got.Labels[LabelCommandLen] != fmt.Sprint(len(e.Target.Command)) {
-			t.Errorf("full-command hash/len labels missing: %v", got.Labels)
+		if got.Labels[LabelCommandLen] != fmt.Sprint(len(e.Target.Command)) {
+			t.Errorf("full-command length label missing: %v", got.Labels)
 		}
+		assertNoDigestOf(t, line, e.Target.Command)
 		if !has(got.Truncated, "target.command") || !has(got.Truncated, "tool.input") {
 			t.Errorf("truncated = %v", got.Truncated)
 		}
-		if _, ok := e.Labels[LabelCommandSHA256]; ok {
+		if _, ok := e.Labels[LabelCommandLen]; ok {
 			t.Error("the caller's labels were modified")
 		}
 	})

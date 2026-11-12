@@ -32,7 +32,7 @@ func (c *nctx) finding() []*event.Event {
 		ev.ID = event.StableID(ts, "numbat", "line", c.lineKey())
 	}
 	setLabel(ev, "numbat_detected_at", string(r.DetectedAt))
-	setLabel(ev, "project_path_hash", string(r.ProjectPathHash))
+	setLabel(ev, "project_path_hash", projectPathKey(string(r.ProjectPathHash)))
 
 	ruleID, _ := cleanID(string(r.RuleID), maxLabel)
 	d := &event.Detection{
@@ -173,9 +173,15 @@ func (c *nctx) enforcement() []*event.Event {
 // classification and the rules built on it apply unchanged.
 //
 // numbat's collect mode re-emits an indicator whenever its count changes
-// and asks consumers to upsert by (run_id, type, value); the event id is
-// derived from exactly those three, so a later snapshot replaces an earlier
-// one downstream.
+// and asks consumers to upsert by (run_id, type, value); the event id and
+// Dedupe are derived from exactly those three, so a later snapshot replaces
+// an earlier one downstream. The value enters them only through a keyed
+// digest (runDigest): an e-mail address keeps only its domain and a URL
+// loses its query below, and an id that is a plain hash of the whole value
+// would give both back to anyone who can list candidates (a staff
+// directory, a guessable search string). The upsert therefore holds within
+// one spoor process; snapshots read by a restarted process start a new
+// record.
 func (c *nctx) indicator() []*event.Event {
 	r := c.r
 	typ, value := string(r.Type), strings.TrimSpace(string(r.Value))
@@ -184,8 +190,10 @@ func (c *nctx) indicator() []*event.Event {
 	}
 	ts, sensor := c.stamp(r.LastSeen, r.FirstSeen)
 	ev := c.base(event.KindActivity, event.TypeNotification, ts, sensor)
-	ev.ID = numbatID("indicator", string(r.RunID)+"\x00"+typ+"\x00"+value)
-	ev.Dedupe = event.DedupeKey("numbat-indicator", string(r.RunID), typ, value)
+	vk := runDigest(domIndicator, []byte(typ+"\x00"+value))
+	// The run id stays in clear: numbatID takes the time prefix from it.
+	ev.ID = numbatID("indicator", string(r.RunID)+"\x00"+vk)
+	ev.Dedupe = event.DedupeKey("numbat-indicator", string(r.RunID), vk)
 	setLabel(ev, "numbat_record", "indicator")
 	setLabel(ev, "indicator_type", typ)
 	if r.Count.ok && r.Count.v > 0 {
@@ -193,7 +201,7 @@ func (c *nctx) indicator() []*event.Event {
 	}
 	setLabel(ev, "first_seen", string(r.FirstSeen))
 	setLabel(ev, "last_seen", string(r.LastSeen))
-	setLabel(ev, "project_path_hash", string(r.SampleProjHash))
+	setLabel(ev, "project_path_hash", projectPathKey(string(r.SampleProjHash)))
 	if r.SampleSessionID != "" {
 		c.session(ev).ID = field(ev, "session.id", string(r.SampleSessionID), maxID)
 	}

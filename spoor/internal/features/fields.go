@@ -241,7 +241,8 @@ func Fields(e *event.Event) (out map[string]any) {
 		readAccessor(root, &g.accs[0], out)
 	}
 	for k, v := range e.Feat {
-		if k == computedKey {
+		if strings.HasPrefix(k, internalPrefix) {
+			// Bookkeeping (computed, inherited scripts), not a feature.
 			continue
 		}
 		if nv, ok := normalizeValue(v); ok {

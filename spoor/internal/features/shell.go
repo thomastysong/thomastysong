@@ -129,6 +129,17 @@ func (c *computer) shell() {
 		return
 	}
 	cmd := c.bound(raw)
+	// An analysis that stopped early (or saw only the head and tail of an
+	// oversized command line) leaves every list it produced incomplete.
+	c.shellFacts(fx, cmd, fx.Truncated || argvCut || len(cmd) != len(raw))
+}
+
+// shellFacts stores the shell.* features of one analysis. text is the
+// (bounded) text that was analysed, scanned for literal credentials;
+// partial says every list is incomplete. Written scripts go through the
+// same function (script.go), so a script run later gets exactly the facts
+// a shell event carrying its content would have had.
+func (c *computer) shellFacts(fx *shellx.Facts, text string, partial bool) {
 	f := c.f
 	f["shell.parse_ok"] = fx.ParseOK
 	f["shell.dialect"] = string(fx.Dialect)
@@ -141,10 +152,6 @@ func (c *computer) shell() {
 	f["shell.background"] = fx.Background
 	f["shell.heredoc"] = fx.HereDoc
 	f["shell.decoded"] = len(fx.Decoded) > 0
-
-	// An analysis that stopped early (or saw only the head and tail of an
-	// oversized command line) leaves every list it produced incomplete.
-	partial := fx.Truncated || argvCut || len(cmd) != len(raw)
 
 	var names uniqList
 	dynamic := false
@@ -208,7 +215,7 @@ func (c *computer) shell() {
 
 	c.installs(fx.Installs, partial || len(fx.Installs) >= shellxListCap)
 
-	kinds := secretKinds(cmd)
+	kinds := secretKinds(text)
 	f["shell.has_secret"] = len(kinds) > 0
 	c.setDerived("shell.secret_kinds", kinds, partial)
 }

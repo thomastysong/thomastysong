@@ -2,8 +2,6 @@ package adapter
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -386,10 +384,11 @@ func (c *nctx) session(ev *event.Event) *event.Session {
 	return ev.Session
 }
 
-// lineKey identifies a record that has no id of its own.
+// lineKey identifies a record that has no id of its own: a keyed digest of
+// the line, stable within this process only (see runKey for why it is not
+// a plain hash).
 func (c *nctx) lineKey() string {
-	sum := sha256.Sum256(c.line)
-	return hex.EncodeToString(sum[:16])
+	return runDigest(domLine, c.line)
 }
 
 // oversize builds the stand-in for a record that is too long to decode,
@@ -410,11 +409,12 @@ func oversize(b []byte, now func() time.Time) []*event.Event {
 	c := &nctx{r: r, now: now, line: b}
 	ts, sensor := c.stamp(get("timestamp"))
 	ev := c.base(event.KindActivity, event.TypeNotification, ts, sensor)
-	sum := sha256.Sum256(b)
-	ev.ID = event.StableID(ts, "numbat", "oversize", hex.EncodeToString(sum[:16]))
+	ev.ID = event.StableID(ts, "numbat", "oversize", c.lineKey())
+	// The size is kept and no digest of the line: the stand-in exists to
+	// show that something was too large, and a digest of the full record
+	// would let a reader confirm guesses about the part that is not shown.
 	setLabel(ev, "adapter_anomaly", "oversize")
 	setLabel(ev, "line_bytes", fmt.Sprint(len(b)))
-	setLabel(ev, "line_sha256", hex.EncodeToString(sum[:]))
 	setLabel(ev, "numbat_record_type", string(get("record_type")))
 	setLabel(ev, "numbat_event_type", string(get("event_type")))
 	if id, _ := cleanID(string(get("event_id")), maxLabel); id != "" {

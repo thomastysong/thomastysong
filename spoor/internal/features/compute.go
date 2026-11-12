@@ -48,8 +48,12 @@ const (
 	shellxListCap = 512
 )
 
+// internalPrefix starts the Feat keys that are bookkeeping of this package
+// rather than features; Fields leaves them out of the field view.
+const internalPrefix = "features."
+
 // computedKey marks a Feat map as filled. It is not part of the field view.
-const computedKey = "features.computed"
+const computedKey = internalPrefix + "computed"
 
 // Compute fills e.Feat with the features rules match on (see the package
 // documentation for the vocabulary). It is idempotent: a second call on the

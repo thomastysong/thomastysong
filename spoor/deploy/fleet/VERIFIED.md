@@ -755,8 +755,12 @@ reflect failed checks (unchanged; read the last line).
 
 Run 1's cleanup restored the agent options (identical) and removed every
 object, but osqueryd kept the 9 spoor ATC tables registered: `osqueryd.log`
-shows no removal after the restore (07:37:30), and they were still
-registered at 07:52.
+showed no removal after the restore (07:37:30), and when run 2 applied ATC
+again at 07:39:01 osquery logged `Error creating named virtual table` and
+`SQLITE_ERROR` for all 9 (Fleet's copy of the host's status log,
+`$S/fleetstack/logs/osqueryd.status.log`): they still existed. (The 9
+tables still registered at 07:52 below are run 2's own, left by its
+restore at 07:47.)
 
 ### Second run: tier 3 stopped on those ATC tables
 
@@ -775,13 +779,17 @@ hook from the binary passed). Then:
 ```
 
 `extensions.load` had not been touched. Restarting osqueryd with ENV.md's
-command (07:53) cleared the tables. A probe right after (ATC applied, the
-saved agent options applied again 5 s later) saw them go within 10 s; after
-the final run's 9-minute ATC tier they stayed again (below). So osquery
-5.19.0 does not reliably unregister ATC tables that the agent options stop
-naming (section 1's run saw them go in 13 s); the cause inside osquery was
-not looked into. `verify.sh` now restarts osqueryd in that case before
-registering the extension, and its cleanup reports spoor tables still
+command (osqueryd started at 07:54:24 in the status log) cleared the
+tables. A probe right after (ATC applied, the saved agent options applied
+again 5 s later) saw them go within 10 s, but osquery had not dropped
+them: when the final run applied ATC at 07:56:44, osquery again logged
+`Error creating named virtual table` and `SQLITE_ERROR` for all 9. After
+the final run's 9-minute ATC tier they stayed registered again (below). So
+osquery 5.19.0 does not reliably unregister ATC tables that the agent
+options stop naming (section 1's run saw them go from the registry in
+13 s); the cause inside osquery was not looked into. `verify.sh` now
+restarts osqueryd in that case before registering the extension, and its
+cleanup reports spoor tables still
 registered. Run 2 also showed 0 rows in `spoor_mcp_servers`,
 `spoor_detections`, `spoor_sessions` and `spoor_agent_processes` for the
 healthy scenario: the container host got the pinned MCP server and the

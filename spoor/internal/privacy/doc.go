@@ -21,8 +21,9 @@
 // labels.lossy=true is set; the encoded line is forced under MaxLine by
 // cutting the largest fields first and naming them in "truncated"; and a
 // detected secret's value or its unkeyed fingerprint never appears. The
-// Privacy field carries the profile name ("standard" for detection
-// context, which always uses the standard field policy).
+// Privacy field carries the profile name on every record, detection
+// context included; context, which always uses the standard field policy,
+// also says so in labels.context_policy.
 //
 // # Detection context
 //
@@ -30,35 +31,56 @@
 // self-contained even in minimal. The records are routed to the detection
 // stream (sinks route by kind): Kind "detection", Type TypeContext, with
 // labels context_for (the finding's id), context_kind, context_type and
-// context_event_id (what the record was), and a new deterministic id, so
-// they never collide with the activity record itself or with the context
-// of another finding. Seq and Writer are left for the writer to set.
+// context_event_id (what the record was), context_policy ("standard"),
+// and a new deterministic id, so they never collide with the activity
+// record itself or with the context of another finding. Seq and Writer are
+// left for the writer to set. Every context record carries context_for:
+// Context finds the finding in the slice it is given and ContextFor takes
+// its id; without one they return nil (the engine calls ContextFor with
+// its per-session ring).
 //
 // # Structural redaction
 //
 // Commands are redacted from their structure first and by pattern second
-// (see command.go): argument vectors from a word lexer and from
+// (see command.go): argument vectors from a word lexer, from
 // shellx.Analyze (which also sees inside bash -c, cmd /c, eval, $( ) and
-// decoded payloads) go through classify.RedactArgs; literals fed to
-// --password-stdin style consumers, PowerShell assignments,
-// ConvertTo-SecureString -AsPlainText, net user, setx and htpasswd -b are
-// handled here; every recovered secret is then searched for in plain,
-// reversed and encoded (base64, hex, escapes, UTF-16LE) form; a secret that
-// cannot be located reduces the command to program and flag names. The
-// searches are budgeted (secrets x text length): a line with more
-// recovered secrets than the budget allows (hundreds in a 256 KiB line,
-// thousands in a short one) is reduced to the same skeleton rather than
-// costing seconds per event. The tests push a canary corpus of synthetic
-// credentials through every profile and require zero leaks, and report
-// the over-redaction rate on a benign corpus.
+// decoded payloads), from every quoted value, heredoc and comment, and
+// from a syntax-blind split go through classify.RedactArgs plus this
+// package's own flag table (argrules.go: sshpass -pPW, keytool -storepass,
+// sqlcmd -P, ssh-keygen -N, lftp -u user,pw, smbclient -U user%pw,
+// schtasks /rp, sqlplus user/pw@db, any --*pass/--*password flag).
+// Multi-word rules are handled here: literals piped or here-stringed into
+// a consumer that reads a credential from stdin (--password-stdin and its
+// kin, sudo -S, passwd, chpasswd, kinit, openssl -pass stdin, vault login
+// -), text written into a credential-class file (heredoc, echo, printf,
+// tee and Set-Content into .netrc, .pgpass, .env, cloud and package
+// credentials, keys), printf arguments a format labels as a password
+// ("password=%s"), PowerShell assignments and environment setters
+// ($env:X=, Set-Item env:X, [Environment]::SetEnvironmentVariable),
+// ConvertTo-SecureString -AsPlainText, net user, setx and htpasswd -b.
+// Every recovered secret is then searched for in plain, reversed and
+// encoded (base64, hex, escapes, UTF-16LE) form; a secret that cannot be
+// located reduces the command to program and flag names.
+//
+// Every emitted byte of a command has been seen by every view: at most
+// 64 KiB is analysed, and where a view stops early (shellx's command and
+// work budgets, the lexer's token cap) the command is cut there and only
+// its head is emitted, with a truncation marker. The searches are budgeted
+// (secrets x text length): a line with more recovered secrets than the
+// budget allows is reduced to the skeleton rather than costing seconds per
+// event. The tests push a canary corpus of synthetic credentials through
+// every profile and require zero leaks, and report the over-redaction rate
+// on a benign corpus.
 //
 // # Secret markers and digests
 //
 // classify marks a secret as "[REDACTED:<kind>:<fp>]" with an unkeyed
-// SHA-256 fingerprint. Before anything leaves, that fingerprint is replaced
-// by "hmac=" plus a keyed hash (same secret, same marker, within a tenant)
-// or removed when there is no key: an unkeyed hash of a short password is
-// a dictionary oracle. Likewise every content-derived digest (prompt, tool
+// SHA-256 fingerprint, and producers reduce free text they will not emit
+// to "fp:<8 hex>" summaries (hookio's "tool error fp:..." and "denied
+// fp:...", otelrecv's error summary). Before anything leaves, both are
+// replaced by "hmac=" plus a keyed hash (same value, same digest, within a
+// tenant) or removed when there is no key: an unkeyed hash of a short
+// password or error message is a dictionary oracle. Likewise every content-derived digest (prompt, tool
 // input and output, user-authored asset definitions, the engine's dedup
 // key) is HMAC-SHA-256 with the tenant key, truncated to 96 bits, or is
 // not emitted. Keys shorter than MinKeyLen bytes are ignored.
@@ -78,15 +100,21 @@
 // evidence is copied only from a fixed allowlist of non-content fields;
 // prompt text and tool output are never evidence outside the full
 // profile, whatever a rule asks for (a rule pack must not become a covert
-// content search). A field that is asked for but not allowed is reported
-// as Withheld, so the request stays visible; stamping rule and bundle
+// content search). A field outside the allowlist passes only as a bare
+// boolean or number, and only when the rule registry (features) types it
+// so: a value that merely parses as a number (an OTP, a card number) is
+// content. A field that is asked for but not allowed is reported as
+// Withheld, so the request stays visible; stamping rule and bundle
 // versions on findings (so such a request is attributable) is the rule
 // engine's job, and Emit passes those labels through.
 //
 // # Known gaps
 //
 // Free-text credential detection is heuristic ("my password is x" is not
-// found). A secret that is transformed by something the redactor cannot
+// found). Text a shell command writes into an ordinary file (not a
+// credential file) is redacted by pattern only, so a password in a
+// project config file written by heredoc is found only when it is
+// labelled ("password=x") or recognisable. A secret that is transformed by something the redactor cannot
 // decode (compression, encryption, arithmetic) and was never seen
 // structurally cannot be found. Windows 8.3 short names of a home
 // directory are not rewritten to "~".

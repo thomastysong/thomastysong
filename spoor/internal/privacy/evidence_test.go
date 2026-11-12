@@ -154,3 +154,42 @@ func TestEvidenceFeatureListsAndVocab(t *testing.T) {
 		t.Error("leak")
 	}
 }
+
+// TestEvidenceNumericContentWithheld (review P6): evidence that arrives on
+// a detection record passes outside the allowlist only as a boolean or
+// number the rule registry types so. A value that merely parses as a
+// number is content: an OTP in a prompt, a card number in tool output.
+func TestEvidenceNumericContentWithheld(t *testing.T) {
+	d := activity(event.TypeDetectionFinding)
+	d.Kind = event.KindDetection
+	d.Detection = &event.Detection{RuleID: "R1", Title: "t", Severity: "high", Evidence: map[string]string{
+		"tool.output": "4111111111111111", "prompt.text": "829104", "content.file_content": "31415926535",
+		"made.up.field": "42", "labels.otp": "123456",
+		// Registry-typed scalars still pass.
+		"shell.sudo": "true", "session.tool_calls": "12", "net.query_len": "300",
+		// ... but only as their type.
+		"shell.downloads": "4111111111111111",
+	}}
+	for _, prof := range []Profile{ProfileMinimal, ProfileStandard} {
+		out, _, _ := (&Policy{Profile: prof}).Emit(d)
+		ev := out.Detection.Evidence
+		for _, k := range []string{"tool.output", "prompt.text", "content.file_content", "made.up.field", "labels.otp", "shell.downloads"} {
+			if ev[k] != Withheld {
+				t.Errorf("%s: %s=%q shipped", prof, k, ev[k])
+			}
+		}
+		for k, v := range map[string]string{"shell.sudo": "true", "session.tool_calls": "12", "net.query_len": "300"} {
+			if ev[k] != v {
+				t.Errorf("%s: registry scalar %s=%q, want %q", prof, k, ev[k], v)
+			}
+		}
+	}
+	// Policy.Evidence: a scalar in the computed features is copied only
+	// for registry-typed fields as well.
+	src := shellEvent("ls")
+	src.Feat = map[string]any{"shell.sudo": true, "custom.otp": 829104.0}
+	ev := (&Policy{}).Evidence(src, []string{"shell.sudo", "custom.otp"})
+	if ev["shell.sudo"] != "true" || ev["custom.otp"] != Withheld {
+		t.Errorf("Evidence = %v", ev)
+	}
+}

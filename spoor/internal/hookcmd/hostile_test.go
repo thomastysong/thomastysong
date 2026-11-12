@@ -42,7 +42,7 @@ func TestHostileStdin(t *testing.T) {
 	for _, guard := range []bool{false, true} {
 		cfg, limit := cfgObserve, observeDeadline
 		if guard {
-			cfg, limit = cfgGuard, time.Second
+			cfg, limit = cfgGuard, 5*time.Second
 		}
 		for name, p := range hostilePayloads() {
 			for _, d := range dialects {

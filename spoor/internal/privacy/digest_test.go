@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/thomastysong/spoor/internal/event"
+	"github.com/thomastysong/spoor/internal/hookio"
 )
 
 func TestPseudonymStableAndKeyed(t *testing.T) {
@@ -203,5 +204,69 @@ func TestValidate(t *testing.T) {
 	_, ship, _ := (&Policy{Profile: "everything"}).Emit(shellEvent("ls"))
 	if ship {
 		t.Error("unknown profile must behave as minimal")
+	}
+}
+
+// TestRewriteSummaries (review P3): producers' "fp:<8 hex>" summaries are
+// unkeyed SHA-256 prefixes of error text; they leave keyed or not at all.
+func TestRewriteSummaries(t *testing.T) {
+	for in, want := range map[string]string{
+		"tool error fp:6dba309e":         "tool error",
+		"denied fp:0A1b2C3d":             "denied",
+		"fp:6dba309e":                    "",
+		"a fp:6dba309e b":                "a b",
+		"xfp:6dba309e":                   "xfp:6dba309e", // not a word
+		"fp:6dba309e0":                   "fp:6dba309e0", // 9 digits
+		"fp:6dba30":                      "fp:6dba30",
+		"git log --format=fp:%h":         "git log --format=fp:%h",
+		"[REDACTED:password:6dba309e] x": "[REDACTED:password] x",
+	} {
+		if got := rewriteMarkers(in, nil); got != want {
+			t.Errorf("no key: %q -> %q, want %q", in, got, want)
+		}
+	}
+	a := rewriteMarkers("tool error fp:6dba309e", testKey)
+	b := rewriteMarkers("tool error fp:6dba309e", testKey)
+	c := rewriteMarkers("tool error fp:6dba309e", []byte("another-tenant-key-0123456789"))
+	if !strings.HasPrefix(a, "tool error hmac=") || len(a) != len("tool error hmac=")+8 || a != b || a == c || strings.Contains(a, "6dba309e") {
+		t.Errorf("keyed: %q %q %q", a, b, c)
+	}
+}
+
+// TestUnkeyedErrorFingerprintNotEmitted (review P3): a real Claude Code
+// PostToolUseFailure payload through hookio, then Emit and Context.
+func TestUnkeyedErrorFingerprintNotEmitted(t *testing.T) {
+	d, ok := hookio.Get("claude")
+	if !ok {
+		t.Skip("no claude dialect")
+	}
+	errText := "Error: permission denied for secret store"
+	payload := `{"hook_event_name":"PostToolUseFailure","session_id":"s1","cwd":"/home/bob/w","tool_name":"Read","tool_input":{"file_path":"/home/bob/w/a"},"tool_use_id":"tu1","error":"` + errText + `"}`
+	evs, _, err := d.Parse([]byte(payload), nil)
+	if err != nil || len(evs) == 0 {
+		t.Fatalf("parse: %v %d", err, len(evs))
+	}
+	if evs[0].Outcome == nil || !strings.Contains(evs[0].Outcome.Error, "fp:") {
+		t.Skipf("hookio no longer writes an fp summary: %+v", evs[0].Outcome)
+	}
+	fp := sha256Hex(errText)[:8]
+	for _, prof := range Profiles {
+		for _, key := range [][]byte{nil, testKey} {
+			out, _, _ := (&Policy{Profile: prof, Key: key}).Emit(evs[0])
+			l := line(t, out)
+			if strings.Contains(l, fp) {
+				t.Errorf("%s key=%v: unkeyed fingerprint %s emitted", prof, key != nil, fp)
+			}
+			if out.Outcome == nil || !strings.HasPrefix(out.Outcome.Error, "tool error") || (key != nil) != strings.Contains(out.Outcome.Error, "hmac=") {
+				t.Errorf("%s key=%v: outcome.error = %q", prof, key != nil, out.Outcome.Error)
+			}
+		}
+	}
+	det := activity(event.TypeDetectionFinding)
+	det.Kind, det.ID, det.Session.ID = event.KindDetection, "det-1", evs[0].Session.ID
+	for _, c := range (&Policy{}).Context([]*event.Event{evs[0], det}, 3) {
+		if strings.Contains(line(t, c), fp) {
+			t.Errorf("minimal context (shipped): unkeyed fingerprint %s", fp)
+		}
 	}
 }

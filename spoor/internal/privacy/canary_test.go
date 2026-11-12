@@ -53,6 +53,49 @@ func canaryCorpus() []canary {
 	cmd("substitution", "echo $(mysql -pCanaryPw27 -e 'select 1')")
 	cmd("ps-securestring", `$p = ConvertTo-SecureString "CanaryPw28" -AsPlainText -Force`)
 
+	// Review P2: literals fed on stdin to consumers that read a password
+	// there without a --password-stdin style flag.
+	cmd("sudo-S-pipe", "echo 'CanarySu01!x' | sudo -S apt-get install -y jq")
+	cmd("sudo-stdin-long", "echo CanarySu02 | sudo --stdin systemctl restart nginx")
+	cmd("sudo-S-herestring", "sudo -S <<< 'CanarySu03' whoami")
+	cmd("sudo-u-then-S", "printf '%s\\n' CanarySu04 | sudo -u root -S -k ls /root")
+	cmd("passwd-no-stdin-flag", "echo -e 'CanarySu05\\nCanarySu05' | passwd bob")
+	cmd("kinit", "echo 'CanarySu06' | kinit bob@CORP.EXAMPLE")
+	cmd("openssl-pass-stdin", "echo CanarySu07 | openssl enc -d -pass stdin -in f.enc")
+	cmd("vault-login-stdin", "echo CanarySu08 | vault login -")
+	cmd("yes-feeder", "yes CanarySu09 | passwd bob")
+	cmd("htpasswd-i", "echo CanarySu10 | htpasswd -Bi /etc/nginx/.htpasswd admin")
+
+	// Review P4: flags and PowerShell setters classify's tables miss.
+	cmd("sshpass-attached", "sshpass -pCanaryFl01 ssh deploy@h")
+	cmd("keytool", "keytool -genkeypair -storepass CanaryFl02 -keypass CanaryFl03 -alias a")
+	cmd("jarsigner", "jarsigner -storepass CanaryFl04 app.jar alias")
+	cmd("sqlcmd", "sqlcmd -S db -U sa -P CanaryFl05 -Q 'select 1'")
+	cmd("ssh-keygen-N", "ssh-keygen -t ed25519 -N 'CanaryFl06' -f id")
+	cmd("lftp-u", "lftp -u bob,CanaryFl07 sftp://h")
+	cmd("smbclient-U", "smbclient -U 'bob%CanaryFl08' //h/share")
+	cmd("schtasks-rp", "schtasks /create /tn t /tr x.exe /ru bob /rp CanaryFl09")
+	cmd("ps-set-item-env", "Set-Item env:API_KEY 'CanaryFl10'")
+	cmd("ps-setenvironmentvariable", "[Environment]::SetEnvironmentVariable('API_TOKEN','CanaryFl11','User')")
+	cmd("ps-setenvironmentvariable-spaced", "[Environment]::SetEnvironmentVariable('API_TOKEN', 'CanaryFl12', 'Machine')")
+	cmd("sqlplus", "sqlplus scott/CanaryFl13@orcl @script.sql")
+	cmd("psexec-p", `psexec \\h -u bob -p CanaryFl14 cmd`)
+	cmd("generic-pass-flag", "deploytool --admin-pass CanaryFl15 --target prod")
+	cmd("rar-p", "rar a -pCanaryFl16 backup.rar docs")
+	cmd("vault-login-token", "vault login CanaryFl17")
+
+	// Review P5: credentials written into credential files by the shell.
+	cmd("heredoc-netrc", "cat > ~/.netrc <<EOF\nmachine git.internal login bob password CanaryWr01\nEOF")
+	cmd("heredoc-pgpass", "cat > ~/.pgpass <<'EOF'\ndb.internal:5432:app:app:CanaryWr02\nEOF\nchmod 600 ~/.pgpass")
+	cmd("echo-append-netrc", "echo 'machine h login u password CanaryWr03' >> ~/.netrc")
+	cmd("echo-pgpass", "echo 'db:5432:app:app:CanaryWr04' > ~/.pgpass")
+	cmd("printf-format-key", "printf 'user=app\\npassword=%s\\n' CanaryWr05 > db.conf")
+	cmd("printf-netrc-format", "printf 'machine %s login %s password %s\\n' h bob CanaryWr06")
+	cmd("tee-credentials", "echo 'aws_secret_access_key = CanaryWr07' | sudo tee -a ~/.aws/credentials")
+	cmd("heredoc-dotenv", "cat <<EOF > .env\nDB_URL=db.internal\nSESSION=CanaryWr08\nEOF")
+	cmd("ps-set-content-netrc", "Set-Content -Path ~/.netrc -Value 'machine h login u password CanaryWr09'")
+	cmd("ps-out-file", "'CanaryWr10' | Out-File ~/.git-credentials")
+
 	// Process arguments.
 	proc := func(name string, args ...string) {
 		cs = append(cs, canary{name: "process/" + name, build: func() *event.Event {
@@ -385,6 +428,22 @@ func TestOverRedactionBenign(t *testing.T) {
 		{"pip index", shellEvent("pip install --index-url https://pypi.org/simple requests==2.32.3"), []string{"https://pypi.org/simple", "requests==2.32.3"}},
 		{"uuid path", withPath("/srv/runs/0193f5a2-1c2b-7d3e-8f4a-5b6c7d8e9f00/log.txt"), []string{"0193f5a2-1c2b-7d3e-8f4a-5b6c7d8e9f00"}},
 		{"mcp inventory", mcpAsset(), []string{"@acme/mcp-server@1.4.2", "--stdio", "api.acme.dev", "GITHUB_TOKEN"}},
+		// The rules added for the review must not eat what they only
+		// resemble: flags that merely contain "pass", password sources,
+		// paths named *passwd, non-credential file writes, tee elsewhere.
+		{"bypass flag", shellEvent("curl --bypass-cache /data/x"), []string{"--bypass-cache /data/x"}},
+		{"no-pass switch", shellEvent("tool --no-pass file.txt"), []string{"--no-pass file.txt"}},
+		{"password file flag", shellEvent("tool --password-file /run/secrets/pw"), []string{"/run/secrets/pw"}},
+		{"pass source", shellEvent("openssl enc -pass env:ENC_PASS -in f"), []string{"env:ENC_PASS"}},
+		{"keytool env source", shellEvent("keytool -list -storepass:env STOREPW -keystore k.jks"), []string{"STOREPW", "k.jks"}},
+		{"htpasswd path", shellEvent("htpasswd -D /etc/nginx/.htpasswd admin"), []string{"/etc/nginx/.htpasswd admin"}},
+		{"ordinary heredoc", shellEvent("cat > notes.txt <<EOF\nhello world\nEOF"), []string{"hello world", "notes.txt"}},
+		{"tee elsewhere", shellEvent("echo hi | sudo tee /etc/motd"), []string{"echo hi | sudo tee /etc/motd"}},
+		{"plain printf", shellEvent("printf '%s %s\\n' alpha beta"), []string{"alpha beta"}},
+		{"sudo shell", shellEvent("sudo -s -u root"), []string{"sudo -s -u root"}},
+		{"sqlplus os auth", shellEvent("sqlplus / as sysdba"), []string{"sqlplus / as sysdba"}},
+		{"vault login method", shellEvent("vault login -method=oidc role=dev"), []string{"-method=oidc role=dev"}},
+		{"read netrc", shellEvent("cat ~/.netrc"), []string{"cat ~/.netrc"}},
 	}
 	p := &Policy{Profile: ProfileStandard, Key: testKey}
 	lost, total := 0, 0

@@ -153,8 +153,13 @@ func (r *run) finish() {
 	}
 	if len(r.trunc) > 0 {
 		names := make([]string, 0, len(r.trunc))
+		seen := make(map[string]bool, len(r.trunc))
 		for _, t := range r.trunc {
-			names = append(names, r.truncName(t))
+			// Distinct raw names can redact to the same name.
+			if n := r.truncName(t); !seen[n] {
+				seen[n] = true
+				names = append(names, n)
+			}
 		}
 		out.Truncated = names
 	} else {

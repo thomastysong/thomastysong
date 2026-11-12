@@ -1,0 +1,291 @@
+# Destruction. Deleting inside the working directory or a temp directory
+# is never destructive here (rm -rf node_modules is housekeeping); the
+# shell.destructive vocabulary already encodes that, and the rules only
+# add class and context.
+pack: destructive
+version: "2026.11.0"
+description: Recursive deletes outside the workspace, disk wipes, infrastructure teardown and history rewrites.
+rules:
+  - id: SPR-DESTR-001
+    title: Recursive delete of the filesystem root or a home directory
+    description: >-
+      rm -rf of / or of a whole home directory (literal, ~ or $HOME). No
+      coding task needs it; Shai-Hulud 2.0 and the Tensorlake watcher wiped
+      $HOME, and agents have deleted user data on their own.
+    kind: activity
+    class: alert
+    severity: critical
+    confidence: high
+    maturity: stable
+    category: impact
+    tags: [attack.t1485, atlas.aml.t0101, owasp.asi02]
+    references:
+      - "research/threats.md section 2 row 26: Shai-Hulud 2.0 home wipe fallback"
+      - "research/threats.md section 2 row 30: token-revocation watcher wipes $HOME"
+      - "research/threats.md section 2 row 43: destructive autonomy"
+      - "research/threats.md section 3 R40"
+    falsepositives:
+      - "Tearing down a disposable container's home directory"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      shell.destructive|contains_any: [rm_recursive_root, rm_recursive_home]
+    dedup: [shell.deletes]
+    evidence: [target.command, shell.deletes, shell.destructive]
+    remedy: Stop the agent; check backups for the paths it named.
+    tests:
+      - name: rm -rf /
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf /" } }
+        expect: match
+      - name: rm -rf $HOME
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf $HOME" } }
+        expect: match
+      - name: build directories
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf node_modules dist build .next target" } }
+        expect: no_match
+      - name: a cache below home
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf ~/.cache/go-build" } }
+        expect: no_match
+
+  - id: SPR-DESTR-002
+    title: Disk wiped, filesystem created or shadow copies deleted
+    description: >-
+      dd onto a block device, wipefs, mkfs, diskutil erase or vssadmin
+      delete shadows. These destroy whole volumes or their recovery points.
+    kind: activity
+    class: alert
+    severity: critical
+    confidence: high
+    maturity: stable
+    category: impact
+    tags: [attack.t1485, attack.t1490, atlas.aml.t0101, owasp.asi02]
+    references:
+      - "research/threats.md section 3 R40"
+    falsepositives:
+      - "Formatting a removable disk at the user's request"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      any:
+        - shell.destructive|contains_any: [disk_wipe, mkfs, shadow_copy_delete]
+        - any_command:
+            name|re: "mkfs(\\.[a-z0-9]+)?$"
+    evidence: [target.command, shell.destructive]
+    remedy: Stop the agent and check which device was targeted.
+    tests:
+      - name: dd to a disk
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "dd if=/dev/zero of=/dev/sda bs=1M" } }
+        expect: match
+      - name: mkfs.ext4
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "mkfs.ext4 /dev/sdb1" } }
+        expect: match
+      - name: shadow copies
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "vssadmin delete shadows /all /quiet" } }
+        expect: match
+      - name: dd to an image file
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "dd if=/dev/zero of=./disk.img bs=1M count=10" } }
+        expect: no_match
+      - name: listing disks
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "lsblk -f" } }
+        expect: no_match
+
+  - id: SPR-DESTR-003
+    title: Infrastructure or data store destroyed
+    description: >-
+      terraform destroy, cloud CLI deletes and terminations, kubectl delete
+      namespace, or DROP DATABASE. DataTalks lost production to an agent's
+      terraform destroy; PocketOS lost a volume in nine seconds.
+    kind: activity
+    class: finding
+    severity: high
+    confidence: high
+    maturity: stable
+    category: impact
+    tags: [attack.t1485, atlas.aml.t0101, owasp.asi02]
+    references:
+      - "research/threats.md section 2 row 43: DataTalks terraform destroy, PocketOS volumeDelete"
+      - "research/threats.md section 2 row 2: Amazon Q wiper prompt (terminate-instances, s3 rm, iam delete-user)"
+      - "research/threats.md section 3 R41"
+    falsepositives:
+      - "Tearing down a sandbox stack"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      shell.destructive|contains_any: [terraform_destroy, cloud_delete, kubectl_delete_namespace, db_drop, db_truncate]
+    dedup: [shell.destructive]
+    evidence: [target.command, shell.destructive]
+    remedy: Confirm the target was a disposable environment; restore from backup otherwise.
+    tests:
+      - name: terraform destroy
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "terraform destroy -auto-approve" } }
+        expect: match
+      - name: terminate instances
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "aws ec2 terminate-instances --instance-ids i-0abc" } }
+        expect: match
+      - name: terraform plan
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "terraform plan -out tf.plan" } }
+        expect: no_match
+      - name: delete one pod
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "kubectl delete pod web-1" } }
+        expect: no_match
+
+  - id: SPR-DESTR-004
+    title: Shared git history force-pushed or rewritten
+    description: >-
+      A force push to main or master, or a history rewrite (filter-branch,
+      filter-repo). Force-with-lease to a feature branch is ordinary and is
+      not matched.
+    kind: activity
+    class: finding
+    severity: medium
+    confidence: medium
+    maturity: stable
+    category: impact
+    tags: [attack.t1485, owasp.asi02]
+    references:
+      - "research/threats.md section 3 R41; section 6 (force-with-lease on a feature branch is benign)"
+    falsepositives:
+      - "Repository owners cleaning a leaked secret out of history"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      any:
+        - shell.destructive: git_history_rewrite
+        - any_command:
+            name: git
+            all:
+              - args|contains_all: [push]
+              - args|contains_any: ["--force", "-f", "--force-with-lease", "+main", "+master", "+HEAD:main", "+HEAD:master"]
+              - args|contains_any: [main, master, "HEAD:main", "HEAD:master", "+main", "+master", "+HEAD:main", "+HEAD:master"]
+    evidence: [target.command]
+    remedy: Check the remote's reflog and restore the overwritten commits.
+    tests:
+      - name: force push to main
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "git push -f origin main" } }
+        expect: match
+      - name: filter-branch
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "git filter-branch --tree-filter 'rm secrets' HEAD" } }
+        expect: match
+      - name: force with lease to a feature branch
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "git push --force-with-lease origin feature/x" } }
+        expect: no_match
+      - name: ordinary push to main
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "git push origin main" } }
+        expect: no_match
+
+  - id: SPR-DESTR-005
+    title: Burst of destructive commands
+    description: >-
+      Five destructive commands (recursive wildcard deletes, find -delete,
+      truncation, git reset --hard / clean -f, kubectl or cloud deletes,
+      prunes) within two minutes in one session. A single one is
+      housekeeping; a burst is an agent tearing things down.
+    kind: activity
+    class: finding
+    severity: high
+    confidence: medium
+    maturity: experimental
+    category: impact
+    tags: [attack.t1485, atlas.aml.t0101, owasp.asi02]
+    references:
+      - "research/threats.md section 2 row 43: Cowork deleted 15k photos"
+      - "research/threats.md section 4 S9"
+    falsepositives:
+      - "Scripted clean-up of many test resources"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      shell.destructive|contains_any: [rm_recursive_wildcard, find_delete, truncate_file, git_reset_hard, git_clean_force, kubectl_delete, kubectl_delete_namespace, cloud_delete, terraform_destroy, docker_prune_all, db_drop, db_truncate]
+    threshold:
+      count: 5
+      window: 2m
+    evidence: [target.command, shell.destructive]
+    escalate: true
+    remedy: Stop the agent and inventory what was removed.
+    tests:
+      - name: five deletes in a row
+        events:
+          - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "aws s3 rm s3://b1 --recursive" } }
+          - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "aws s3 rm s3://b2 --recursive" } }
+          - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "aws s3 rm s3://b3 --recursive" } }
+          - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "kubectl delete pod a b c" } }
+          - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "git reset --hard HEAD~5" } }
+        expect: match
+      - name: one reset
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "git reset --hard origin/main" } }
+        expect: no_match
+      - name: interleaved ordinary commands
+        events:
+          - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "git reset --hard origin/main" } }
+          - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "go build ./..." } }
+          - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "go test ./..." } }
+        expect: no_match
+
+  - id: SPR-DESTR-006
+    title: Recursive delete in a system directory
+    description: >-
+      rm -r of a path under a system directory (/usr, /var, /etc, /opt,
+      C:\Windows ...) outside the workspace and outside temp directories.
+    kind: activity
+    class: finding
+    severity: medium
+    confidence: medium
+    maturity: experimental
+    category: impact
+    tags: [attack.t1485, owasp.asi02]
+    references:
+      - "research/threats.md section 3 R40"
+      - "redteam/detection-quality.md section 1 (R40b: deletes outside the workspace)"
+    falsepositives:
+      - "Replacing a toolchain under /usr/local"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      shell.delete_classes: system_dir
+      any_command:
+        name|in: [rm, rmdir, remove-item, rd]
+        args|any_re: "^-(-recursive|[a-zA-Z]*[rR])"
+    allow:
+      shell.delete_classes|contains_any: [temp, sensor_files]
+    dedup: [shell.deletes]
+    evidence: [target.command, shell.deletes]
+    remedy: Check what was removed and whether the user asked for it.
+    tests:
+      - name: rm -rf under /var/lib
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf /var/lib/postgresql/16/main" } }
+        expect: match
+      - name: rm -rf under /tmp
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf /tmp/build-1234" } }
+        expect: no_match
+      - name: delete in the workspace
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf ./out" } }
+        expect: no_match
+
+  - id: SPR-DESTR-007
+    title: Permissions opened recursively
+    description: chmod -R 777 (or a+rwx) on a directory tree. Common on bind mounts in development; a signal.
+    kind: activity
+    class: signal
+    severity: low
+    confidence: high
+    maturity: stable
+    category: impact
+    tags: [attack.t1222.002]
+    references:
+      - "redteam/detection-quality.md section 1 (chmod 777 on docker bind mounts)"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      shell.destructive: chmod_recursive_open
+    evidence: [target.command]
+    remedy: No action on its own.
+    tests:
+      - name: chmod -R 777
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "chmod -R 777 /srv/data" } }
+        expect: match
+      - name: chmod 644
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "chmod 644 config.yaml" } }
+        expect: no_match
+      - name: chmod +x
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "chmod +x run.sh" } }
+        expect: no_match

@@ -188,3 +188,59 @@ func TestEmitKeyIDWhenFingerprintsAreKeyed(t *testing.T) {
 		t.Errorf("no key: command %q labels %v", out.Target.Command, out.Labels)
 	}
 }
+
+// TestTruncatedNamesRedacted (review P7): names in the input record's
+// truncated list, and names this package builds from tool-input keys, are
+// written after the safety pass, so they get its treatment.
+func TestTruncatedNamesRedacted(t *testing.T) {
+	tok := "ghp_" + rnd(7, 36)
+	e := shellEvent("ls")
+	e.Truncated = []string{tok, "target.command", "/home/bob/secret-dir/x"}
+	for _, prof := range Profiles {
+		for _, key := range [][]byte{nil, testKey} {
+			out, _, _ := (&Policy{Profile: prof, Key: key}).Emit(e)
+			l := line(t, out)
+			if strings.Contains(l, tok) || unkeyedMarkerRe.MatchString(l) {
+				t.Errorf("%s key=%v: truncated list: %q", prof, key != nil, out.Truncated)
+			}
+			if !strings.Contains(l, `"target.command"`) || !strings.Contains(l, `~/secret-dir/x`) {
+				t.Errorf("%s: truncated names lost or not home-relative: %q", prof, out.Truncated)
+			}
+		}
+	}
+	// A cut tool-input value is named by its key, which the agent chose.
+	in := activity(event.TypeToolPre)
+	in.Tool = &event.Tool{Name: "T", Kind: event.ToolMCP}
+	in.Content = &event.Content{ToolInput: map[string]any{tok: strings.Repeat("v", 10000)}}
+	out, _, _ := (&Policy{Profile: ProfileFull, Key: testKey}).Emit(in)
+	if l := line(t, out); strings.Contains(l, tok) || len(out.Truncated) == 0 {
+		t.Errorf("tool-input key in truncated names: %q", out.Truncated)
+	}
+	seen := map[string]bool{}
+	for _, n := range out.Truncated {
+		if seen[n] {
+			t.Errorf("duplicate truncated name %q", n)
+		}
+		seen[n] = true
+	}
+}
+
+// TestNoNestedMarkersInValues (review P9): a database URL in a structured
+// value (label, check result) comes out as one marker, not a marker
+// inside a marker.
+func TestNoNestedMarkersInValues(t *testing.T) {
+	v := "postgres://app:Sommer2026x@db/x"
+	for _, k := range [][]byte{nil, testKey} {
+		e := shellEvent("ls")
+		e.Labels = map[string]string{"db": v}
+		e.Check = &event.Check{ID: "c", Status: "fail", Actual: v}
+		out, _, _ := (&Policy{Profile: ProfileStandard, Key: k}).Emit(e)
+		l := line(t, out)
+		if nestedMarkerRe.MatchString(l) || strings.Contains(l, "Sommer2026x") || unkeyedMarkerRe.MatchString(l) {
+			t.Errorf("key=%v: label=%q actual=%q", k != nil, out.Labels["db"], out.Check.Actual)
+		}
+		if !strings.HasPrefix(out.Labels["db"], "postgres://") {
+			t.Errorf("key=%v: scheme lost: %q", k != nil, out.Labels["db"])
+		}
+	}
+}

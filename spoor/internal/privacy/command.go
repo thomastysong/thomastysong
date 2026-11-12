@@ -20,10 +20,15 @@ import (
 //     byte spans (lex.go) and its argument vector goes through
 //     classify.RedactArgs, which knows secret-bearing flags, tool-specific
 //     short flags, NAME=value assignments, headers, request bodies and URL
-//     userinfo. Rules RedactArgs cannot express from one argv are added
-//     here: literals piped or here-stringed into --password-stdin style
-//     consumers, PowerShell variable assignments, ConvertTo-SecureString
-//     -AsPlainText, "net user NAME PASSWORD", setx, htpasswd -b.
+//     userinfo, and through this package's own flag table (argrules.go).
+//     Rules no single argv expresses are added here (specials.go):
+//     literals piped or here-stringed into a consumer that reads a
+//     credential from stdin (--password-stdin, sudo -S, passwd, kinit,
+//     openssl -pass stdin, vault login -), text written into a
+//     credential-class file, printf arguments a format labels as a
+//     password, PowerShell assignments and environment setters,
+//     ConvertTo-SecureString -AsPlainText, "net user NAME PASSWORD", setx,
+//     htpasswd -b.
 //  2. shellx.Analyze sees what the top level cannot: commands inside
 //     bash -c strings, cmd /c, eval, $( ), wrappers and decoded payloads.
 //     Each of those argument vectors is redacted the same way and the
@@ -36,6 +41,12 @@ import (
 //     command is replaced by a skeleton (program names and flags only):
 //     losing detail is acceptable, leaking a secret is not.
 //  5. classify.Redact runs over the result as the pattern pass.
+//
+// Coverage: every emitted byte must have been seen by every view. A view
+// that stops part of the way (a token cap, shellx's command budget) would
+// otherwise let the rest of the line be copied out unexamined, so the line
+// is cut where the first view stopped and only its head is emitted (see
+// cover).
 //
 // The result still carries classify's unkeyed fingerprints; the caller
 // rewrites them (see Policy.rewriteMarkers).

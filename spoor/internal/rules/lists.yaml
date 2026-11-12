@@ -174,3 +174,74 @@ lists:
     - "-A"
     - "--all-namespaces"
     - "--all-namespaces=true"
+
+  # Flags that turn off approvals, the sandbox or hook trust for an agent
+  # CLI, as single argv tokens (catalog risky_flags; research/threats.md
+  # section 3 BYPASS_FLAGS). Two-token spellings (--permission-mode
+  # bypassPermissions) are also listed in their "=" form.
+  agent_bypass_flags:
+    - "--dangerously-skip-permissions"
+    - "--allow-dangerously-skip-permissions"
+    - "--permission-mode=bypassPermissions"
+    - "--yolo"
+    - "--approval-mode=yolo"
+    - "--trust-all-tools"
+    - "--dangerously-bypass-approvals-and-sandbox"
+    - "--dangerously-bypass-hook-trust"
+    - "--sandbox=danger-full-access"
+    - "--ask-for-approval=never"
+    - "--allow-all-tools"
+    - "--allow-all"
+    - "--allow-all-paths"
+    - "--allow-all-urls"
+    - "--yes-always"
+    - "--force"
+
+  # The same flags in catalog spelling, as the process monitor reports
+  # them in process.flags (a flag that takes a value is "--flag value").
+  # Only flags that remove approvals, the sandbox or hook trust are here;
+  # attributes such as --bare or --no-session-persistence are coverage
+  # facts, not bypasses (internal/catalog/data/agents.yaml risky_flags).
+  agent_bypass_risky_flags:
+    - "--dangerously-skip-permissions"
+    - "--allow-dangerously-skip-permissions"
+    - "--permission-mode bypassPermissions"
+    - "--yolo"
+    - "--approval-mode yolo"
+    - "--trust-all-tools"
+    - "--dangerously-bypass-approvals-and-sandbox"
+    - "--dangerously-bypass-hook-trust"
+    - "--sandbox danger-full-access"
+    - "--ask-for-approval never"
+    - "--allow-all-tools"
+    - "--allow-all"
+    - "--allow-all-paths"
+    - "--allow-all-urls"
+    - "--autopilot"
+    - "--no-ask-user"
+    - "--yes-always"
+    - "--force"
+
+  # Process names that open URLs and protocol links (browsers and the OS
+  # URL dispatchers). An agent started below one of these was started by a
+  # link, not by a user at a terminal (SPR-PROC-005).
+  url_handler_processes:
+    - chrome
+    - google-chrome
+    - google chrome
+    - chromium
+    - chromium-browser
+    - firefox
+    - safari
+    - msedge
+    - brave
+    - brave-browser
+    - opera
+    - vivaldi
+    - arc
+    - xdg-open
+    - gio
+    - kde-open
+    - open
+    - explorer.exe
+    - rundll32.exe

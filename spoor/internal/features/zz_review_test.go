@@ -66,3 +66,15 @@ func TestZZGitExecKeysAbsoluteHelper(t *testing.T) {
 		}
 	}
 }
+
+// Spec B1: write.autorun is about MCP server ENTRIES. An empty server map
+// declares nothing to start, yet it is reported as mcp_server (this is why
+// the inline tests "empty server list" of SPR-AGENT-002 in
+// packs/agent-integrity.yaml fail).
+func TestZZAutorunEmptyServerMap(t *testing.T) {
+	for _, c := range []string{`{"mcpServers":{}}`, `{"mcpServers": {}, "other": 1}`, "[mcp_servers]\n"} {
+		if got := Autorun("/home/u/proj/.mcp.json", c); len(got) != 0 {
+			t.Errorf("Autorun(%q) = %v, want nothing (no server is declared)", c, got)
+		}
+	}
+}

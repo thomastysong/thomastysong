@@ -168,3 +168,48 @@ func TestCutString(t *testing.T) {
 		t.Error("short strings are untouched")
 	}
 }
+
+// TestSkeletonFitsLine (review P8): the skeleton is the last resort of the
+// line cap, so it must fit too. Its fields come from the input; 128 bytes
+// of "<" encode to 768, and seventeen such fields overflowed a small
+// MaxLine.
+func TestSkeletonFitsLine(t *testing.T) {
+	lt := strings.Repeat("<", 4000)
+	e := activity(event.TypeToolPre)
+	e.Kind = event.KindDetection
+	e.ID, e.Type, e.Writer, e.Dedupe = lt, lt, lt, lt
+	e.Source, e.Fidelity, e.Integrity = event.Source(lt), event.Fidelity(lt), event.Integrity(lt)
+	e.Session.ID = lt
+	e.Host.ID, e.Host.OS, e.Host.Arch = lt, lt, lt
+	e.Agent.ID = lt
+	e.Detection = &event.Detection{RuleID: lt, Title: lt, Class: lt, Severity: lt}
+	for _, ml := range []int{MinMaxLine, 3000, 4096, DefaultMaxLine} {
+		p := &Policy{Profile: ProfileStandard, MaxLine: ml}
+		out, ship, _ := p.Emit(e)
+		if l := line(t, out); len(l) > ml-LineHeadroom {
+			t.Errorf("MaxLine=%d: encoded line is %d bytes", ml, len(l))
+		}
+		if !ship || out.Kind == "" || out.Privacy != string(ProfileStandard) {
+			t.Errorf("MaxLine=%d: routing lost: kind %q privacy %q", ml, out.Kind, out.Privacy)
+		}
+		// A context record keeps its join labels in the skeleton.
+		act := *e
+		act.Kind, act.Detection = event.KindActivity, nil
+		ctx := p.ContextFor("det-x", []*event.Event{&act}, 1)
+		if len(ctx) != 1 {
+			t.Fatalf("MaxLine=%d: %d context records", ml, len(ctx))
+		}
+		for _, c := range ctx {
+			if l := line(t, c); len(l) > ml-LineHeadroom || c.Labels[LabelContextFor] != "det-x" {
+				t.Errorf("MaxLine=%d: context skeleton %d bytes, labels %v", ml, len(l), c.Labels)
+			}
+		}
+	}
+	// Direct: every rung of the skeleton ladder fits, whatever the input.
+	s := (&Policy{MaxLine: MinMaxLine}).settings()
+	stamp := map[string]string{LabelContextFor: lt, LabelContextKind: lt, LabelContextType: lt, LabelContextEventID: lt, LabelContextPolicy: "standard"}
+	sk := (&Policy{}).skeleton(e, s, "minimal", "line_cap", stamp)
+	if b, _ := json.Marshal(sk); sk == nil || len(b) > s.lineBudget() {
+		t.Errorf("skeleton %d bytes over budget %d", len(b), s.lineBudget())
+	}
+}

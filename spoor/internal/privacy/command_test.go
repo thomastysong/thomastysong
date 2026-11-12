@@ -7,6 +7,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/thomastysong/spoor/internal/event"
 	"github.com/thomastysong/spoor/internal/shellx"
 )
 
@@ -251,5 +252,113 @@ func TestRedactCommandManySecretsBounded(t *testing.T) {
 	out, _ := redactCommand(moderate, "")
 	if strings.Contains(out, "ManyPw") || strings.Contains(out, kindUnresolved) || !strings.Contains(out, "https://h3.x") {
 		t.Errorf("moderate line lost structure or leaked:\n%.400s", out)
+	}
+}
+
+// emitAllVariants emits e under every profile, with and without a key, and
+// returns the encoded lines by variant name.
+func emitAllVariants(t *testing.T, e *event.Event) map[string]string {
+	t.Helper()
+	res := map[string]string{}
+	for _, prof := range Profiles {
+		for _, key := range [][]byte{nil, testKey} {
+			out, _, ok := (&Policy{Profile: prof, Key: key}).Emit(e)
+			if !ok {
+				continue
+			}
+			res[string(prof)+map[bool]string{true: "/key", false: "/nokey"}[key != nil]] = line(t, out)
+		}
+	}
+	return res
+}
+
+func findingFor(session string) *event.Event {
+	d := activity(event.TypeDetectionFinding)
+	d.Kind = event.KindDetection
+	d.ID = "det-cov"
+	d.Session.ID = session
+	d.Detection = &event.Detection{RuleID: "R1", Title: "t", Severity: "high"}
+	return d
+}
+
+// TestRedactCommandCoverage (review P1): a secret placed after the point
+// where any structural view stops seeing the line must not be emitted.
+// Before the fix the word lexer stopped at 65,536 tokens and the rest of
+// the line was copied out verbatim, shellx stopped recording after 2,048
+// commands, the syntax-blind view skipped lines over 64 KiB, and MaxField
+// kept the TAIL of the command: the password shipped in every profile,
+// including the minimal-profile detection and context records.
+func TestRedactCommandCoverage(t *testing.T) {
+	cases := map[string]struct{ cmd, pw string }{
+		"lexer token cap":                {strings.Repeat("true\n", 32768) + "mysql -u root -pSommerZQ2026x -h db prod", "SommerZQ2026x"},
+		"shellx command cap, variable":   {strings.Repeat("a;", 2100) + "P=SommerVar77; mysql -p$P db", "SommerVar77"},
+		"shellx command cap, decoded":    {strings.Repeat("a;", 2100) + "echo " + b64("mysql -pSommerB64x db") + " | base64 -d | sh", b64("mysql -pSommerB64x db")},
+		"shellx command cap, eval":       {strings.Repeat("true\n", 3000) + `eval "$(printf 'mysql -p%s' SommerEval1)"`, "SommerEval1"},
+		"over 64 KiB, unbalanced quote":  {`echo "` + strings.Repeat("y ", 40000) + ` P=SommerQuote1; mysql -p$P`, "SommerQuote1"},
+		"many quoted values then nested": {strings.Repeat("echo 'x y'\n", 3000) + `watch "P=SommerWatch1; mysql -p\$P"`, "SommerWatch1"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			start := time.Now()
+			out, pre := redactCommand(c.cmd, "")
+			if d := time.Since(start); d > 5*time.Second {
+				t.Errorf("took %v", d)
+			}
+			if strings.Contains(out, c.pw) {
+				t.Fatalf("redactCommand leaked %q", c.pw)
+			}
+			if !pre || !strings.HasSuffix(out, "B]") || !strings.Contains(out, truncOpen) {
+				t.Errorf("a cut line must report precapped and end in a truncation marker (pre=%v): ...%s", pre, out[max(0, len(out)-80):])
+			}
+			for v, l := range emitAllVariants(t, shellEvent(c.cmd)) {
+				if strings.Contains(l, c.pw) {
+					t.Errorf("Emit %s: secret after the coverage horizon leaked", v)
+				}
+			}
+			e := shellEvent(c.cmd)
+			for _, ctx := range (&Policy{}).Context([]*event.Event{e, findingFor(e.Session.ID)}, 5) {
+				if strings.Contains(line(t, ctx), c.pw) {
+					t.Error("minimal context (shipped) leaked")
+				}
+			}
+			d := findingFor(e.Session.ID)
+			d.Target = &event.Target{Command: c.cmd}
+			if out, ship, _ := (&Policy{}).Emit(d); !ship || strings.Contains(line(t, out), c.pw) {
+				t.Errorf("minimal detection record: ship=%v, leaked=%v", ship, strings.Contains(line(t, out), c.pw))
+			}
+		})
+	}
+}
+
+// TestRedactCommandCoverageKeepsOrdinaryLines: the coverage cut must not
+// fire on ordinary long commands (a heredoc script of a few hundred lines).
+func TestRedactCommandCoverageKeepsOrdinaryLines(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("cat > build.sh <<'EOF'\n")
+	for i := 0; i < 400; i++ {
+		fmt.Fprintf(&b, "go build -o bin/tool%d ./cmd/tool%d && echo built %d\n", i, i, i)
+	}
+	b.WriteString("EOF\nbash build.sh | tee build.log")
+	in := b.String()
+	out, pre := redactCommand(in, "")
+	if pre || out != in {
+		t.Errorf("ordinary %d-byte script changed (precapped=%v): %d bytes out", len(in), pre, len(out))
+	}
+}
+
+// TestLexStop: the lexer reports where its token cap stopped it, and
+// cover() shortens the line to what every view saw.
+func TestLexStop(t *testing.T) {
+	in := strings.Repeat("a;", maxTokens) // 2 tokens per 2 bytes
+	toks, stop := lexStop(in, shellx.Posix)
+	if len(toks) != maxTokens || stop != maxTokens {
+		t.Fatalf("tokens %d stop %d, want %d and %d", len(toks), stop, maxTokens, maxTokens)
+	}
+	if _, stop := lexStop("mysql -pX db", shellx.Posix); stop != -1 {
+		t.Errorf("complete lex reports stop %d", stop)
+	}
+	_, r := cover(in, shellx.Posix)
+	if r.lexStop != -1 || len(r.src) >= len(in) || r.fail {
+		t.Errorf("cover: lexStop %d, len %d of %d, fail %v", r.lexStop, len(r.src), len(in), r.fail)
 	}
 }

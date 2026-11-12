@@ -92,6 +92,7 @@ func benchPipeline(b *testing.B, mode string, out sink.Sink) (*Pipeline, *fakeCl
 	if err != nil {
 		b.Fatal(err)
 	}
+	b.Logf("default rule set: %d rules (%s)", set.Count(), set.Version())
 	clk := newClock()
 	cfg := config.Default(b.TempDir())
 	p, err := New(Options{

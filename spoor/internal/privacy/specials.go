@@ -8,8 +8,10 @@ import (
 )
 
 // Multi-word redaction rules: secrets whose position is defined by more
-// than one argument vector (a pipeline feeding a --password-stdin consumer)
-// or by syntax RedactArgs does not see (PowerShell "$x = 'v'").
+// than one argument vector (a pipeline feeding a --password-stdin consumer
+// or sudo -S, echo into a credential file), by another argument (a printf
+// format that says "password=%s"), or by syntax RedactArgs does not see
+// (PowerShell "$x = 'v'", Set-Item env:X, [Environment]::...).
 
 // stdinNames are flag names (without leading dashes) that make a program
 // read a credential from standard input.
@@ -217,8 +219,10 @@ func (r *cmdRedactor) redactFeeders(si int, kind string, content bool) {
 		case feederProgs[prog]:
 			r.redactPrinted(f.words[1:], prog, kind, content)
 			return
-		case r.d == shellx.PowerShell && r.literalsOnly(f.words):
-			// PowerShell: "'text' | Out-File x" pipes a bare literal.
+		case (r.d == shellx.PowerShell || content) && r.literalsOnly(f.words):
+			// PowerShell: "'text' | Out-File x" pipes a bare literal. Into a
+			// credential file the literal is content whatever the dialect
+			// guess said.
 			for _, i := range f.words {
 				r.redactWhole(i, kind)
 			}
@@ -304,7 +308,9 @@ func (r *cmdRedactor) writesCredentialFile(s segment, argv []string) bool {
 		return false
 	}
 	prog := progName(argv[k])
-	if prog != "tee" && !(r.d == shellx.PowerShell && psWriters[prog]) {
+	if prog != "tee" && !psWriters[prog] {
+		// The cmdlet names are distinctive enough to need no dialect
+		// guess, which a one-line cmdlet call can miss.
 		return false
 	}
 	for _, a := range argv[k+1:] {
@@ -346,7 +352,7 @@ func (r *cmdRedactor) redactWritten(si int, argv []string) {
 	switch {
 	case feederProgs[prog]:
 		r.redactPrinted(s.words[k+1:], prog, kind, true)
-	case r.d == shellx.PowerShell && psWriters[prog]:
+	case psWriters[prog]:
 		// Set-Content [-Path] P [-Value] V: everything but the path and
 		// the parameter names is content.
 		path := false

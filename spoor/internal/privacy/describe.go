@@ -29,7 +29,12 @@ func (p *Policy) Describe() []string {
 	if s.profile == ProfileFull {
 		add("Never leaves this machine in any profile: values of detected credentials (or any unkeyed fingerprint of them), the path of the agent's session transcript, and anything from excluded sessions.")
 	} else {
-		add("Never leaves this machine in this profile: values of detected credentials (or any unkeyed fingerprint of them), prompt text, tool output (except the first %d bytes of a failed tool's error message, redacted), file contents being written, the path of the agent's session transcript, and anything from excluded sessions.", maxErrStd)
+		add("Never leaves this machine in this profile: values of detected credentials (or any unkeyed fingerprint of them), prompt text, tool output (except at most the first %d bytes of a failed tool's error message, redacted), the content of files the agent writes with its file tools, the path of the agent's session transcript, and anything from excluded sessions.", maxErrStd)
+		when := "it ships with the command"
+		if s.profile == ProfileMinimal {
+			when = "when a command is shipped with a finding, that text goes with it"
+		}
+		add("Text a shell command writes into a file (a heredoc, echo or printf) is part of the command line: %s. Credentials are removed from it by pattern and by position, and all of it is removed when the target is a credential file (.netrc, .pgpass, .env, cloud, Docker, Kubernetes, Git and package-manager credentials, private keys).", when)
 	}
 	add("Paths under your home directory are shown as ~/... .")
 	if s.key != nil {

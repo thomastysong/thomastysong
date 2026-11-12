@@ -68,7 +68,7 @@ func TestCrashSafetyPerDialect(t *testing.T) {
 		limit time.Duration
 	}{
 		{"observe", cfgObserve, false, 400 * time.Millisecond},
-		{"guard", cfgGuard, true, time.Second},
+		{"guard", cfgGuardCrash, true, time.Second},
 	}
 	for _, m := range modes {
 		for _, d := range dialects {
@@ -116,7 +116,7 @@ func TestWorkerBinaryMissing(t *testing.T) {
 		for _, d := range dialects {
 			cfg := cfgObserve
 			if guard {
-				cfg = cfgGuard
+				cfg = cfgGuardCrash
 			}
 			s := newSandbox(t, cfg)
 			env := OSEnv()

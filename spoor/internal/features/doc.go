@@ -15,18 +15,31 @@
 // shell.install_entries, which are []map[string]any and are read only by
 // the any_command / any_install quantifiers of the rule language. Lists are
 // de-duplicated, keep first-seen order (class lists are sorted) and hold at
-// most 64 entries. A field that does not apply to an event is absent, not
+// most 512 entries (shell.argv 4096, shell.cmds 4096 commands of up to 1024
+// arguments). A field that does not apply to an event is absent, not
 // empty: an empty list or string is never stored. Booleans of a family are
 // all present (true or false) whenever the family applies, so a rule can
 // say "shell.sudo: false" for a shell event.
 //
+// # Truncation is never silent
+//
+// Every cap is at least the cap of the analyzer feeding it, so a list is
+// cut here only when several analyses were merged or an analyzer already
+// stopped. A cut keeps the first and the last half of the entries (a
+// payload appended after padding sits at the end), and every feature whose
+// value is incomplete for any reason (a cut here, an analyzer that stopped
+// early, a command line or argument walk seen only in part) is named in
+// content.truncated_fields; an incomplete shell feature also sets
+// shell.truncated. The rule engine fails closed on them: in_list ("every
+// element is listed") does not hold on an incomplete list, and an operator
+// suppression does not match one.
+//
 // # Shell (target.command of any tool that carries one, process.exec argv)
 //
 // From shellx.Analyze: shell.parse_ok, shell.dialect, shell.truncated (the
-// analyzer hit a cap: rules should treat it as a signal in itself),
-// shell.commands ([]string of names), shell.argv (every literal argument,
-// capped at 256 x 1 KiB), shell.cmds ({name, path, args, origin, dynamic}
-// per command), shell.urls, shell.hosts, shell.host_classes, shell.reads,
+// analyzer or a shell list hit a cap: rules should treat it as a signal in
+// itself), shell.commands ([]string of names), shell.argv (every literal
+// argument), shell.cmds ({name, path, args, origin, dynamic} per command), shell.urls, shell.hosts, shell.host_classes, shell.reads,
 // shell.writes, shell.deletes, shell.read_classes, shell.write_classes,
 // shell.delete_classes (classify.PathClasses with the session cwd),
 // shell.interpreters, shell.inline_langs, shell.downloads,
@@ -69,16 +82,23 @@
 // (content written to a control file that makes an agent or IDE run
 // something or widens permissions), write.autorun_kinds (hook_command,
 // always_apply, folder_open_task, mcp_server, permission_escalation,
-// base_url_override, hooks_disabled, sandbox_disabled), write.exec_keys (git
-// exec-sink keys written to a git config: core.fsmonitor, core.sshcommand,
-// alias.shell, filter.clean ...); output.markers, output.hidden_unicode,
+// base_url_override, hooks_disabled, sandbox_disabled; mcp_server comes
+// from decoding the file with internal/mcpconf, which knows every agent's
+// server key, and needs at least one entry that declares something to
+// launch), write.exec_keys (git exec-sink keys written to a git config:
+// core.fsmonitor, core.sshcommand, core.askpass, alias.shell, filter.clean,
+// credential.helper (an absolute program) ...); output.markers, output.hidden_unicode,
 // output.secret_kinds, output.untrusted (the result of a web fetch or
 // search, an MCP or browser tool, a read under node_modules, vendor,
 // Downloads or tmp, `gh issue|pr view`, `gh api`, or a shell download) and
-// output.untrusted_source. Package-registry fetches do not set
-// output.untrusted. content.truncated_scan is set when a value over 128 KiB
-// was scanned head 64 KiB + tail 64 KiB only; content.analyzer_error when an
-// analyzer failed (the features are then incomplete, never wrong).
+// output.untrusted_source. Every web fetch sets output.untrusted, package
+// registries and CDNs included (they serve whatever their publishers
+// upload); rules discount trusted hosts visibly, through net.host,
+// net.host_classes or a list. content.truncated_scan is set when a value
+// over 128 KiB was scanned head 64 KiB + tail 64 KiB only;
+// content.analyzer_error when an analyzer failed (the features are then
+// incomplete, never wrong); content.truncated_fields names incomplete
+// features (see above).
 //
 // # MCP calls
 //
@@ -92,8 +112,9 @@
 // session.first_event, session.runs_written_file and
 // session.written_exec_path (write-then-run across events),
 // session.secret_flow and session.secret_flow_kinds (a value read from a
-// credential-class path leaves in a later command, URL or MCP argument), and
-// host.tags. They are in the registry so rules referencing them lint clean.
+// credential-class path leaves in a later command, URL or MCP argument),
+// session.secret_flow_truncated (that outbound data was too large to scan
+// whole), and host.tags. They are in the registry so rules referencing them lint clean.
 //
 // # Limits
 //

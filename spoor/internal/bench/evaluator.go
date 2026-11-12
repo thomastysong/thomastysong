@@ -44,8 +44,9 @@ type RulesOptions struct {
 
 // RulesEvaluator runs internal/features and internal/rules directly. Its
 // clock follows the events: the engine's Now is the timestamp of the
-// event being evaluated, so flag lifetimes and threshold windows behave
-// as they did when the session was live, however fast the replay runs.
+// event being evaluated (never earlier than the previous one), so flag
+// lifetimes and threshold windows behave as they did when the session was
+// live, however fast the replay runs.
 type RulesEvaluator struct {
 	mu    sync.Mutex
 	eng   *rules.Engine
@@ -84,9 +85,15 @@ func (r *RulesEvaluator) Eval(ev *event.Event) []*event.Event {
 		return nil
 	}
 	r.mu.Lock()
-	if !ev.TS.IsZero() && ev.TS.Time.After(r.clock) {
-		r.clock = ev.TS.Time
+	// The clock only moves forward, by at least a microsecond per event:
+	// parallel agent threads write records in the same millisecond, and two
+	// matches at the same instant would fall inside even the bench's
+	// one-nanosecond dedup window.
+	next := r.clock.Add(time.Microsecond)
+	if !ev.TS.IsZero() && ev.TS.Time.After(next) {
+		next = ev.TS.Time
 	}
+	r.clock = next
 	r.mu.Unlock()
 	return r.eng.Eval(ev).Detections
 }

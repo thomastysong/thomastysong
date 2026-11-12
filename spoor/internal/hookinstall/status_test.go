@@ -355,6 +355,12 @@ func TestStatusCodexMDM(t *testing.T) {
 			if !strings.Contains(p.Note, "MDM profile for com.openai.codex is installed") {
 				t.Errorf("darwin: plan note: %s", p.Note)
 			}
+			o.OTel = "http://127.0.0.1:4319"
+			for _, p := range mustPlan(t, c, o) {
+				if strings.HasSuffix(p.Path, "config.toml") && !strings.Contains(p.Note, "may set [otel]") {
+					t.Errorf("darwin: otel plan note: %s", p.Note)
+				}
+			}
 		}
 	}
 }

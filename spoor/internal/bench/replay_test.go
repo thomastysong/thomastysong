@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -25,6 +26,16 @@ func transcriptLines(session string, cmds ...string) string {
 		ts++
 	}
 	return b.String()
+}
+
+// owner is the account the test files belong to: transcript.ReadFile
+// refuses logs owned by anyone other than the user they are read for.
+func owner() event.User {
+	u := event.User{Name: "tester"}
+	if id := os.Getuid(); id >= 0 {
+		u.ID = strconv.Itoa(id)
+	}
+	return u
 }
 
 func itoa2(i int) string {
@@ -60,7 +71,7 @@ func writeCorpus(t *testing.T) string {
 func TestReplay(t *testing.T) {
 	root := writeCorpus(t)
 	r := testRunner(t)
-	o := ReplayOptions{Roots: []string{root}, Home: "/home/tester", User: event.User{Name: "tester", ID: "1000"}, Corpus: "unit"}
+	o := ReplayOptions{Roots: []string{root}, Home: "/home/tester", User: owner(), Corpus: "unit", Aliases: []Alias{{From: "https://x.example", To: "$X"}}}
 	rep, err := r.Replay(context.Background(), o)
 	if err != nil {
 		t.Fatal(err)
@@ -78,6 +89,9 @@ func TestReplay(t *testing.T) {
 	}
 	if len(exec.Samples) != 2 || exec.Labels["unlabelled"] != 2 {
 		t.Errorf("samples %+v labels %v", exec.Samples, exec.Labels)
+	}
+	if !strings.Contains(exec.Samples[0].Summary, "$X/p") {
+		t.Errorf("alias not applied: %q", exec.Samples[0].Summary)
 	}
 	md := rep.Markdown(nil)
 	if strings.Contains(md, replayToken) {
@@ -128,23 +142,30 @@ func TestReplayErrors(t *testing.T) {
 		t.Error("unknown format accepted")
 	}
 	root := writeCorpus(t)
-	if _, err := r.Replay(ctx, ReplayOptions{Roots: []string{root}, MaxFiles: 1}); err == nil {
+	if _, err := r.Replay(ctx, ReplayOptions{Roots: []string{root}, MaxFiles: 1, User: owner()}); err == nil {
 		t.Error("file cap not enforced")
 	}
 	cctx, cancel := context.WithCancel(ctx)
 	cancel()
-	if _, err := r.Replay(cctx, ReplayOptions{Roots: []string{root}}); err == nil {
+	if _, err := r.Replay(cctx, ReplayOptions{Roots: []string{root}, User: owner()}); err == nil {
 		t.Error("cancelled replay returned no error")
 	}
 	// A hostile file (not JSON, overlong, binary) is reported, not fatal.
 	bad := filepath.Join(root, "-work-repo", "bad.jsonl")
 	os.WriteFile(bad, []byte("\xff\xfe{not json\n"+strings.Repeat("x", 1<<20)+"\n"), 0o600)
-	rep, err := r.Replay(ctx, ReplayOptions{Roots: []string{root}})
+	rep, err := r.Replay(ctx, ReplayOptions{Roots: []string{root}, User: owner()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if rep.Stats.Files != 3 {
-		t.Errorf("files %d", rep.Stats.Files)
+		t.Errorf("files %d (problems %v)", rep.Stats.Files, rep.Problems)
+	}
+	// Logs owned by another account are refused and reported.
+	if os.Getuid() >= 0 {
+		rep, err := r.Replay(ctx, ReplayOptions{Roots: []string{root}, User: event.User{Name: "x", ID: "4242"}})
+		if err != nil || rep.Stats.Files != 0 || rep.Stats.Unread != 3 || len(rep.Problems) == 0 {
+			t.Errorf("foreign-owned logs: %v %+v", err, rep.Stats)
+		}
 	}
 }
 

@@ -60,6 +60,9 @@ func coexistProblem(t target, o Options, cur fileState, rel related, n *notes, n
 
 // installNotes states the side effects and limits of the hook tier.
 func installNotes(t target, o Options, rel related, n *notes) {
+	for _, u := range rel.unread {
+		n.add("not checked for other sensors, policy or telemetry: " + u)
+	}
 	if o.FailClosed {
 		switch {
 		case !o.Guard:

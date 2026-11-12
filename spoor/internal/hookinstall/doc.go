@@ -55,12 +55,22 @@
 // byte offsets and the new entries are spliced in, so unknown keys, key
 // order, number spelling and formatting outside the touched arrays survive
 // byte for byte, and removing what was added gives the original bytes back
-// (property-tested and fuzzed). A file with comments or trailing commas
-// (JSONC) is reported as unsupported unless Options.Force is set; with
-// Force the same splice keeps the comments. A file that is not valid JSON or
-// TOML is never rewritten. Known limit: an empty "hooks" object or event
-// array that existed before install cannot be told apart from one spoor
-// created, and uninstall removes it (which means the same to every agent).
+// (property-tested and fuzzed). Removal parses the file once and applies
+// every removal to a model of the containers involved, so its cost is
+// linear in the file whatever number of entries it holds. A file with
+// comments or trailing commas (JSONC) is reported as unsupported unless
+// Options.Force is set; with Force the same splice keeps the comments,
+// including a comment that is all an object or array holds (such a
+// container is kept, emptied, on uninstall). A repeated key is resolved the
+// way the agents resolve it, last one wins: spoor entries under an earlier
+// "PreToolUse" that a later one hides do not count as installed, and
+// install and uninstall remove them. A file that is not valid JSON or TOML
+// is never rewritten. TOML is refused before it reaches the decoder when it
+// is larger than 128 KiB or nested more than 16 levels (brackets, dotted
+// keys and table headers together): the decoder's cost grows with both.
+// Known limit: an empty "hooks" object or event array that existed before
+// install cannot be told apart from one spoor created, and uninstall
+// removes it (which means the same to every agent).
 //
 // Uninstall deletes a file only when spoor's entries were all it held: an
 // own drop-in, or a file left in exactly the state spoor creates it in. The
@@ -76,16 +86,41 @@
 // (or, for an unprivileged caller, the caller itself) made it and never
 // below a host root; pins the final directory with an os.Root; and re-checks
 // that the file still holds the bytes the plan was computed from (ErrChanged
-// otherwise). When root edits a user's file it keeps the user as owner and
-// refuses a file owned by a third uid. Each write is a temporary file plus a
-// rename, the previous bytes are kept as <name>.spoor-<UTC time>.bak, new
-// files get mode 0644 and new directories 0755, and an existing file keeps
-// its mode (a settings file may hold credentials). Managed files and the
-// directories between the system anchor (/etc, /Library/Application Support,
-// ProgramData, Program Files) and the file are made root/Administrators
-// owned and not group- or world-writable, repairing a directory a standard
-// user pre-created; Status reports insecure_permissions otherwise, and a
-// reinstall rewrites the file to repair it.
+// otherwise). Every file read, the target and the files consulted beside it
+// (managed settings, drop-in siblings, requirements, MDM profiles), goes
+// through the same walk, so a link inside a container or a user's
+// directory never makes this process read another tree; every directory on
+// the way must be readable by the caller.
+//
+// When root edits a user's file it keeps the user as owner and refuses a
+// file owned by a third uid or with more than one hard link (a link the
+// user made to any other file; such a file is not read into the plan
+// either). The user owns the directory and can swap any name in it for a
+// hard link, which os.Root does not stop, so mode and owner of the new
+// file and of the backup are set on the open descriptor, never by name.
+// Each write is a temporary file plus a rename, the previous bytes are kept
+// as <name>.spoor-<UTC time>.bak, new files get mode 0644 and new
+// directories 0755, and an existing file keeps its mode (a settings file
+// may hold credentials).
+//
+// Managed files and the directories between the system anchor (/etc,
+// /Library/Application Support, ProgramData, Program Files) and the file
+// are made root/Administrators owned and not group- or world-writable,
+// repairing a directory a standard user pre-created. So are the other files
+// the agent loads from those directories (Codex hooks.json, config.toml and
+// requirements.toml beside each other, Claude Code managed-settings.json,
+// managed-settings.d/*.json, managed-mcp.json and CLAUDE.md, Copilot
+// policy.d/*.json, Gemini CLI system-defaults.json), because a standard
+// user who pre-created the directory may have planted one: the plan names
+// each such file (its content was written by a non-admin and needs review),
+// and one that is a link or has several hard links is reported, not
+// touched. Every change is made through a handle checked against what was
+// examined: on unix an O_NOFOLLOW descriptor compared with lstat; on
+// Windows a handle opened relative to the pinned directory with
+// FILE_OPEN_REPARSE_POINT and OBJ_DONT_REPARSE, and SetKernelObjectSecurity
+// on it, which resolves no path again and propagates nothing to existing
+// children. Status reports insecure_permissions while any of these can be
+// changed by a non-admin, and a reinstall rewrites the file to repair it.
 //
 // # Status
 //
@@ -94,8 +129,14 @@
 // higher-ranked source makes the agent ignore the file (Claude Code MDM
 // profile or HKLM policy under the default managedSourcesBehavior
 // "first-wins"; allowManagedHooksOnly or allow_managed_hooks_only against
-// user hooks), and Detail says what was checked and what cannot be seen from
-// disk (server-managed settings, Codex cloud requirements, per-user trust).
+// user hooks) or a switch turns every hook off (Claude Code disableAllHooks
+// in the managed settings, the only level that reaches managed hooks, or in
+// the user's own file for user hooks; Gemini CLI hooksConfig.enabled false,
+// the system settings outranking the user's). Detail says what was checked
+// and what cannot be seen from disk (server-managed settings, Codex cloud
+// requirements, project settings, per-user trust). On macOS the Codex MDM
+// profile (com.openai.codex under /Library/Managed Preferences) is looked
+// for and its presence reported; its content is not parsed.
 //
 // # Not supported (reported, never silently skipped)
 //
@@ -110,9 +151,20 @@
 //     preToolUse hook that cannot start denies the tool call.
 //   - Native OTel settings are written only when Options.OTel is set, only
 //     for Claude Code, Codex and Gemini CLI, and are refused (a separate
-//     unsupported Plan) when a telemetry destination is already configured.
+//     unsupported Plan) when a telemetry destination is already configured:
+//     in the file, in the managed settings, or for Codex user scope in the
+//     system requirements.toml or config.toml. So that uninstall removes
+//     only what install added, every member spoor writes must be absent
+//     beforehand, except the owner's choices of Claude Code
+//     OTEL_LOG_TOOL_DETAILS and Gemini logPrompts (kept as they are) and
+//     the shared switch CLAUDE_CODE_ENABLE_TELEMETRY. Uninstall leaves that
+//     switch in place while another OTEL_*_EXPORTER in env still needs it.
+//     Known limit: a switch the user had set before install with nothing
+//     using it, or OTEL_LOG_TOOL_DETAILS "1" / logPrompts false set before
+//     install, is indistinguishable from spoor's and is removed too.
 //   - A binary path containing '$' or '`' (agents substitute placeholders
-//     before any shell sees the command), or a backslash on unix.
+//     before any shell sees the command), a backslash on unix, or bytes
+//     that are not valid UTF-8 (JSON and TOML would carry U+FFFD instead).
 //   - Higher-ranked policy sources that are not files (Claude Code
 //     server-managed settings, Codex cloud requirements, MDM payloads on
 //     another OS) cannot be seen from disk. Status says what it checked.

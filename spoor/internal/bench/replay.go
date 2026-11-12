@@ -46,7 +46,13 @@ type ReplayOptions struct {
 	MaxLine  int
 	// Corpus names the corpus in the report (a path or a snapshot name).
 	Corpus string
+	// Aliases shorten long machine-specific prefixes in rendered samples
+	// (a scratch directory to "$S"), longest prefix first.
+	Aliases []Alias
 }
+
+// Alias replaces From with To in rendered sample text.
+type Alias struct{ From, To string }
 
 // CorpusStats describes what a replay read.
 type CorpusStats struct {
@@ -289,6 +295,9 @@ func (r *Runner) Replay(ctx context.Context, o ReplayOptions) (*ReplayReport, er
 			row.Hits = len(a.hits)
 			row.Threads = len(a.threads)
 			row.Samples, row.Labels = sampleHits(id, a.hits, byEventID, labels, o.Samples)
+			for i := range row.Samples {
+				row.Samples[i].Summary = applyAliases(row.Samples[i].Summary, o.Aliases)
+			}
 		}
 		if st.ToolCalls > 0 {
 			row.Per1k = 1000 * float64(row.Hits) / float64(st.ToolCalls)
@@ -445,6 +454,17 @@ func summarizeEvent(ev *event.Event) string {
 		return cleanText("target.host=" + ev.Target.Host)
 	}
 	return ""
+}
+
+func applyAliases(s string, as []Alias) string {
+	sorted := append([]Alias(nil), as...)
+	sort.SliceStable(sorted, func(i, j int) bool { return len(sorted[i].From) > len(sorted[j].From) })
+	for _, a := range sorted {
+		if a.From != "" {
+			s = strings.ReplaceAll(s, a.From, a.To)
+		}
+	}
+	return s
 }
 
 func cleanText(s string) string {

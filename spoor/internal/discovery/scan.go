@@ -121,6 +121,14 @@ func ScanProject(ctx context.Context, dir string, u platform.UserHome, o Options
 	defer s.g.close()
 	uc := s.userCtx(u)
 	s.users = []*userCtx{uc}
+	if withinLogical(dir, uc.home, s.goos) {
+		// A session started in the home (or above it): the files there are
+		// the user's own configuration, which Scan reports as user scope.
+		// Reading them again as a project would report every one of them a
+		// second time, as project scope and under another id.
+		s.led.note("project directory is the user's home or contains it; not scanned as a project: " + dir)
+		return s.finish(false), nil
+	}
 	s.g.allowPath(dir)
 	s.scanProject(uc, dir)
 	return s.finish(false), nil
@@ -258,6 +266,7 @@ func (s *scanner) containerUsers() []platform.UserHome {
 }
 
 func (s *scanner) scanSystem() {
+	defer s.g.scope("machine-wide scan", maxEntries, maxHashBytes)()
 	s.led.root()
 	s.detectSystem()
 	s.scanManagedFacts()
@@ -266,8 +275,11 @@ func (s *scanner) scanSystem() {
 }
 
 func (s *scanner) scanUser(uc *userCtx) {
+	// Each home has its own budget: one that exhausts it starves only
+	// itself, not the users scanned after it.
+	defer s.g.scope("home "+uc.home, maxEntries, maxHashBytes)()
 	s.led.root()
-	if !s.g.isDir(loc{root: uc.home, user: true, home: true}) {
+	if !s.g.isDir(loc{root: uc.home, user: true, home: true, uid: uc.u.UID}) {
 		s.led.denied()
 		s.led.note("home not accessible: " + uc.home)
 		s.homeDenied = true
@@ -299,8 +311,9 @@ func (s *scanner) scanProject(uc *userCtx, dir string) {
 		return
 	}
 	s.projSeen[key] = true
+	defer s.g.scope("project "+dir, maxProjectEntries, maxProjectHash)()
 	s.led.root()
-	if !s.g.isDir(loc{root: dir, user: true}) {
+	if !s.g.isDir(projectRoot(dir, uc)) {
 		s.led.note("project directory not accessible: " + dir)
 		return
 	}

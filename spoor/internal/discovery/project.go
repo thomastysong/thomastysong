@@ -471,7 +471,9 @@ func workspacePath(v string) bool {
 
 // workspaces checks *.code-workspace files at the project root.
 func (ps *pcSet) workspaces() {
-	ents, err := ps.s.g.readDir(loc{root: ps.dir, user: true})
+	// Listed without an owner check, like in mcpSites: only owner-checked
+	// reads follow.
+	ents, err := ps.s.g.readDir(loc{root: cleanLogical(ps.dir), user: true})
 	if err != nil {
 		return
 	}

@@ -159,6 +159,7 @@ func planCodexOTel(t target, o Options, m mode, rel related) *Plan {
 	blk := otelBlock(ep, nl)
 	if !cur.exists {
 		p.Action, p.After = ActionCreate, []byte(blk)
+		p.Note = codexMDMOTelNote(o)
 		return p
 	}
 	if _, err := parseTOML(cur.data); err != nil {
@@ -191,5 +192,19 @@ func planCodexOTel(t target, o Options, m mode, rel related) *Plan {
 	if t.scope == event.ScopeUser {
 		p.Note = ""
 	}
+	p.Note = joinNonEmpty(p.Note, codexMDMOTelNote(o))
 	return p
+}
+
+// codexMDMOTelNote warns that a macOS MDM profile for Codex, whose content
+// is not parsed, may carry configuration (config_toml_base64) with its own
+// [otel], which outranks config.toml.
+func codexMDMOTelNote(o Options) string {
+	if o.GOOS != "darwin" {
+		return ""
+	}
+	if hits, _ := mdmProfiles(o, codexMDMDomain); len(hits) > 0 {
+		return "the MDM profile " + hits[0] + " may set [otel] for Codex, which would win over this block (its content was not parsed)"
+	}
+	return ""
 }

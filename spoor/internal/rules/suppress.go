@@ -14,8 +14,14 @@ type Suppression struct {
 	// RuleID is a rule id or a glob over rule ids ("SPR-NET-*", "*").
 	RuleID string `json:"rule"`
 	// Match maps field names (as in Fields) to globs; every entry must
-	// match. For a list field any element may match. "*" matches any
-	// sequence, "?" one character; matching is case-sensitive.
+	// match. "*" matches any sequence, "?" one character; matching is
+	// case-sensitive. On a list field EVERY element must match, so an
+	// exception written for a trusted destination cannot be bought by
+	// adding one trusted host or path next to an untrusted one; write the
+	// key as "field|any" to accept a list when any one element matches.
+	// A list the feature pass recorded as incomplete
+	// (content.truncated_fields) never matches. A key with any other
+	// "|modifier" never matches.
 	Match map[string]string `json:"match,omitempty"`
 	// Expires ends the exception; zero means it never expires.
 	Expires time.Time `json:"expires,omitzero"`
@@ -35,8 +41,16 @@ func (s *Suppression) applies(ruleID string, fields map[string]any, now time.Tim
 	if len(s.Tags) > 0 && !intersects(s.Tags, hostTags) {
 		return false
 	}
-	for field, pat := range s.Match {
-		if !fieldGlob(fields[field], pat) {
+	for key, pat := range s.Match {
+		field, mod, _ := strings.Cut(key, "|")
+		if mod != "" && mod != "any" {
+			return false
+		}
+		v := fields[field]
+		if _, isList := v.([]string); isList && incomplete(fields, field) {
+			return false
+		}
+		if !fieldGlob(v, pat, mod == "any") {
 			return false
 		}
 	}
@@ -54,17 +68,23 @@ func intersects(a, b []string) bool {
 	return false
 }
 
-func fieldGlob(v any, pat string) bool {
+// fieldGlob matches one field value: a string, bool or number by its text,
+// a list when every element matches (one: when any one does). An empty
+// value never matches.
+func fieldGlob(v any, pat string, one bool) bool {
 	switch t := v.(type) {
 	case string:
 		return t != "" && glob(pat, t)
 	case []string:
+		if len(t) == 0 {
+			return false
+		}
 		for _, s := range t {
-			if glob(pat, s) {
-				return true
+			if glob(pat, s) == one {
+				return one
 			}
 		}
-		return false
+		return !one
 	case bool:
 		return glob(pat, strconv.FormatBool(t))
 	case float64:
@@ -87,12 +107,14 @@ func glob(pat, s string) bool {
 	star, mark := -1, 0
 	for i < len(s) {
 		switch {
-		case p < len(pat) && (pat[p] == '?' || pat[p] == s[i]):
-			p++
-			i++
+		// A '*' in the pattern is always a wildcard, also where the text
+		// holds a literal '*' at the same position.
 		case p < len(pat) && pat[p] == '*':
 			star, mark = p, i
 			p++
+		case p < len(pat) && (pat[p] == '?' || pat[p] == s[i]):
+			p++
+			i++
 		case star >= 0:
 			p = star + 1
 			mark++

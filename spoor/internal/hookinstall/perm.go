@@ -147,7 +147,7 @@ func managedProblems(t target, o Options) []permProblem {
 			return
 		}
 		if why := writableByOthers(p, fi); why != "" {
-			fixable := fi.Mode().IsRegular() && linkCount(fi) == 1
+			fixable := fi.IsDir() || (fi.Mode().IsRegular() && linkCount(fi) == 1)
 			out = append(out, permProblem{path: p, why: why, sibling: sibling, fixable: fixable})
 		}
 	}
@@ -173,7 +173,20 @@ func managedProblems(t target, o Options) []permProblem {
 
 // insecureManaged describes the first few problems, or returns "".
 func insecureManaged(t target, o Options) string {
-	ps := managedProblems(t, o)
+	return describeProblems(managedProblems(t, o))
+}
+
+// fixableProblems reports whether Apply can repair at least one problem.
+func fixableProblems(ps []permProblem) bool {
+	for _, p := range ps {
+		if p.fixable {
+			return true
+		}
+	}
+	return false
+}
+
+func describeProblems(ps []permProblem) string {
 	if len(ps) > 4 {
 		ps = ps[:4]
 	}

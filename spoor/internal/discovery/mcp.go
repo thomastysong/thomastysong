@@ -67,8 +67,11 @@ func (s *scanner) mcpSites(uc *userCtx, project string) []*mcpSite {
 		}
 	}
 	if project != "" {
-		// .code-workspace files carry MCP servers under "settings".
-		if ents, err := s.g.readDir(loc{root: project, user: true}); err == nil {
+		// .code-workspace files carry MCP servers under "settings". The
+		// project root is listed without an owner check (a project may live
+		// in a shared directory such as /tmp): its names are only used to
+		// open files, and each open checks the owner.
+		if ents, err := s.g.readDir(loc{root: cleanLogical(project), user: true}); err == nil {
 			for _, e := range ents {
 				if e.kind == kindRegular && strings.HasSuffix(strings.ToLower(e.name), ".code-workspace") {
 					f := joinLogical(project, e.name)

@@ -15,19 +15,23 @@ import (
 
 // Gate limits. Every input below comes from a tree the scanned user
 // controls, so each bound exists to keep one hostile home from exhausting
-// the scan for everybody else.
+// the scan for everybody else. The entry and hash budgets are per scope:
+// the machine-wide pass, each home and each project start with their own
+// (see gate.scope), so a home that spends its budget starves only itself.
 const (
-	maxConfigBytes  = 20 << 20 // largest config file parsed
-	maxTextBytes    = 1 << 20  // text read for content scans (classify.ScanText reads 1 MiB)
-	maxEntries      = 200_000  // directory entries listed per scan
-	maxChildren     = 5_000    // entries listed per directory; larger fan-outs are skipped
-	maxWalkDepth    = 8        // recursion depth of ** globs and tree walks
-	maxGlobMatches  = 10_000   // results per glob
-	maxHashBytes    = 1 << 30  // bytes hashed per scan (skill and plugin folder hashes)
-	maxTreeFiles    = 10_000   // files in one hashed tree
-	maxTreeBytes    = 100 << 20
-	maxTreeFileSize = 20 << 20
-	maxCacheBytes   = 64 << 20 // file bytes kept for re-use within one scan
+	maxConfigBytes    = 20 << 20  // largest config file parsed
+	maxTextBytes      = 1 << 20   // text read for content scans (classify.ScanText reads 1 MiB)
+	maxEntries        = 200_000   // directory entries listed per home (and machine-wide)
+	maxProjectEntries = 50_000    // directory entries listed per project
+	maxChildren       = 5_000     // entries listed per directory; larger fan-outs are skipped
+	maxWalkDepth      = 8         // recursion depth of ** globs and tree walks
+	maxGlobMatches    = 10_000    // results per glob
+	maxHashBytes      = 1 << 30   // bytes hashed per home (skill and plugin folder hashes)
+	maxProjectHash    = 256 << 20 // bytes hashed per project
+	maxTreeFiles      = 10_000    // files in one hashed tree
+	maxTreeBytes      = 100 << 20
+	maxTreeFileSize   = 20 << 20
+	maxCacheBytes     = 64 << 20 // file bytes kept for re-use within one scan
 )
 
 // Gate refusals. They are counted in the ledger by class: errDenied-like
@@ -77,6 +81,10 @@ type loc struct {
 	rel  string // cleaned, slash-separated, no "..", "" for root itself
 	home bool   // root is a user's home: personal-directory refusal applies
 	user bool   // root belongs to the scanned user (home or project): owner checks apply
+	// uid is the owner a listed directory must have when the scan is
+	// privileged ("" for system locations). Files are checked against the
+	// owner their reader passes; directory listings against this.
+	uid string
 }
 
 func (l loc) String() string {
@@ -115,6 +123,7 @@ type gate struct {
 	mu        sync.Mutex
 	entries   int
 	hashLeft  int64
+	scopeName string // what the current budget belongs to, for notes
 	allow     []string
 	cache     map[string]cachedFile
 	cacheSize int64
@@ -134,8 +143,24 @@ func newGate(ctx context.Context, led *ledger, hostRoot string, priv bool, goos 
 	}
 	return &gate{
 		ctx: ctx, led: led, op: op, priv: priv, goos: goos, hostRoot: hostRoot,
-		entries: maxEntries, hashLeft: maxHashBytes, cache: map[string]cachedFile{},
+		entries: maxEntries, hashLeft: maxHashBytes, scopeName: "machine-wide scan", cache: map[string]cachedFile{},
 	}, nil
+}
+
+// scope gives the work that follows its own directory-entry and hashing
+// budget (a home, a project) and returns the function that restores the
+// enclosing scope's budget. Scans are sequential, so scopes nest like
+// calls: a user's projects are scanned inside the user's scope.
+func (g *gate) scope(name string, entries int, hash int64) (restore func()) {
+	g.mu.Lock()
+	prevE, prevH, prevN := g.entries, g.hashLeft, g.scopeName
+	g.entries, g.hashLeft, g.scopeName = entries, hash, name
+	g.mu.Unlock()
+	return func() {
+		g.mu.Lock()
+		g.entries, g.hashLeft, g.scopeName = prevE, prevH, prevN
+		g.mu.Unlock()
+	}
 }
 
 func (g *gate) close() { g.op.close() }
@@ -418,18 +443,27 @@ func (g *gate) readDir(l loc) ([]dentry, error) {
 	}
 	f, err := g.op.openDir(l.root, l.rel)
 	if err != nil {
-		if errors.Is(err, errSymlink) {
-			// A linked directory is common (dotfile managers) and is not an
-			// error; it is simply not followed.
-			g.led.skipped()
-			return nil, err
-		}
 		if !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, errNotDir) {
+			// A linked directory is common (dotfile managers) and is not an
+			// error; it is not followed, and counted as skipped.
 			g.account(l, err)
 		}
 		return nil, err
 	}
 	defer f.Close()
+	// A listing names what is inside: when privileged, a directory in a
+	// user's tree is listed only if it belongs to that user, exactly as a
+	// file there is read only if it does (another user's skill names are
+	// not this user's assets). The check is on the open descriptor.
+	if g.priv && l.uid != "" {
+		fi, err := f.Stat()
+		if err != nil {
+			return nil, g.account(l, err)
+		}
+		if err := g.checkOwner(l, metaOf(fi), l.uid); err != nil {
+			return nil, g.account(l, err)
+		}
+	}
 	ents, err := f.ReadDir(maxChildren + 1)
 	if err != nil && err != io.EOF {
 		return nil, g.account(l, err)
@@ -442,8 +476,9 @@ func (g *gate) readDir(l loc) ([]dentry, error) {
 	g.mu.Lock()
 	if g.entries < len(ents) {
 		g.entries = 0
+		name := g.scopeName
 		g.mu.Unlock()
-		g.led.truncate("directory entry budget exhausted")
+		g.led.truncate("directory entry budget exhausted for " + name)
 		return nil, errBudget
 	}
 	g.entries -= len(ents)
@@ -459,7 +494,7 @@ func (g *gate) readDir(l loc) ([]dentry, error) {
 	return out, nil
 }
 
-// takeHash reserves n bytes of the per-scan hashing budget.
+// takeHash reserves n bytes of the current scope's hashing budget.
 func (g *gate) takeHash(n int64) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()

@@ -13,11 +13,25 @@ import (
 
 // Decoder limits. Config files are user-writable and often repository
 // supplied; recursive parsers must not see unbounded nesting (a stack
-// overflow in Go is fatal, not a recoverable panic).
+// overflow in Go is fatal, not a recoverable panic), and no decoder may
+// turn a small file into a large tree.
 const (
-	maxNesting  = 64
-	maxYAMLSize = 2 << 20
-	maxNodes    = 200_000
+	maxNesting = 64
+	// maxTOMLKeyParts bounds the parts of one dotted TOML key or table
+	// header: the TOML decoder's memory is quadratic in it.
+	maxTOMLKeyParts = 32
+	// maxDocValues bounds the values in one JSON or TOML document. A
+	// decoded value costs 50-100 bytes, so 20 MiB of "[],[],..." would
+	// otherwise cost about a gigabyte; a multi-megabyte ~/.claude.json
+	// holds a few hundred thousand values.
+	maxDocValues = 2_000_000
+	maxYAMLSize  = 2 << 20
+	// maxYAMLNodes and maxYAMLBytes bound a YAML document as it is once
+	// aliases are followed (values, and scalar bytes); maxYAMLDepth bounds
+	// its height. Agent configs and workflows are far below all three.
+	maxYAMLNodes = 200_000
+	maxYAMLBytes = 8 << 20
+	maxYAMLDepth = 512
 )
 
 var errNesting = errors.New("document nested too deeply")
@@ -39,7 +53,8 @@ func syntaxOf(name string) string {
 // decodeDoc parses a config file into generic values: map[string]any,
 // []any, string, float64/int64, bool, nil. JSON accepts comments and
 // trailing commas (JSONC), since VS Code family and Claude settings allow
-// them in practice. It never panics.
+// them in practice. It never panics, and every syntax is measured before
+// a recursive decoder sees it.
 func decodeDoc(data []byte, syntax string) (doc any, err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -50,37 +65,25 @@ func decodeDoc(data []byte, syntax string) (doc any, err error) {
 	if len(bytes.TrimSpace(data)) == 0 {
 		return nil, nil
 	}
-	if nestingDepth(data, syntax) > maxNesting {
-		return nil, errNesting
-	}
 	switch syntax {
 	case "toml":
+		if reason := tomlGuard(data); reason != "" {
+			return nil, errors.New("toml " + reason)
+		}
 		var m map[string]any
 		if _, err := toml.Decode(string(data), &m); err != nil {
 			return nil, errors.New("malformed toml")
 		}
 		return normalize(m, 0), nil
 	case "yaml":
-		if len(data) > maxYAMLSize {
-			return nil, errTooLarge
-		}
-		var n yaml.Node
-		if err := yaml.Unmarshal(data, &n); err != nil {
-			return nil, errors.New("malformed yaml")
-		}
-		count := 0
-		if !yamlSafe(&n, 0, &count) {
-			return nil, errors.New("yaml aliases or excessive nesting refused")
-		}
-		var v any
-		if err := n.Decode(&v); err != nil {
-			return nil, errors.New("malformed yaml")
-		}
-		return normalize(v, 0), nil
+		return decodeYAML(data)
 	case "plist":
 		return parsePlist(data)
 	default:
 		clean := stripJSONC(data)
+		if reason := jsonGuard(clean); reason != "" {
+			return nil, errors.New("json " + reason)
+		}
 		dec := json.NewDecoder(bytes.NewReader(clean))
 		dec.UseNumber()
 		var v any
@@ -91,21 +94,105 @@ func decodeDoc(data []byte, syntax string) (doc any, err error) {
 	}
 }
 
-// yamlSafe rejects aliases (billion-laughs expansion) and deep trees.
-func yamlSafe(n *yaml.Node, depth int, count *int) bool {
-	*count++
-	if depth > maxNesting || *count > maxNodes {
-		return false
+func decodeYAML(data []byte) (any, error) {
+	if len(data) > maxYAMLSize {
+		return nil, errTooLarge
 	}
-	if n.Kind == yaml.AliasNode || n.Anchor != "" {
-		return false
-	}
-	for _, c := range n.Content {
-		if !yamlSafe(c, depth+1, count) {
-			return false
+	// A yaml.Node costs about 200 bytes, so the size of the tree is bounded
+	// before it is built: every YAML value is introduced by a line start or
+	// one of a few indicator bytes, and counting those bounds the node count
+	// from above. (yaml.v3 itself limits flow and indentation depth to
+	// 10,000 while parsing.)
+	indicators := 0
+	for _, c := range data {
+		switch c {
+		case '\n', ',', ':', '[', '{', '-', '?':
+			indicators++
 		}
 	}
-	return true
+	if indicators > maxYAMLNodes {
+		return nil, errors.New("yaml has too many values")
+	}
+	// Parsing into a Node tree keeps aliases as pointers, so the document
+	// can be measured before anything is expanded.
+	var n yaml.Node
+	if err := yaml.Unmarshal(data, &n); err != nil {
+		return nil, errors.New("malformed yaml")
+	}
+	if reason := yamlGuard(&n); reason != "" {
+		return nil, errors.New("yaml " + reason)
+	}
+	var v any
+	if err := n.Decode(&v); err != nil {
+		return nil, errors.New("malformed yaml")
+	}
+	return normalize(v, 0), nil
+}
+
+type yamlMeasure struct{ size, height, bytes int }
+
+// yamlGuard measures a document as it will be once aliases are followed,
+// and returns "" when it may be decoded or the reason it may not.
+// Anchors and aliases are ordinary YAML (GitHub Actions accepts them in
+// workflows), so they are measured, not refused: what is bounded is the
+// expansion. One budget applies to the number of values, the scalar bytes
+// and the height of the expanded tree, which covers both the "billion
+// laughs" fan-out and anchors that wrap an alias to the previous anchor
+// (a nesting of tens of thousands of levels for the recursive decoder).
+// The walk never descends into an alias target: targets precede their
+// aliases, so their measure is already known.
+// Ported from internal/mcpconf (yamlGuard), which this package may not
+// change.
+func yamlGuard(doc *yaml.Node) string {
+	memo := make(map[*yaml.Node]yamlMeasure)
+	open := make(map[*yaml.Node]bool)
+	bad := ""
+	var walk func(n *yaml.Node, depth int) yamlMeasure
+	walk = func(n *yaml.Node, depth int) yamlMeasure {
+		if n == nil || bad != "" {
+			return yamlMeasure{}
+		}
+		if depth > maxYAMLDepth {
+			bad = "too deeply nested"
+			return yamlMeasure{}
+		}
+		if n.Kind == yaml.AliasNode {
+			m, ok := memo[n.Alias]
+			if !ok || open[n.Alias] {
+				bad = "malformed" // alias to an enclosing or unknown node
+				return yamlMeasure{}
+			}
+			return m
+		}
+		if n.Anchor != "" {
+			open[n] = true
+		}
+		m := yamlMeasure{size: 1, bytes: len(n.Value)}
+		for _, c := range n.Content {
+			cm := walk(c, depth+1)
+			m.size += cm.size
+			m.bytes += cm.bytes
+			if cm.height+1 > m.height {
+				m.height = cm.height + 1
+			}
+			switch {
+			case m.size > maxYAMLNodes || m.bytes > maxYAMLBytes:
+				bad = "has too many values"
+			case m.height > maxYAMLDepth:
+				bad = "too deeply nested"
+			}
+			if bad != "" {
+				return yamlMeasure{}
+			}
+		}
+		if n.Anchor != "" {
+			delete(open, n)
+			memo[n] = m
+		}
+		return m
+	}
+	walk(doc, 0)
+	return bad
 }
 
 // normalize converts decoder-specific shapes into the generic set and
@@ -149,62 +236,182 @@ func normalize(v any, depth int) any {
 	return v
 }
 
-// nestingDepth measures bracket nesting outside strings. For YAML it also
-// counts indentation levels coarsely (every two spaces), which bounds block
-// nesting as well as flow nesting.
-func nestingDepth(data []byte, syntax string) int {
-	depth, max := 0, 0
-	inStr := byte(0)
-	esc := false
-	for _, c := range data {
-		if inStr != 0 {
-			if esc {
+// jsonGuard measures comment-free JSON (the output of stripJSONC) before
+// it is decoded: nesting depth and the number of values. encoding/json
+// has its own depth limit (10,000); this one is far lower, and the value
+// count bounds the decoded tree's memory.
+func jsonGuard(clean []byte) string {
+	depth, values := 0, 0
+	inStr, esc := false, false
+	for _, c := range clean {
+		if inStr {
+			switch {
+			case esc:
 				esc = false
-			} else if c == '\\' && inStr == '"' {
+			case c == '\\':
 				esc = true
-			} else if c == inStr {
-				inStr = 0
-			} else if c == '\n' && syntax != "json" {
-				inStr = 0
+			case c == '"':
+				inStr = false
 			}
 			continue
 		}
 		switch c {
 		case '"':
-			inStr = '"'
-		case '\'':
-			if syntax != "json" {
-				inStr = '\''
-			}
+			inStr = true
 		case '[', '{':
 			depth++
-			if depth > max {
-				max = depth
+			values++
+			if depth > maxNesting {
+				return "too deeply nested"
 			}
 		case ']', '}':
 			if depth > 0 {
 				depth--
 			}
+		case ',':
+			values++
+		}
+		if values > maxDocValues {
+			return "has too many values"
 		}
 	}
-	if syntax == "yaml" {
-		indent := 0
-		lineStart := true
-		for _, c := range data {
-			switch {
-			case c == '\n':
-				lineStart, indent = true, 0
-			case lineStart && (c == ' ' || c == '-'):
-				indent++
-				if indent/2 > max {
-					max = indent / 2
+	return ""
+}
+
+// tomlGuard returns "" when the TOML decoder can be trusted with text, or
+// the reason it cannot.
+//
+// The decoder (BurntSushi/toml) has two failure modes that no recover can
+// catch. It recurses once per nesting level without a limit, so a few MiB
+// of "[" overflow the stack and kill the process; and its memory use is
+// quadratic in the number of parts of a dotted key, so an 8 KiB key of
+// 4000 parts allocates over 600 MiB. Both are measured here first, by a
+// scanner that follows TOML's string and comment rules exactly (a
+// multi-line string may hold newlines and up to two quotes before its
+// delimiter, a literal string has no escapes). Exactness matters in one
+// direction only: wherever this scanner believes it is inside a string, a
+// comment or a value, the real lexer must either agree or have already
+// rejected the file.
+// Ported from internal/mcpconf (tomlGuard), which this package may not
+// change.
+func tomlGuard(text []byte) string {
+	var (
+		stack  [maxNesting]byte
+		depth  int
+		keyPos = true // reading a key: line start at top level, or inside an inline table
+		header bool   // inside a [table] or [[array-of-tables]] header
+		dots   int
+		values int
+	)
+	n := len(text)
+	for i := 0; i < n; i++ {
+		c := text[i]
+		switch c {
+		case '#':
+			for i < n && text[i] != '\n' {
+				i++
+			}
+			i-- // let the newline be seen
+		case '"', '\'':
+			i = skipTOMLString(text, i)
+		case '\n':
+			if depth == 0 {
+				keyPos, header, dots = true, false, 0
+			}
+		case '=':
+			if keyPos && !header {
+				keyPos = false
+				values++
+			}
+		case '.':
+			if keyPos {
+				dots++
+				if dots >= maxTOMLKeyParts {
+					return "key has too many parts"
 				}
-			default:
-				lineStart = false
+			}
+		case '[', '{':
+			if c == '[' && keyPos && depth == 0 {
+				header = true
+				continue
+			}
+			if header {
+				continue
+			}
+			if depth >= maxNesting {
+				return "too deeply nested"
+			}
+			stack[depth] = c
+			depth++
+			values++
+			if c == '{' {
+				keyPos, dots = true, 0
+			}
+		case ']', '}':
+			if header {
+				continue
+			}
+			if depth > 0 {
+				depth--
+			}
+			keyPos = false
+		case ',':
+			values++
+			if depth > 0 && stack[depth-1] == '{' {
+				keyPos, dots = true, 0
 			}
 		}
+		if values > maxDocValues {
+			return "has too many values"
+		}
 	}
-	return max
+	return ""
+}
+
+// skipTOMLString returns the index of the last byte of the string that opens
+// at text[i]. An unterminated single-line string ends at its newline: the
+// decoder rejects the file at that point, so what follows is never parsed.
+func skipTOMLString(text []byte, i int) int {
+	q := text[i]
+	n := len(text)
+	basic := q == '"' // only basic strings have backslash escapes
+	if i+2 < n && text[i+1] == q && text[i+2] == q {
+		j := i + 3
+		for j < n {
+			c := text[j]
+			if basic && c == '\\' {
+				j += 2
+				continue
+			}
+			if c == q && j+2 < n && text[j+1] == q && text[j+2] == q {
+				j += 2
+				// Up to two more quotes directly before the delimiter are
+				// content ("""a""""" is `a""`), so a run of up to five closes.
+				for k := 0; k < 2 && j+1 < n && text[j+1] == q; k++ {
+					j++
+				}
+				return j
+			}
+			j++
+		}
+		return n
+	}
+	j := i + 1
+	for j < n {
+		c := text[j]
+		if c == '\n' {
+			return j - 1 // the caller still has to see the newline
+		}
+		if basic && c == '\\' {
+			j += 2
+			continue
+		}
+		if c == q {
+			return j
+		}
+		j++
+	}
+	return n
 }
 
 // stripJSONC removes // and /* */ comments and trailing commas outside

@@ -978,3 +978,23 @@ func TestRelatedFilesStayInRoot(t *testing.T) {
 		}
 	}
 }
+
+// TestUnreadableRelatedFileIsReported: a related file that exists but
+// cannot be parsed (here: nested beyond the TOML bound) may register
+// another sensor or forbid user hooks; the plan and Status say it was not
+// checked instead of passing over it.
+func TestUnreadableRelatedFileIsReported(t *testing.T) {
+	c := testCatalog(t)
+	o := opts(t, "linux", event.ScopeUser, "codex")
+	req := filepath.Join(o.Root, "etc", "codex", "requirements.toml")
+	writeFile(t, req, []byte("allow_managed_hooks_only = true\nx = "+strings.Repeat("[", 40)+strings.Repeat("]", 40)+"\n"), 0o644)
+	plans := mustPlan(t, c, o)
+	p := only(t, plans, "codex")
+	if !strings.Contains(p.Note, "not checked") || !strings.Contains(p.Note, req) {
+		t.Errorf("plan note: %s", p.Note)
+	}
+	mustApply(t, plans)
+	if s := stateOf(t, c, o, "codex"); !strings.Contains(s.Detail, req) {
+		t.Errorf("status detail: %s", s.Detail)
+	}
+}

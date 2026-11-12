@@ -265,6 +265,7 @@ func (e *Engine) evaluate(ev *event.Event, fired map[string]bool) (res Result) {
 	if isActivity(ev) {
 		skey = SessionKey(ev)
 		st = e.session(skey, now)
+		e.mergePending(st, ev)
 		e.updateSession(st, ev, now)
 	}
 	fields := features.Fields(ev)
@@ -272,10 +273,7 @@ func (e *Engine) evaluate(ev *event.Event, fired map[string]bool) (res Result) {
 		fields["host.tags"] = append([]string(nil), e.o.HostTags...)
 	}
 	cands := e.candidates(ev)
-	thread := ""
-	if ev.Session != nil {
-		thread = ev.Session.SubagentID
-	}
+	thread := threadOf(ev)
 	ctx := &evalCtx{lists: e.lists, missingList: func(string) { e.missingLists.Add(1) }}
 	var vis, visAll map[string]flagEntry
 	type pending struct {
@@ -344,7 +342,7 @@ func (e *Engine) evaluate(ev *event.Event, fired map[string]bool) (res Result) {
 			fired[r.ID] = true
 		}
 		if len(r.setFlags) > 0 && st != nil {
-			sets = append(sets, pending{r: r, evs: ev.ID})
+			sets = append(sets, pending{r: r, evs: stateRef(ev.ID)})
 		}
 		if e.flagOnly[r.ID] {
 			continue
@@ -471,8 +469,8 @@ func (e *Engine) updateSession(st *sessionState, ev *event.Event, now time.Time)
 		st.last = now
 	}
 	useID := ""
-	if ev.Tool != nil {
-		useID = ev.Tool.UseID
+	if ev.Tool != nil && ev.Tool.UseID != "" {
+		useID = stateRef(ev.Tool.UseID)
 	}
 	switch ev.Type {
 	case event.TypeToolPre:
@@ -513,19 +511,16 @@ func (e *Engine) updateSession(st *sessionState, ev *event.Event, now time.Time)
 		}
 	}
 
-	if kinds, checked := st.secretFlow(ev); checked {
+	if kinds, checked, truncated := st.secretFlow(ev); checked {
 		f["session.secret_flow"] = len(kinds) > 0
 		if len(kinds) > 0 {
 			f["session.secret_flow_kinds"] = kinds
 		}
+		f["session.secret_flow_truncated"] = truncated
 	}
 	st.captureSecrets(ev)
 
-	thread := ""
-	if ev.Session != nil {
-		thread = ev.Session.SubagentID
-	}
-	if names := st.flagNames(thread); len(names) > 0 {
+	if names := st.flagNames(threadOf(ev)); len(names) > 0 {
 		f["session.flags"] = names
 	} else {
 		delete(f, "session.flags")
@@ -534,6 +529,62 @@ func (e *Engine) updateSession(st *sessionState, ev *event.Event, now time.Time)
 	f["session.prompts"] = float64(st.prompts)
 	f["session.age_s"] = now.Sub(st.created).Seconds()
 	f["session.first_event"] = first
+}
+
+// threadOf returns the flag-store thread of ev: its subagent id in
+// stateRef form ("" for the main thread).
+func threadOf(ev *event.Event) string {
+	if ev.Session == nil || ev.Session.SubagentID == "" {
+		return ""
+	}
+	return stateRef(ev.Session.SubagentID)
+}
+
+// scopedKey is the scoped-store key of a per-user or per-host counter.
+func scopedKey(rule, by string, ev *event.Event) string {
+	key := rule + "\x00" + by + "\x00"
+	switch by {
+	case ByUser:
+		if ev.User != nil {
+			key += ev.User.ID
+		}
+	case ByHost:
+		if ev.Host != nil {
+			key += ev.Host.ID
+		}
+	default:
+		key += SessionKey(ev)
+	}
+	return key
+}
+
+// mergePending binds per-user and per-host threshold counters imported
+// with the session to the user and host its current event names, merging
+// them with what this engine already counted.
+func (e *Engine) mergePending(st *sessionState, ev *event.Event) {
+	if len(st.pending) == 0 {
+		return
+	}
+	for name, hs := range st.pending {
+		i := strings.LastIndexByte(name, '/')
+		rule, by := name[:i], name[i+1:]
+		key := scopedKey(rule, by, ev)
+		merged := append(append([]hit(nil), e.scoped.get(key)...), hs...)
+		sort.SliceStable(merged, func(a, b int) bool { return merged[a].t.Before(merged[b].t) })
+		out := merged[:0]
+		for j, h := range merged {
+			if j > 0 && h.t.Equal(merged[j-1].t) && h.ev == merged[j-1].ev {
+				continue
+			}
+			out = append(out, h)
+		}
+		if len(out) > maxThreshold {
+			out = out[len(out)-maxThreshold:]
+		}
+		e.scoped.put(key, out)
+		st.noteScoped(rule, by, key)
+	}
+	st.pending = nil
 }
 
 // thresholdHit records a match for a threshold rule and reports whether the
@@ -560,21 +611,12 @@ func (e *Engine) thresholdHit(r *rule, ev *event.Event, st *sessionState, now ti
 			st.counters[r.ID] = h
 		}
 	default:
-		key := r.ID + "\x00" + th.by + "\x00"
-		switch th.by {
-		case ByUser:
-			if ev.User != nil {
-				key += ev.User.ID
-			}
-		case ByHost:
-			if ev.Host != nil {
-				key += ev.Host.ID
-			}
-		default:
-			key += SessionKey(ev)
-		}
+		key := scopedKey(r.ID, th.by, ev)
 		hits = e.scoped.get(key)
 		store = func(h []hit) { e.scoped.put(key, h) }
+		if st != nil && (th.by == ByUser || th.by == ByHost) {
+			st.noteScoped(r.ID, th.by, key)
+		}
 	}
 	if th.window > 0 {
 		cut := 0
@@ -583,12 +625,13 @@ func (e *Engine) thresholdHit(r *rule, ev *event.Event, st *sessionState, now ti
 		}
 		hits = hits[cut:]
 	}
-	hits = append(append([]hit(nil), hits...), hit{t: now, ev: ev.ID})
+	hits = append(append([]hit(nil), hits...), hit{t: now, ev: stateRef(ev.ID)})
 	if len(hits) > th.count {
 		hits = hits[len(hits)-th.count:]
 	}
 	if len(hits) >= th.count {
 		store(nil)
+		hits[len(hits)-1].ev = ev.ID // the detection names the triggering event as it is
 		return true, hits
 	}
 	store(hits)
@@ -680,7 +723,18 @@ func (e *Engine) ExportSession(key string) ([]byte, bool) {
 	if st == nil {
 		return nil, false
 	}
-	b, err := marshalBounded(st.export())
+	x := st.export()
+	for _, ref := range st.scoped {
+		hs := e.scoped.peek(ref.key)
+		if len(hs) == 0 {
+			continue
+		}
+		if x.Scoped == nil {
+			x.Scoped = map[string][]exportHit{}
+		}
+		x.Scoped[scopedName(ref.rule, ref.by)] = exportHits(hs)
+	}
+	b, err := marshalBounded(x)
 	if err != nil {
 		return nil, false
 	}
@@ -724,6 +778,14 @@ func newScopedCounters(max int) *scopedCounters {
 func (s *scopedCounters) get(key string) []hit {
 	if el, ok := s.items[key]; ok {
 		s.lru.MoveToFront(el)
+		return el.Value.(*scopedEntry).hits
+	}
+	return nil
+}
+
+// peek returns the hits of key without changing its recency.
+func (s *scopedCounters) peek(key string) []hit {
+	if el, ok := s.items[key]; ok {
 		return el.Value.(*scopedEntry).hits
 	}
 	return nil

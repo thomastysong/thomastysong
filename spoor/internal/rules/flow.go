@@ -28,10 +28,21 @@ import (
 const (
 	minSecretValue  = 8
 	maxSecretValue  = 4096
-	maxFlowCands    = 4096
-	maxFlowText     = 256 << 10
+	maxSecretText   = 256 << 10 // secret-file output read for values: head and tail half each
 	maxEnvLines     = 4096
 	minValueEntropy = 3.0
+)
+
+// Bounds of the outbound scan. Every outbound string is scanned, shortest
+// first, so a padding string sorts after the short value it is meant to
+// hide; a string over flowTextScan is scanned on its head and tail. Hitting
+// any bound sets session.secret_flow_truncated, so a padded request is
+// never silently clean.
+const (
+	flowTextScan = 64 << 10 // longer strings: head and tail flowTextScan/2 each
+	maxFlowBytes = 1 << 20  // bytes scanned per event
+	maxFlowCands = 1 << 17  // distinct candidate strings per event
+	maxFlowTexts = 1024     // MCP argument strings per event
 )
 
 var envLine = regexp.MustCompile(`^\s*(?:export\s+)?"?([A-Za-z_][A-Za-z0-9_.\-]{0,127})"?\s*[:=]\s*(.*?)\s*,?\s*$`)
@@ -56,8 +67,8 @@ type secretValue struct{ v, kind string }
 // or whose value looks machine generated (dotenv files, INI credential
 // files, JSON key files).
 func secretValues(text string) []secretValue {
-	if len(text) > maxFlowText {
-		text = text[:maxFlowText]
+	if len(text) > maxSecretText {
+		text = cutHead(text, maxSecretText/2) + "\n" + cutTail(text, maxSecretText/2)
 	}
 	var out []secretValue
 	seen := map[string]bool{}
@@ -136,14 +147,15 @@ func (s *sessionState) captureSecrets(ev *event.Event) {
 	}
 	fp := s.fingerprinter()
 	for _, sv := range secretValues(ev.Content.ToolOutput) {
-		s.addSecret(fp(sv.v), sv.kind)
+		s.addSecret(fp(sv.v), sv.kind, len(sv.v))
 	}
 }
 
 // outboundTexts returns the strings of the event that leave the machine:
 // the command line of a shell command that contacts the network, the URL
-// and query of a web tool, and every string argument of an MCP call.
-func outboundTexts(ev *event.Event) []string {
+// and query of a web tool, and every string argument of an MCP call; and
+// whether the argument walk stopped at a bound.
+func outboundTexts(ev *event.Event) ([]string, bool) {
 	f := ev.Feat
 	var out []string
 	kind := event.ToolKind("")
@@ -159,30 +171,43 @@ func outboundTexts(ev *event.Event) []string {
 			out = append(out, t.Command)
 		}
 	}
+	cut := false
 	switch kind {
 	case event.ToolWebFetch, event.ToolWebSearch, event.ToolBrowser:
 		if t := ev.Target; t != nil {
 			out = append(out, t.URL, t.Query)
 		}
-		out = append(out, inputStrings(ev, 256)...)
+		var in []string
+		in, cut = inputStrings(ev, maxFlowTexts)
+		out = append(out, in...)
 	case event.ToolMCP:
-		out = append(out, inputStrings(ev, 1024)...)
+		var in []string
+		in, cut = inputStrings(ev, maxFlowTexts)
+		out = append(out, in...)
 	}
-	return out
+	return out, cut
 }
 
-func inputStrings(ev *event.Event, limit int) []string {
+// inputStrings returns up to limit string values of the tool input (depth
+// 8), and whether it left any out.
+func inputStrings(ev *event.Event, limit int) ([]string, bool) {
 	if ev.Content == nil || len(ev.Content.ToolInput) == 0 {
-		return nil
+		return nil, false
 	}
 	var out []string
+	cut := false
 	var walk func(v any, depth int)
 	walk = func(v any, depth int) {
-		if depth > 8 || len(out) >= limit {
+		if depth > 8 {
+			cut = true
 			return
 		}
 		switch t := v.(type) {
 		case string:
+			if len(out) >= limit {
+				cut = true
+				return
+			}
 			out = append(out, t)
 		case map[string]any:
 			keys := make([]string, 0, len(t))
@@ -191,63 +216,127 @@ func inputStrings(ev *event.Event, limit int) []string {
 			}
 			sort.Strings(keys)
 			for _, k := range keys {
+				if len(out) >= limit {
+					cut = true
+					return
+				}
 				walk(t[k], depth+1)
 			}
 		case []any:
 			for _, x := range t {
+				if len(out) >= limit {
+					cut = true
+					return
+				}
 				walk(x, depth+1)
 			}
 		}
 	}
 	walk(ev.Content.ToolInput, 0)
-	return out
+	return out, cut
 }
 
 // secretFlow returns the kinds of remembered credential values that appear
-// in the event's outbound strings, and whether anything was checked.
-func (s *sessionState) secretFlow(ev *event.Event) (kinds []string, checked bool) {
+// in the event's outbound strings, whether anything was checked, and
+// whether the scan stopped at a bound (some outbound text was not seen).
+func (s *sessionState) secretFlow(ev *event.Event) (kinds []string, checked, truncated bool) {
 	if len(s.secrets) == 0 || len(s.salt) == 0 {
-		return nil, false
+		return nil, false, false
 	}
-	texts := outboundTexts(ev)
+	texts, truncated := outboundTexts(ev)
 	if len(texts) == 0 {
-		return nil, false
+		return nil, false, false
 	}
 	want := make(map[string]string, len(s.secrets))
-	for _, sc := range s.secrets {
-		want[sc.fp] = sc.kind
+	sc := &flowScan{budget: maxFlowCands, seen: map[string]bool{}, lens: map[int]bool{}}
+	for _, x := range s.secrets {
+		want[x.fp] = x.kind
+		if x.n > 0 {
+			sc.lens[x.n] = true
+		} else {
+			sc.anyLen = true // state from before lengths were recorded
+		}
 	}
 	found := map[string]bool{}
 	fp := s.fingerprinter()
-	budget := maxFlowCands
+	sc.match = func(c string) {
+		if k, ok := want[fp(c)]; ok {
+			found[k] = true
+		}
+	}
+	// Shortest first: a value hidden behind a long padding string is
+	// reached before the padding spends the byte budget.
+	sort.SliceStable(texts, func(i, j int) bool { return len(texts[i]) < len(texts[j]) })
 	total := 0
+scan:
 	for _, t := range texts {
 		if t == "" {
 			continue
 		}
-		total += len(t)
-		if total > maxFlowText {
-			break
+		parts := []string{t}
+		if len(t) > flowTextScan {
+			parts = []string{cutHead(t, flowTextScan/2), cutTail(t, flowTextScan/2)}
+			truncated = true
 		}
-		flowCandidates(t, &budget, func(c string) {
-			if k, ok := want[fp(c)]; ok {
-				found[k] = true
+		for _, p := range parts {
+			if total+len(p) > maxFlowBytes {
+				truncated = true
+				break scan
 			}
-		})
+			total += len(p)
+			flowCandidates(p, sc)
+		}
 	}
+	truncated = truncated || sc.exhausted
 	for k := range found {
 		kinds = append(kinds, k)
 	}
 	sort.Strings(kinds)
-	return kinds, true
+	return kinds, true, truncated
+}
+
+// cutHead returns at most n leading bytes of s without splitting a rune.
+func cutHead(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
+}
+
+// cutTail returns at most n trailing bytes of s without splitting a rune.
+func cutTail(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	i := len(s) - n
+	for i < len(s) && !utf8.RuneStart(s[i]) {
+		i++
+	}
+	return s[i:]
 }
 
 const coarseSep = " \t\r\n'\"`;|&<>(){}[],"
 
-// flowCandidates calls emit with every substring of text that could be a
-// whole credential value: tokens at three granularities, each also after
-// URL, base64 and hex decoding (one level).
-func flowCandidates(text string, budget *int, emit func(string)) {
+// flowScan carries the candidate budget of one event. A candidate is
+// fingerprinted only when its length is the length of a remembered value,
+// and each distinct candidate is considered once, so repeated or
+// wrong-length padding costs no fingerprints.
+type flowScan struct {
+	budget    int
+	seen      map[string]bool // candidate -> its decodings were tried
+	lens      map[int]bool
+	anyLen    bool
+	match     func(string)
+	exhausted bool
+}
+
+// flowCandidates considers every substring of text that could be a whole
+// credential value: tokens at three granularities, each also after URL,
+// base64 and hex decoding (one level).
+func flowCandidates(text string, sc *flowScan) {
 	versions := []string{text}
 	if strings.ContainsRune(text, '%') {
 		if d, err := url.QueryUnescape(text); err == nil && d != text {
@@ -256,14 +345,14 @@ func flowCandidates(text string, budget *int, emit func(string)) {
 	}
 	for _, v := range versions {
 		for _, tok := range strings.FieldsFunc(v, func(r rune) bool { return strings.ContainsRune(coarseSep, r) }) {
-			consider(tok, budget, emit, true)
+			sc.consider(tok, true)
 			for _, sub := range splitAny(tok, "=:&?@#") {
-				consider(sub, budget, emit, true)
+				sc.consider(sub, true)
 			}
 			for _, sub := range splitAny(tok, "=:&?@#/") {
-				consider(sub, budget, emit, true)
+				sc.consider(sub, true)
 			}
-			if *budget <= 0 {
+			if sc.exhausted {
 				return
 			}
 		}
@@ -277,19 +366,32 @@ func splitAny(s, seps string) []string {
 	return strings.FieldsFunc(s, func(r rune) bool { return strings.ContainsRune(seps, r) })
 }
 
-func consider(c string, budget *int, emit func(string), decode bool) {
-	if *budget <= 0 || len(c) < minSecretValue || len(c) > maxSecretValue {
+func (sc *flowScan) consider(c string, decode bool) {
+	if len(c) < minSecretValue || len(c) > maxSecretValue {
 		return
 	}
-	*budget--
-	emit(c)
+	tried, ok := sc.seen[c]
+	if ok && (tried || !decode) {
+		return
+	}
+	if !ok {
+		if sc.budget <= 0 {
+			sc.exhausted = true
+			return
+		}
+		sc.budget--
+		if sc.anyLen || sc.lens[len(c)] {
+			sc.match(c)
+		}
+	}
+	sc.seen[c] = decode
 	if !decode {
 		return
 	}
 	for _, d := range decodings(c) {
-		consider(strings.TrimSpace(d), budget, emit, false)
+		sc.consider(strings.TrimSpace(d), false)
 		for _, tok := range strings.FieldsFunc(d, func(r rune) bool { return strings.ContainsRune(coarseSep+"=:", r) }) {
-			consider(tok, budget, emit, false)
+			sc.consider(tok, false)
 		}
 	}
 }

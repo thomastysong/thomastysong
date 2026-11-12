@@ -68,8 +68,14 @@ var knownMods = map[string]bool{
 // textMods are the modifiers that match raw text. The linter forbids them
 // on target.command: shell rules must use parsed facts (measured on real
 // sessions, regexes over command text produced dozens of false hits from
-// heredocs and quoted prose that parsed-fact rules did not).
-var textMods = map[string]bool{modRe: true, modContains: true, modIContains: true, modStartsWith: true, modEndsWith: true}
+// heredocs and quoted prose that parsed-fact rules did not). The any_*
+// forms behave exactly like their plain forms on a string field, and list
+// entries may be "prefix*" globs, so they are text matching too.
+var textMods = map[string]bool{
+	modRe: true, modContains: true, modIContains: true, modStartsWith: true, modEndsWith: true,
+	modAnyRe: true, modAnyContains: true, modAnyStartsWith: true, modAnyEndsWith: true,
+	modInList: true, modAnyInList: true,
+}
 
 // leaf is "field|modifier: value".
 type leaf struct {
@@ -360,6 +366,25 @@ func validListName(s string) bool {
 type evalCtx struct {
 	lists       map[string]*namedList
 	missingList func(string)
+	// partial is set while evaluating inside any_command / any_install
+	// when the quantified feature is incomplete: list values of its
+	// entries may then be incomplete too.
+	partial bool
+}
+
+// truncatedField is the feature naming incomplete features
+// (features.Compute sets it whenever a cap was hit).
+const truncatedField = "content.truncated_fields"
+
+// incomplete reports whether fields records field as incomplete.
+func incomplete(fields map[string]any, field string) bool {
+	l, _ := fields[truncatedField].([]string)
+	for _, x := range l {
+		if x == field {
+			return true
+		}
+	}
+	return false
 }
 
 // eval evaluates n over fields. A missing field never matches, except
@@ -388,14 +413,28 @@ func (n *node) eval(fields map[string]any, c *evalCtx) bool {
 			key = "shell.install_entries"
 		}
 		items, _ := fields[key].([]map[string]any)
+		inner := c
+		if c != nil && !c.partial && incomplete(fields, key) {
+			cp := *c
+			cp.partial = true
+			inner = &cp
+		}
 		for _, it := range items {
-			if n.kids[0].eval(it, c) {
+			if n.kids[0].eval(it, inner) {
 				return true
 			}
 		}
 		return false
 	case nLeaf:
 		v, ok := fields[n.leaf.field]
+		if n.leaf.mod == modInList {
+			// "Every element is listed" cannot be shown for a list that
+			// lost entries to a cap: fail closed, so padding cannot push
+			// an unlisted host out of view behind listed ones.
+			if _, isList := v.([]string); isList && ((c != nil && c.partial) || incomplete(fields, n.leaf.field)) {
+				return false
+			}
+		}
 		return n.leaf.eval(v, ok, c)
 	}
 	return false

@@ -10,7 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/thomastysong/spoor/internal/event"
 )
@@ -26,9 +28,29 @@ const (
 	maxDedup           = 256 // dedup keys remembered
 	maxSessionCounters = 64  // per-rule threshold counters
 	maxRecentUse       = 32  // tool-use ids, to count a call once across pre and post
+	maxScopedRefs      = 64  // per-user / per-host threshold counters a session fed
 	maxExport          = 64 << 10
 	exportVersion      = 1
+	// maxRef is the longest id kept verbatim in session state: tool-use
+	// ids, subagent thread ids and the event ids recorded with flags and
+	// threshold hits. Longer ids, and ids that are not valid UTF-8, are
+	// kept as a digest (see stateRef), so whatever the engine stores it
+	// can export, and whatever it exports it imports.
+	maxRef = 64
 )
+
+// stateRef returns the form of an id the session state keeps: the id
+// itself when it is valid UTF-8 of at most maxRef bytes, otherwise "#"
+// and a 128-bit digest of it. JSON cannot carry invalid UTF-8 (it is
+// rewritten to U+FFFD, three bytes per bad byte), so such an id would not
+// survive an export.
+func stateRef(id string) string {
+	if len(id) <= maxRef && utf8.ValidString(id) {
+		return id
+	}
+	sum := sha256.Sum256([]byte(id))
+	return "#" + hex.EncodeToString(sum[:16])
+}
 
 // SessionKey returns the key the engine keeps state under: a hash of the
 // OS user id, the agent id and the session id (user and agent only when
@@ -76,7 +98,14 @@ type dedupEntry struct {
 	suppressed int
 }
 
-type secretFP struct{ fp, kind string }
+type secretFP struct {
+	fp, kind string
+	n        int // length of the value in bytes; 0 when unknown
+}
+
+// scopedRef names a per-user or per-host threshold counter (in the
+// engine's scoped store) that events of this session fed.
+type scopedRef struct{ rule, by, key string }
 
 // sessionState is everything the engine remembers about one session.
 type sessionState struct {
@@ -94,6 +123,12 @@ type sessionState struct {
 	secrets       []secretFP
 	counters      map[string][]hit
 	dedup         map[string]*dedupEntry
+	// scoped lists the per-user / per-host counters this session fed, so
+	// a one-shot hook process can carry them in its export; pending holds
+	// imported ones ("RULE/by" -> hits) until the next event of the
+	// session names the user or host they belong to.
+	scoped  []scopedRef
+	pending map[string][]hit
 }
 
 func newSession(key string, now time.Time) *sessionState {
@@ -222,6 +257,7 @@ func (s *sessionState) flagNames(thread string) []string {
 	return out
 }
 
+// seenUse and rememberUse take ids in their stateRef form.
 func (s *sessionState) seenUse(id string) bool {
 	for _, x := range s.recentUse {
 		if x == id {
@@ -263,7 +299,7 @@ func (s *sessionState) hasWritten(d string) bool {
 	return false
 }
 
-func (s *sessionState) addSecret(fp, kind string) {
+func (s *sessionState) addSecret(fp, kind string, n int) {
 	for _, x := range s.secrets {
 		if x.fp == fp {
 			return
@@ -272,7 +308,21 @@ func (s *sessionState) addSecret(fp, kind string) {
 	if len(s.secrets) >= maxSecretFPs {
 		s.secrets = s.secrets[1:]
 	}
-	s.secrets = append(s.secrets, secretFP{fp: fp, kind: kind})
+	s.secrets = append(s.secrets, secretFP{fp: fp, kind: kind, n: n})
+}
+
+// noteScoped records that this session fed the scoped counter key.
+func (s *sessionState) noteScoped(rule, by, key string) {
+	for i, x := range s.scoped {
+		if x.key == key {
+			s.scoped = append(append(s.scoped[:i:i], s.scoped[i+1:]...), x)
+			return
+		}
+	}
+	if len(s.scoped) >= maxScopedRefs {
+		s.scoped = s.scoped[1:]
+	}
+	s.scoped = append(s.scoped, scopedRef{rule: rule, by: by, key: key})
 }
 
 func (s *sessionState) putDedup(key string, e *dedupEntry) {
@@ -348,6 +398,11 @@ type exportState struct {
 	Secrets  []exportSecret                   `json:"s,omitempty"`
 	Counters map[string][]exportHit           `json:"t,omitempty"`
 	Dedup    map[string][2]int64              `json:"d,omitempty"`
+	// Scoped holds the per-user and per-host threshold counters the
+	// session fed, keyed "RULE-ID/user" or "RULE-ID/host". The user or
+	// host itself is not stored: on import they are bound to whoever the
+	// session's next event names.
+	Scoped map[string][]exportHit `json:"st,omitempty"`
 }
 
 type exportFlag struct {
@@ -359,6 +414,7 @@ type exportFlag struct {
 type exportSecret struct {
 	FP   string `json:"h"`
 	Kind string `json:"k"`
+	N    int    `json:"n,omitempty"`
 }
 
 type exportHit struct {
@@ -397,7 +453,7 @@ func (s *sessionState) export() exportState {
 		x.Salt = hex.EncodeToString(s.salt)
 	}
 	for _, sc := range s.secrets {
-		x.Secrets = append(x.Secrets, exportSecret{FP: sc.fp, Kind: sc.kind})
+		x.Secrets = append(x.Secrets, exportSecret{FP: sc.fp, Kind: sc.kind, N: sc.n})
 	}
 	if len(s.counters) > 0 {
 		x.Counters = map[string][]exportHit{}
@@ -415,8 +471,25 @@ func (s *sessionState) export() exportState {
 			x.Dedup[k] = [2]int64{ms(v.last), int64(v.suppressed)}
 		}
 	}
+	for k, hs := range s.pending {
+		if x.Scoped == nil {
+			x.Scoped = map[string][]exportHit{}
+		}
+		x.Scoped[k] = exportHits(hs)
+	}
 	return x
 }
+
+func exportHits(hits []hit) []exportHit {
+	hs := make([]exportHit, len(hits))
+	for i, h := range hits {
+		hs[i] = exportHit{T: ms(h.t), Ev: h.ev}
+	}
+	return hs
+}
+
+// scopedName is the export key of a scoped counter.
+func scopedName(rule, by string) string { return rule + "/" + by }
 
 // marshalBounded encodes the state and, if it exceeds maxExport, sheds the
 // least valuable state first (threshold history, then dedup memory, then
@@ -431,6 +504,14 @@ func marshalBounded(x exportState) ([]byte, error) {
 			return b, nil
 		}
 		switch {
+		case len(x.Scoped) > 0:
+			for k, hs := range x.Scoped {
+				if len(hs) > 1 {
+					x.Scoped[k] = hs[len(hs)/2:]
+				} else {
+					delete(x.Scoped, k)
+				}
+			}
 		case len(x.Counters) > 0:
 			for k, hs := range x.Counters {
 				if len(hs) > 1 {
@@ -483,7 +564,7 @@ func isHex(s string, n int) bool {
 	return err == nil
 }
 
-func validEventRef(s string) bool { return len(s) <= 64 }
+func validEventRef(s string) bool { return len(s) <= maxRef }
 
 // importState validates x and converts it. The state lives in a file the
 // monitored user can write, so it is parsed as hostile input: the worst a
@@ -597,10 +678,10 @@ func importState(key string, data []byte, now time.Time) (*sessionState, error) 
 		return nil, badState("too many fingerprints")
 	}
 	for _, sc := range x.Secrets {
-		if !isHex(sc.FP, 24) || len(sc.Kind) > 64 || len(st.salt) == 0 {
+		if !isHex(sc.FP, 24) || len(sc.Kind) > 64 || len(st.salt) == 0 || sc.N < 0 || sc.N > maxSecretValue {
 			return nil, badState("invalid fingerprint")
 		}
-		st.secrets = append(st.secrets, secretFP{fp: sc.FP, kind: sc.Kind})
+		st.secrets = append(st.secrets, secretFP{fp: sc.FP, kind: sc.Kind, n: sc.N})
 	}
 	if len(x.Counters) > maxSessionCounters {
 		return nil, badState("too many counters")
@@ -626,6 +707,26 @@ func importState(key string, data []byte, now time.Time) (*sessionState, error) 
 			return nil, badState("invalid dedup entry")
 		}
 		st.dedup[k] = &dedupEntry{last: fromMS(v[0]), suppressed: int(v[1])}
+	}
+	if len(x.Scoped) > maxScopedRefs {
+		return nil, badState("too many scoped counters")
+	}
+	for k, hs := range x.Scoped {
+		i := strings.LastIndexByte(k, '/')
+		if i < 0 || !ruleIDRe.MatchString(k[:i]) || (k[i+1:] != ByUser && k[i+1:] != ByHost) || len(hs) > maxThreshold {
+			return nil, badState("invalid scoped counter %q", k)
+		}
+		conv := make([]hit, 0, len(hs))
+		for _, h := range hs {
+			if !okTime(h.T) || !validEventRef(h.Ev) {
+				return nil, badState("invalid counter entry")
+			}
+			conv = append(conv, hit{t: fromMS(h.T), ev: h.Ev})
+		}
+		if st.pending == nil {
+			st.pending = map[string][]hit{}
+		}
+		st.pending[k] = conv
 	}
 	return st, nil
 }

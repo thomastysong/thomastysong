@@ -92,7 +92,7 @@ func (s *scanner) enumerateProjects(uc *userCtx) []string {
 			continue
 		}
 		s.g.allowPath(c.path)
-		if s.g.isDir(loc{root: c.path, user: true}) {
+		if s.g.isDir(projectRoot(c.path, uc)) {
 			out = append(out, c.path)
 		}
 	}

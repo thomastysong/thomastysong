@@ -85,9 +85,9 @@ var featureDefs = []featDef{
 	// Shell, from shellx.Analyze over target.command (or process args).
 	{"shell.parse_ok", TypeBool, nil, "the real parser accepted the command line (false: heuristic tokenising was used)"},
 	{"shell.dialect", TypeString, fixed([]string{"posix", "powershell", "cmd"}), "syntax family the command was analysed as"},
-	{"shell.truncated", TypeBool, nil, "the analyzer hit a size or depth cap; the analysis is incomplete"},
+	{"shell.truncated", TypeBool, nil, "the analyzer or a shell feature list hit a size or depth cap; the analysis is incomplete"},
 	{"shell.commands", TypeStrings, nil, "command names (basename, lower-case, .exe stripped) at any nesting depth"},
-	{"shell.argv", TypeStrings, nil, "every literal argument of every command (capped)"},
+	{"shell.argv", TypeStrings, nil, "every literal argument of every command (first and last 2048 when there are more)"},
 	{"shell.cmds", TypeObjects, nil, "parsed commands {name, path, args, origin, dynamic}; use any_command"},
 	{"shell.urls", TypeStrings, nil, "URLs in the command line"},
 	{"shell.hosts", TypeStrings, nil, "network hosts the command contacts"},
@@ -164,6 +164,7 @@ var featureDefs = []featDef{
 	{"output.untrusted_source", TypeString, fixed(UntrustedSources), "why output.untrusted is true"},
 	{"content.truncated_scan", TypeBool, nil, "a value over 128 KiB was scanned head 64 KiB + tail 64 KiB only"},
 	{"content.analyzer_error", TypeBool, nil, "an analyzer failed on this event; features are incomplete"},
+	{"content.truncated_fields", TypeStrings, nil, "features whose value is incomplete because a size cap was hit; in_list on them and operator suppressions matching them do not hold"},
 
 	// MCP calls.
 	{"mcp.server", TypeString, nil, "MCP server name"},
@@ -186,6 +187,7 @@ var sessionDefs = []featDef{
 	{"session.written_exec_path", TypeString, nil, "the executed path that was written earlier"},
 	{"session.secret_flow", TypeBool, nil, "outbound data carries a value read earlier from a credential-class path"},
 	{"session.secret_flow_kinds", TypeStrings, nil, "kinds of the values in session.secret_flow"},
+	{"session.secret_flow_truncated", TypeBool, nil, "the outbound data was too large to scan whole for remembered values (padding); treat as opaque"},
 }
 
 var engineDefs = []featDef{

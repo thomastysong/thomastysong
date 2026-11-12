@@ -113,21 +113,33 @@ func isAbsLogical(p string) bool {
 func (s *scanner) locFor(full string, uc *userCtx, project string) loc {
 	if project != "" {
 		if rel, ok := relLogical(project, full, s.goos); ok {
-			return loc{root: cleanLogical(project), rel: rel, user: true}
+			return loc{root: cleanLogical(project), rel: rel, user: true, uid: uidOf(uc)}
 		}
 	}
 	if uc != nil && uc.home != "" {
 		if rel, ok := relLogical(uc.home, full, s.goos); ok {
-			return loc{root: uc.home, rel: rel, home: true, user: true}
+			return loc{root: uc.home, rel: rel, home: true, user: true, uid: uc.u.UID}
 		}
 		// A user-context path outside the home came from the user's own
 		// data (a relocated state directory in their environment, a path in
 		// their agent state): it is read only if the user owns the file.
 		l := systemLoc(full)
-		l.user = true
+		l.user, l.uid = true, uc.u.UID
 		return l
 	}
 	return systemLoc(full)
+}
+
+// projectRoot is the location of a project directory itself.
+func projectRoot(dir string, uc *userCtx) loc {
+	return loc{root: cleanLogical(dir), user: true, uid: uidOf(uc)}
+}
+
+func uidOf(uc *userCtx) string {
+	if uc == nil {
+		return ""
+	}
+	return uc.u.UID
 }
 
 // ownerFor is the uid a file at l must belong to when the scan is

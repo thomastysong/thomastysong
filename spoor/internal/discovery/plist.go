@@ -19,6 +19,14 @@ import (
 const (
 	maxPlistBytes   = 4 << 20
 	maxPlistObjects = 100_000
+	// maxPlistExpansion bounds the string bytes a binary plist decodes to,
+	// counted once per reference, as a multiple of the input size (plus a
+	// fixed allowance). Objects are shared by reference, so without it one
+	// 3 MiB string referenced 100,000 times reads as 300 GiB of text to
+	// every consumer of the tree. A real Info.plist or managed-preferences
+	// document references its uniqued keys a few times each.
+	maxPlistExpansion = 8
+	plistExpansionMin = 1 << 20
 )
 
 var errPlist = errors.New("malformed plist")
@@ -181,6 +189,13 @@ type bplist struct {
 	count      int
 	visiting   map[uint64]bool
 	objectsLft int
+	// strs memoizes decoded strings by object reference: a Go string is
+	// immutable, so every reference to one object shares one copy and the
+	// memory decoded is bounded by the input.
+	strs map[uint64]string
+	// textLeft is the string budget, charged per reference (memoized or
+	// not), so the logical size of the tree is bounded too.
+	textLeft int64
 }
 
 func parseBinaryPlist(data []byte) (v any, err error) {
@@ -202,7 +217,8 @@ func parseBinaryPlist(data []byte) (v any, err error) {
 		top >= numObj || tableOff >= uint64(len(data)) || tableOff+numObj*uint64(offSize) > uint64(len(data)-32) {
 		return nil, errPlist
 	}
-	p := &bplist{data: data, refSize: refSize, count: int(numObj), visiting: map[uint64]bool{}, objectsLft: maxPlistObjects}
+	p := &bplist{data: data, refSize: refSize, count: int(numObj), visiting: map[uint64]bool{}, objectsLft: maxPlistObjects,
+		strs: map[uint64]string{}, textLeft: int64(len(data))*maxPlistExpansion + plistExpansionMin}
 	p.offsets = make([]uint64, numObj)
 	for i := uint64(0); i < numObj; i++ {
 		p.offsets[i] = readUint(data[tableOff+i*uint64(offSize):], offSize)
@@ -289,24 +305,31 @@ func (p *bplist) object(ref uint64, depth int) (any, error) {
 	case 0x4:
 		return "<data>", nil
 	case 0x5, 0x6:
+		if v, ok := p.strs[ref]; ok {
+			return p.charge(v)
+		}
 		n, start, err := p.length(off, nib)
 		if err != nil {
 			return nil, err
 		}
+		var v string
 		if typ == 0x5 {
 			if start+n > uint64(len(p.data)) {
 				return nil, errPlist
 			}
-			return string(p.data[start : start+n]), nil
+			v = string(p.data[start : start+n])
+		} else {
+			if start+2*n > uint64(len(p.data)) {
+				return nil, errPlist
+			}
+			u := make([]uint16, n)
+			for i := uint64(0); i < n; i++ {
+				u[i] = binary.BigEndian.Uint16(p.data[start+2*i:])
+			}
+			v = string(utf16.Decode(u))
 		}
-		if start+2*n > uint64(len(p.data)) {
-			return nil, errPlist
-		}
-		u := make([]uint16, n)
-		for i := uint64(0); i < n; i++ {
-			u[i] = binary.BigEndian.Uint16(p.data[start+2*i:])
-		}
-		return string(utf16.Decode(u)), nil
+		p.strs[ref] = v
+		return p.charge(v)
 	case 0xA, 0xD:
 		n, start, err := p.length(off, nib)
 		if err != nil {
@@ -352,4 +375,13 @@ func (p *bplist) object(ref uint64, depth int) (any, error) {
 		return out, nil
 	}
 	return nil, errPlist
+}
+
+// charge takes a string's length from the expansion budget.
+func (p *bplist) charge(v string) (any, error) {
+	p.textLeft -= int64(len(v))
+	if p.textLeft < 0 {
+		return nil, errPlist
+	}
+	return v, nil
 }

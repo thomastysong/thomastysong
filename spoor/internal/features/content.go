@@ -1,11 +1,13 @@
 package features
 
 import (
+	"errors"
 	"regexp"
 	"strings"
 
 	"github.com/thomastysong/spoor/internal/classify"
 	"github.com/thomastysong/spoor/internal/event"
+	"github.com/thomastysong/spoor/internal/mcpconf"
 )
 
 func (c *computer) content() {
@@ -96,7 +98,8 @@ func (c *computer) write() {
 		return
 	}
 	c.scan("write", text)
-	text = c.bound(text)
+	// Autorun and GitExecKeys bound their own input (and Autorun decodes
+	// a whole configuration file when it is small enough to).
 	ctl, _ := c.f["path.control_file"].(bool)
 	if ctl {
 		name := ""
@@ -157,16 +160,14 @@ var untrustedDirs = map[string]bool{
 }
 
 // untrustedSource says why a tool result is attacker-authorable, or "".
-// Package registries do not taint: a registry page is not an instruction
-// channel an agent is steered through in practice, and counting it made the
-// flag near-constant in measured benign sessions.
+// Every web fetch is: package registries and CDNs serve whatever their
+// publishers upload (READMEs, skills, files from any GitHub repository), so
+// no host class is exempt here. Rules that want to discount particular
+// hosts do so visibly, with net.host or net.host_classes in an allow block
+// or a list such as trusted_content_hosts.
 func (c *computer) untrustedSource() string {
 	switch c.toolKind() {
 	case event.ToolWebFetch:
-		hc, _ := c.f["net.host_classes"].([]string)
-		if len(hc) > 0 && allIn(hc, "package_registry") {
-			return ""
-		}
 		return "web_fetch"
 	case event.ToolWebSearch:
 		return "web_search"
@@ -207,15 +208,6 @@ func (c *computer) untrustedSource() string {
 		}
 	}
 	return ""
-}
-
-func allIn(list []string, v string) bool {
-	for _, x := range list {
-		if x != v {
-			return false
-		}
-	}
-	return true
 }
 
 func underUntrusted(p string) bool {
@@ -287,31 +279,82 @@ var AutorunVocabulary = []string{
 	"permission_escalation", "base_url_override", "hooks_disabled", "sandbox_disabled",
 }
 
+// maxAutorunParse is the largest content Autorun decodes as a whole
+// configuration file. Larger content, and content that does not decode (an
+// edit fragment, a truncated capture), is matched with key patterns over its
+// head and tail instead.
+const maxAutorunParse = 256 << 10
+
 // Autorun returns what content, destined for the agent control file name,
 // would make an agent or IDE run or allow: hook commands, always-applied
 // rules, folder-open tasks, MCP server entries, permission escalation,
 // model endpoint overrides, and hook or sandbox switches. Discovery uses the
-// same function on files at rest. The input is bounded to its head and
-// tail like every other content scan.
+// same function on files at rest.
+//
+// MCP server entries are found by decoding the content (JSON, JSONC, TOML
+// or YAML) with internal/mcpconf, which knows the per-agent declaration
+// keys (mcpServers in JSON and YAML, "amp.mcpServers", opencode/Crush/Kilo
+// "mcp", Zed "context_servers", VS Code "servers", Codex and Hermes
+// mcp_servers, goose extensions) and accepts an entry only when it declares
+// something to launch or connect to (command, args, url). A file that
+// decodes but declares no such entry (an empty server map) reports none.
+// Only content that does not decode falls back to the key patterns.
 func Autorun(name, content string) []string {
 	if content == "" {
 		return nil
 	}
-	content = headTail(content)
+	declared, decoded := mcpDeclared(name, content)
+	scan := headTail(content)
 	var out []string
 	for _, p := range autorunPatterns {
-		if p.re.MatchString(content) {
+		hit := false
+		if p.kind == "mcp_server" {
+			switch {
+			case decoded:
+				hit = declared
+			default:
+				hit = p.re.MatchString(scan) || (isMCPJSON(name) && mcpServersKey.MatchString(scan))
+			}
+		} else {
+			hit = p.re.MatchString(scan)
+		}
+		if hit {
 			out = append(out, p.kind)
 		}
 	}
+	return out
+}
+
+// mcpDeclared decodes content as an MCP configuration and reports whether it
+// declares at least one server, and whether it could be decoded at all. The
+// content is read in the syntax its file name implies and, unless that
+// already found a server, once more in the syntax sniffed from the content
+// alone: an edit fragment ("name": {"command": ...}) or TOML written to a
+// .json name still declares what it declares.
+func mcpDeclared(name, content string) (declared, decoded bool) {
+	if len(content) > maxAutorunParse {
+		return false, false
+	}
+	data := []byte(content)
+	for _, n := range []string{name, ""} {
+		servers, err := mcpconf.Parse(n, data, mcpconf.FormatAuto)
+		if err != nil && !errors.Is(err, mcpconf.ErrTooManyServers) {
+			continue
+		}
+		decoded = true
+		if len(servers) > 0 {
+			return true, true
+		}
+	}
+	return false, decoded
+}
+
+func isMCPJSON(name string) bool {
 	base := strings.ToLower(name)
 	if i := strings.LastIndexAny(base, `/\`); i >= 0 {
 		base = base[i+1:]
 	}
-	if base == "mcp.json" && !contains(out, "mcp_server") && mcpServersKey.MatchString(content) {
-		out = append(out, "mcp_server")
-	}
-	return out
+	return base == "mcp.json"
 }
 
 // GitExecKeyVocabulary is the vocabulary of GitExecKeys results and of the
@@ -321,15 +364,18 @@ var GitExecKeyVocabulary = []string{
 	"core.gitproxy", "alias.shell", "diff.textconv", "diff.command", "filter.clean",
 	"filter.smudge", "filter.process", "merge.driver", "credential.helper.shell",
 	"include.path", "includeif.path", "sequence.editor", "gpg.program", "uploadpack.packobjectshook",
+	"credential.helper", "core.askpass",
 }
 
 const maxGitLines = 20000
 
 // GitExecKeys parses git-config syntax and returns the keys whose value git
 // runs as a command (or that pull in more config): core.fsmonitor other
-// than a boolean, core.sshCommand, aliases starting with "!", diff drivers,
-// clean/smudge filters, merge drivers, shell credential helpers and
-// includes. A repository-local .git/config with one of these runs code the
+// than a boolean, core.sshCommand, core.askPass, aliases starting with "!",
+// diff drivers, clean/smudge filters, merge drivers, credential helpers
+// that are shell snippets ("!...": credential.helper.shell) or absolute
+// program paths (git-credential(1) runs those as given:
+// credential.helper), and includes. A repository-local .git/config with one of these runs code the
 // moment an agent or IDE calls git (threat research R14).
 func GitExecKeys(text string) []string {
 	text = headTail(text)
@@ -394,6 +440,8 @@ func GitExecKeys(text string) []string {
 				add("core.hookspath")
 			case "gitproxy":
 				add("core.gitproxy")
+			case "askpass":
+				add("core.askpass")
 			}
 		case "alias":
 			if strings.HasPrefix(val, "!") {
@@ -416,8 +464,13 @@ func GitExecKeys(text string) []string {
 				add("merge.driver")
 			}
 		case "credential":
-			if key == "helper" && strings.HasPrefix(val, "!") {
-				add("credential.helper.shell")
+			if key == "helper" {
+				switch {
+				case strings.HasPrefix(val, "!"):
+					add("credential.helper.shell")
+				case isAbsProgram(val):
+					add("credential.helper")
+				}
 			}
 		case "include":
 			if key == "path" {
@@ -442,4 +495,18 @@ func GitExecKeys(text string) []string {
 		}
 	}
 	return out
+}
+
+// isAbsProgram reports a value git treats as an absolute program path: a
+// path rooted at a slash or backslash, or a drive path (git's
+// is_absolute_path on Windows).
+func isAbsProgram(v string) bool {
+	switch {
+	case strings.HasPrefix(v, "/"), strings.HasPrefix(v, `\`):
+		return true
+	case len(v) >= 3 && v[1] == ':' && (v[2] == '\\' || v[2] == '/'):
+		c := v[0] | 0x20
+		return c >= 'a' && c <= 'z'
+	}
+	return false
 }

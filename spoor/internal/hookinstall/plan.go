@@ -99,15 +99,14 @@ func planTarget(t target, o Options, m mode) []Plan {
 		}
 		if action != ActionUnsupported && t.scope != event.ScopeUser {
 			p.loads = managedLoads(t, o.GOOS)
-			permNotes(managedProblems(t, o), n)
-		}
-		if action == ActionUnchanged && t.scope != event.ScopeUser {
-			// The content is right but a non-admin could change it: an
-			// install must leave managed files admin-only, so the same
-			// bytes are written again, which repairs owner and mode.
-			if why := insecureManaged(t, o); why != "" {
+			problems := managedProblems(t, o)
+			permNotes(problems, n)
+			if action == ActionUnchanged && fixableProblems(problems) {
+				// The content is right but a non-admin could change it: an
+				// install must leave managed files admin-only, so the same
+				// bytes are written again, which repairs owner and mode.
 				action, after = ActionMerge, cur.data
-				n.add("rewritten to repair permissions: " + why)
+				n.add("rewritten to repair permissions: " + describeProblems(problems))
 			}
 		}
 		if action != ActionUnsupported {

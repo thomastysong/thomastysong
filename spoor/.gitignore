@@ -15,3 +15,7 @@ coverage.*
 .DS_Store
 .idea/
 .vscode/
+
+# go build ./cmd/spoor writes the binary here
+/spoor
+/spoor.exe

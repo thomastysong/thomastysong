@@ -172,9 +172,11 @@ func parseClaude(c *lineCtx) error {
 	}
 	st := c.st
 	ts := parseTime(rec.Timestamp)
-	// Every conversation record carries a random uuid (user, assistant,
-	// system and attachment records in the 2.1.322 capture, none repeated
-	// across 105 files); it is the record's identity (eventIDs).
+	// Conversation records carry a random uuid: every user, assistant,
+	// system and attachment record of a 2.1.322 capture (105 files, about
+	// 31,500 such records, none repeated) had one. It is the record's
+	// identity (eventIDs); bookkeeping records without one fall back to a
+	// keyed digest of the line.
 	c.record("u:", rec.UUID)
 
 	if rec.SessionID != "" {

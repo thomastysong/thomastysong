@@ -7,8 +7,10 @@
 # What it does, in order, and why:
 #  1. the spoor group (again: an rpm installed with --noscripts on %pre only,
 #     or a group deleted by hand, would keep the unit from starting);
-#  2. /etc/spoor (root 0755) and /var/lib/spoor (root:spoor 0750, what the
-#     unit's StateDirectory= also sets);
+#  2. /etc/spoor (root 0755) and /var/lib/spoor (root:spoor 0711, what the
+#     unit's StateDirectory=/StateDirectoryMode= set at every start: users
+#     traverse it to reach their own spool directory and the public rule
+#     bundle; the outbox and state database inside stay restricted);
 #  3. /etc/spoor/spoor.yaml from `spoor export config` when there is none
 #     (0644: unprivileged hooks read it); an existing file is never touched;
 #  4. if spoor is registered as an osquery extension (the line in
@@ -63,7 +65,7 @@ mkdir -p "$CONF_DIR" "$DATA"
 chown root:root "$CONF_DIR"
 chmod 0755 "$CONF_DIR"
 chown root:spoor "$DATA"
-chmod 0750 "$DATA"
+chmod 0711 "$DATA"
 
 # 3. Configuration.
 if [ ! -e "$CONF" ] && [ ! -L "$CONF" ]; then

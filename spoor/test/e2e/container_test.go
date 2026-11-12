@@ -707,15 +707,27 @@ func TestContainerNodeSensor(t *testing.T) {
 		name := "spoor-e2e-shipped-" + nonce
 		ctrRun(t, name, append(spec.sensorArgs(etc2), "-e", "SPOOR_HOST_ID=node-e2e-"+nonce, img,
 			"run", "--config", "/etc/spoor/spoor.yaml", "--log-format", "json")...)
-		var beat map[string]any
-		ctrWait(t, 60*time.Second, "a heartbeat on stdout", func() bool {
+		heartbeats := func() []map[string]any {
+			var out []map[string]any
 			for _, r := range ctrRecords(ctrStdout(name)) {
 				if ctrStr(r, "type") == "health.heartbeat" {
-					beat = r
+					out = append(out, r)
 				}
 			}
-			return beat != nil
-		})
+			return out
+		}
+		ctrWait(t, 60*time.Second, "a heartbeat on stdout", func() bool { return len(heartbeats()) > 0 })
+		// The first heartbeat can precede the collectors' first report; the
+		// one written at shutdown has every surface.
+		start := time.Now()
+		out, err := ctrDocker(time.Minute, nil, "stop", "-t", "25", name)
+		code := ctrInspect(t, name, "{{.State.ExitCode}}")
+		t.Logf("EVIDENCE docker stop (SIGTERM): %v %s exit code %s after %s", err, strings.TrimSpace(out), code, time.Since(start).Round(100*time.Millisecond))
+		if code != "0" {
+			t.Errorf("sensor exit code %s after SIGTERM", code)
+		}
+		beats := heartbeats()
+		beat := beats[len(beats)-1]
 		surfaces := map[string]string{}
 		if l, ok := ctrGet(beat, "health.surfaces").([]any); ok {
 			for _, s := range l {
@@ -723,11 +735,12 @@ func TestContainerNodeSensor(t *testing.T) {
 				surfaces[ctrStr(m, "name")] = ctrStr(m, "status") + "/" + ctrStr(m, "reason")
 			}
 		}
-		t.Logf("EVIDENCE shipped config: heartbeat host.id=%s surfaces=%v", ctrStr(beat, "host.id"), surfaces)
+		t.Logf("EVIDENCE shipped config: %d heartbeat(s), last at shutdown: host.id=%s surfaces=%v", len(beats), ctrStr(beat, "host.id"), surfaces)
 		if ctrStr(beat, "host.id") != "node-e2e-"+nonce {
 			t.Errorf("SPOOR_HOST_ID from the downward API not used: %v", ctrGet(beat, "host"))
 		}
-		if !strings.HasPrefix(surfaces["transcripts"], "disabled") || !strings.HasPrefix(surfaces["scan"], "disabled") {
+		if !strings.HasPrefix(surfaces["transcripts"], "disabled") || !strings.HasPrefix(surfaces["scan"], "disabled") ||
+			!strings.HasPrefix(surfaces["processes"], "ok") && !strings.HasPrefix(surfaces["processes"], "degraded") {
 			t.Errorf("surfaces: %v", surfaces)
 		}
 		for _, r := range ctrRecords(ctrStdout(name)) {
@@ -735,13 +748,6 @@ func TestContainerNodeSensor(t *testing.T) {
 				t.Errorf("minimal profile shipped an activity record: %v", r)
 				break
 			}
-		}
-		start := time.Now()
-		out, err := ctrDocker(time.Minute, nil, "stop", "-t", "25", name)
-		code := ctrInspect(t, name, "{{.State.ExitCode}}")
-		t.Logf("EVIDENCE docker stop: %v %s exit code %s after %s", err, strings.TrimSpace(out), code, time.Since(start).Round(100*time.Millisecond))
-		if code != "0" {
-			t.Errorf("sensor exit code %s after SIGTERM", code)
 		}
 	})
 
@@ -933,7 +939,7 @@ func pkgLifecycle(t *testing.T, img, kind string) {
 	sh(`mkdir -p /etc/osquery && printf /opt/other/x.ext > /etc/osquery/extensions.load`)
 	out := sh(install + ` && getent group spoor && stat -c '%U:%G %a %n' /var/lib/spoor /etc/spoor /etc/spoor/spoor.yaml /usr/bin/spoor /usr/lib/systemd/system/spoor.service && spoor version`)
 	t.Logf("EVIDENCE %s install:\n%s", kind, out)
-	expect(out, "root:spoor 750 /var/lib/spoor", "install")
+	expect(out, "root:spoor 711 /var/lib/spoor", "install")
 	expect(out, "root:root 644 /etc/spoor/spoor.yaml", "install")
 	expect(out, "root:root 644 /usr/lib/systemd/system/spoor.service", "install")
 	expect(out, "spoor 0.1.0", "install")

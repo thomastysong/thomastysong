@@ -28,6 +28,15 @@ func eventField(e *event.Event, f string) (any, bool) {
 		return str(string(e.Kind))
 	case "source":
 		return str(string(e.Source))
+	case "sources":
+		if rest != "" {
+			return nil, false
+		}
+		out := make([]string, len(e.Sources))
+		for i, x := range e.Sources {
+			out[i] = string(x)
+		}
+		return strs(out)
 	case "fidelity":
 		return str(string(e.Fidelity))
 	case "integrity":

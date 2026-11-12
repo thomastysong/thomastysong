@@ -44,7 +44,7 @@ const (
 
 // evidenceFields is the allowlist of event fields by their JSON names.
 var evidenceFields = map[string]evMode{
-	"id": evName, "type": evName, "kind": evName, "source": evName, "fidelity": evName, "integrity": evName,
+	"id": evName, "type": evName, "kind": evName, "source": evName, "sources": evName, "fidelity": evName, "integrity": evName,
 	"host.id": evName, "host.name": evName, "host.os": evName, "host.arch": evName,
 	"user.name": evName, "user.id": evName,
 	"agent.id": evName, "agent.name": evName, "agent.version": evName, "agent.surface": evName, "agent.pid": evName,
@@ -97,7 +97,7 @@ var featureFields = map[string]evMode{
 	"output.markers": evName, "output.secret_kinds": evName,
 	"mcp.server": evName, "mcp.tool": evName, "mcp.arg_paths": evPath, "mcp.arg_path_classes": evName,
 	"mcp.arg_hosts": evName, "mcp.arg_host_classes": evName, "mcp.arg_secret_kinds": evName,
-	"session.flags": evName, "session.written_exec_path": evPath,
+	"session.flags": evName, "session.written_exec_path": evPath, "shell.inherited_kinds": evName,
 	"flow.secret_kinds": evName, "host.tags": evName,
 	// Closed vocabularies (features.Registry lists them with Vocab).
 	"shell.dialect": evName, "shell.inline_langs": evName, "shell.install_managers": evName,

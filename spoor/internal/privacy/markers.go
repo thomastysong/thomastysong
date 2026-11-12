@@ -470,19 +470,26 @@ func redactURL(s string, keepQuery bool) string {
 // and carriage return (and DEL) with spaces. A NUL cannot occur in a real
 // argument vector; inside a command string it only serves to hide a
 // program name from tool-specific redaction ("mysql\x00 -pX").
+// It returns s itself, without copying, when there is none.
 func controlsToSpace(s string) (string, bool) {
-	changed := false
-	b := []byte(s)
-	for i, c := range b {
-		if (c < 0x20 && c != '\t' && c != '\n' && c != '\r') || c == 0x7f {
-			b[i] = ' '
-			changed = true
-		}
+	i := 0
+	for i < len(s) && !isHiddenControl(s[i]) {
+		i++
 	}
-	if !changed {
+	if i == len(s) {
 		return s, false
 	}
+	b := []byte(s)
+	for ; i < len(b); i++ {
+		if isHiddenControl(b[i]) {
+			b[i] = ' '
+		}
+	}
 	return string(b), true
+}
+
+func isHiddenControl(c byte) bool {
+	return (c < 0x20 && c != '\t' && c != '\n' && c != '\r') || c == 0x7f
 }
 
 // redactMap is classify.RedactMap with markers shielded in keys and

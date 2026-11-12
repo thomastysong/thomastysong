@@ -449,6 +449,52 @@ r=$(live "SELECT 1"); echo "later: $r"
 	}
 }
 
+// TestVerifyShWaitTablesGivesUp: osquery 5.19 kept ATC tables registered
+// after the agent options stopped naming them, and tier 3's wait for 0
+// tables ended the run. With a poll count wait_tables gives up softly
+// (returning 1 and the last count) so the caller can restart osqueryd, and
+// a poll the host did not answer is never taken for 0 tables.
+func TestVerifyShWaitTablesGivesUp(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("bash")
+	}
+	for _, tool := range []string{"bash", "jq"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("no %s", tool)
+		}
+	}
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "fleetctl")
+	// The host does not answer the first poll, then reports 9 tables.
+	if err := os.WriteFile(fake, []byte(`#!/bin/sh
+n=$(cat "$COUNT" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" >"$COUNT"
+case "$1" in
+report) [ "$n" -gt 1 ] || exit 1; echo '{"host":"vm","rows":[{"n":"9"}]}' ;;
+esac
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := `SPOOR_VERIFY_LIB=1 source "$VERIFY"
+if left=$(wait_tables 0 3); then echo "waited for 0: ok"; else echo "gave up, last count $left"; fi
+echo "polls: $(cat "$COUNT")"
+rm -f "$COUNT"
+if left=$(wait_tables 0 1); then echo "unanswered poll: 0"; else echo "unanswered poll: [$left]"; fi
+echo "still running"
+`
+	cmd := exec.Command("bash", "-c", script)
+	cmd.Env = append(os.Environ(), "VERIFY="+filepath.Join(deployDir(t), "verify.sh"), "FLEETCTL="+fake,
+		"COUNT="+filepath.Join(dir, "count"), "WORK="+dir, "POLL=0")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("verify.sh functions failed: %v\n%s", err, out)
+	}
+	for _, w := range []string{"gave up, last count 9", "polls: 3", "unanswered poll: [?]", "still running"} {
+		if !strings.Contains(string(out), w) {
+			t.Errorf("output lacks %q:\n%s", w, out)
+		}
+	}
+}
+
 // TestVerifyShBinaryScenarios: with SPOOR_BIN, verify.sh signs and installs a
 // rules bundle with the binary (once), and builds the "healthy" and "hook"
 // databases with it: a fresh database, `scan --state`, then `run` (stopped
@@ -509,7 +555,10 @@ for sc in healthy hook; do
 	build_db "$sc"
 done
 echo "daemon pid after: [$DAEMON_PID]"
-for sc in healthy hook planted stale removed; do echo "source $sc: $(db_source "$sc")"; done
+for sc in healthy hook planted stale removed; do
+	echo "source $sc: $(db_source "$sc")"
+	if table_scenario "$sc"; then echo "tables listed: $sc"; fi
+done
 `
 	cmd := exec.Command("bash", "-c", script)
 	cmd.Env = append(os.Environ(), "VERIFY="+filepath.Join(deployDir(t), "verify.sh"), "SPOOR_BIN="+fake,
@@ -520,9 +569,15 @@ for sc in healthy hook planted stale removed; do echo "source $sc: $(db_source "
 	}
 	for _, w := range []string{"daemon pid after: []",
 		"source healthy: the spoor binary", "source hook: the spoor binary", "source planted: the harness",
-		"source stale: the harness", "source removed: nowhere, removed"} {
+		"source stale: the harness", "source removed: nowhere, removed",
+		"tables listed: healthy", "tables listed: hook"} {
 		if !strings.Contains(string(out), w) {
 			t.Errorf("output lacks %q:\n%s", w, out)
+		}
+	}
+	for _, w := range []string{"tables listed: planted", "tables listed: stale", "tables listed: removed"} {
+		if strings.Contains(string(out), w) {
+			t.Errorf("output has %q:\n%s", w, out)
 		}
 	}
 	calls, err := os.ReadFile(filepath.Join(dir, "calls"))

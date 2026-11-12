@@ -21,14 +21,44 @@ func FuzzRedactCommand(f *testing.F) {
 		if len(s) > 4096 {
 			return
 		}
-		out, _ := redactCommand(s, "")
+		out, pre := redactCommand(s, "")
 		if len(out) > 4*len(s)+4096 {
 			t.Fatalf("output grew to %d from %d", len(out), len(s))
+		}
+		// The second call is served from the memo when the result was
+		// stored; it must be what the redactor computes.
+		want, wantPre := redactCommandUncached(s, "")
+		if again, againPre := redactCommand(s, ""); again != want || againPre != wantPre || out != want || pre != wantPre {
+			t.Fatalf("memo differs from the redactor for %q:\nfirst %q\nagain %q\nwant  %q", s, out, again, want)
 		}
 		planted := s + " ; mysql -pFuzzCanary1 db"
 		out, _ = redactCommand(planted, "")
 		if strings.Contains(out, "FuzzCanary1") {
 			t.Fatalf("planted secret survived:\n%q\n%q", planted, out)
+		}
+	})
+}
+
+// FuzzMemoForm: encoding any result against any text never panics,
+// reproduces the result exactly, and stores no more bytes than the result.
+func FuzzMemoForm(f *testing.F) {
+	f.Add("mysql -pX db", "mysql -p[REDACTED:password:hmac=1] db")
+	f.Add("a\x01b", "a b[TRUNCATED:3B]")
+	f.Add("", "x")
+	f.Add("abc", "")
+	f.Fuzz(func(t *testing.T, in, out string) {
+		form, ok := encodeResult(in, out)
+		if !ok {
+			if len(out) <= 1<<10 { // at most 1 KiB of bytes and 1,024 pieces
+				t.Fatalf("%d-byte result not encodable", len(out))
+			}
+			return
+		}
+		if got := form.decode(in); got != out {
+			t.Fatalf("decode %q, want %q", got, out)
+		}
+		if len(form.lit) > len(out) {
+			t.Fatalf("stores %d bytes for a %d-byte result", len(form.lit), len(out))
 		}
 	})
 }

@@ -119,7 +119,11 @@ func (s *benchStream) at(i int) *event.Event { return s.evs[i%benchPool] }
 //	        only the twins of one call share a command text: the pool is
 //	        rebuilt with new calls for every pass, outside the timer.
 //	cold    every record's command distinct and the memo cleared before
-//	        each record: the cost when nothing can be reused.
+//	        each record: the cost when nothing can be reused across
+//	        records (in full, a record's tool.input.command still reuses
+//	        the redaction of its target.command).
+//
+// %memo-hits is the share of command redactions served from the memo.
 func BenchmarkEmitShell(b *testing.B) {
 	for _, prof := range []Profile{ProfileStandard, ProfileFull} {
 		p := &Policy{Profile: prof, Key: testKey, KeyID: "k1"}
@@ -127,6 +131,7 @@ func BenchmarkEmitShell(b *testing.B) {
 			b.Run(string(prof)+"/"+mode, func(b *testing.B) {
 				resetCommandMemo()
 				s := newBenchStream(mode)
+				var hits, misses uint64
 				b.ReportAllocs()
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
@@ -136,13 +141,16 @@ func BenchmarkEmitShell(b *testing.B) {
 						b.StartTimer()
 					}
 					if mode == "cold" {
+						_, _, h, m := commandMemo.stats()
+						hits, misses = hits+h, misses+m
 						resetCommandMemo()
 					}
 					if _, _, ok := p.Emit(s.at(i)); !ok {
 						b.Fatal("dropped")
 					}
 				}
-				_, _, hits, misses := commandMemo.stats()
+				_, _, h, m := commandMemo.stats()
+				hits, misses = hits+h, misses+m
 				if hits+misses > 0 {
 					b.ReportMetric(100*float64(hits)/float64(hits+misses), "%memo-hits")
 				}

@@ -113,6 +113,11 @@ harness() { # harness TEST [SCENARIO]
 
 bin_scenario() { [ -n "${SPOOR_BIN:-}" ] && { [ "$1" = healthy ] || [ "$1" = hook ]; }; }
 
+# table_scenario SCENARIO: list every spoor table with a live query (the
+# healthy database, and the binary's "hook" database, the only one with
+# detections and sessions written by the binary).
+table_scenario() { [ "$1" = healthy ] || { [ "$1" = hook ] && bin_scenario hook; }; }
+
 db_source() { # db_source SCENARIO: where the scenario's database comes from
 	if bin_scenario "$1"; then
 		echo "the spoor binary"
@@ -217,16 +222,32 @@ cleanup() {
 	left_reports=$(api /api/v1/fleet/reports | jq --arg p "$PREFIX" '[.queries // .reports // [] | .[] | select(.name | startswith($p))] | length')
 	left_policies=$(prefixed_policy_ids)
 	log "objects named $PREFIX* left on the server: labels $left_labels, reports $left_reports, policies [${left_policies}]"
+	# osquery keeps ATC tables it once registered when the agent options
+	# no longer name them, until it restarts (seen with osquery 5.19).
+	if left_tables=$(wait_tables 0 10); then
+		log "spoor tables registered on the host: 0"
+	else
+		log "SPOOR TABLES STILL REGISTERED ON THE HOST: $left_tables (osqueryd keeps ATC tables until it restarts)"
+	fi
 	log "done: $FAILURES failed checks"
 }
 
-wait_tables() { # wait_tables N: until N spoor tables are registered
+# wait_tables N [POLLS]: until N spoor tables are registered. With POLLS,
+# give up after that many polls and return 1 (printing the last count)
+# instead of failing the run.
+wait_tables() {
 	local n=0
-	for _ in $(seq 1 40); do
-		n=$(live "SELECT count(*) AS n FROM osquery_registry WHERE registry = 'table' AND name LIKE 'spoor\_%' ESCAPE '\\' AND active = 1" | jq -r '.rows[0].n // 0' 2>/dev/null) || n=0
+	for _ in $(seq 1 "${2:-40}"); do
+		n=$(live "SELECT count(*) AS n FROM osquery_registry WHERE registry = 'table' AND name LIKE 'spoor\_%' ESCAPE '\\' AND active = 1" |
+			jq -r 'if (.error // "") != "" then "?" else (.rows[0].n // "?") end' 2>/dev/null) || n="?"
+		# An unanswered poll is "?", never 0: waiting for 0 must not end on it.
 		if [ "$n" = "$1" ]; then return 0; fi
 		sleep "$POLL"
 	done
+	if [ -n "${2:-}" ]; then
+		echo "$n"
+		return 1
+	fi
 	die "spoor tables registered: $n, want $1"
 }
 
@@ -268,7 +289,7 @@ scenario() { # scenario NAME TIER
 	log "== scenario $sc ($tier), state database from $(db_source "$sc")"
 	build_db "$sc"
 	if [ "$sc" = removed ]; then echo "  state database removed: $(ls "$DB" 2>&1 | head -n 1)"; fi
-	if [ "$sc" = healthy ]; then tables; fi
+	if table_scenario "$sc"; then tables; fi
 	echo "  policies evaluated as live queries (a row = pass):"
 	while IFS=$'\t' read -r name sql; do
 		r=$(live "$sql")
@@ -351,7 +372,14 @@ if [ -n "${EXT_LOAD:-}" ] && [ -n "${EXT_BIN:-}" ] && [ -n "${OSQUERY_RESTART:-}
 	log "== tier 3: osquery extension $EXT_BIN"
 	# ATC and the extension provide the same table names: take ATC away first.
 	fc apply -f "$WORK/agent-options.restore.yml" | sed 's/^/  /'
-	wait_tables 0
+	if ! left_tables=$(wait_tables 0 10); then
+		# osquery 5.19 does not always unregister ATC tables the agent
+		# options no longer name (seen after a 7-minute ATC tier); a
+		# restart does, and the extension would conflict with them.
+		log "$left_tables ATC tables still registered after the agent options were restored; restarting osqueryd"
+		sh -c "$OSQUERY_RESTART"
+		wait_tables 0
+	fi
 	log "ATC tables gone; registering the extension in $EXT_LOAD"
 	append_line "$EXT_LOAD" "$EXT_BIN"
 	EXT_REGISTERED=1

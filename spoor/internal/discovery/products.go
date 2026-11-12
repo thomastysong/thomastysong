@@ -667,8 +667,14 @@ func (s *scanner) scanRegistry(uc *userCtx) {
 	}
 }
 
-// procIndex maps product id -> uid -> matching pids.
-type procIndex map[string]map[string][]int
+// procHit is one running process of a product.
+type procHit struct {
+	pid  int
+	user string // account name the process table reported ("" when unknown)
+}
+
+// procIndex maps product id -> uid -> matching processes.
+type procIndex map[string]map[string][]procHit
 
 func (s *scanner) indexProcesses() {
 	s.procs = procIndex{}
@@ -679,10 +685,10 @@ func (s *scanner) indexProcesses() {
 		}
 		byUID := s.procs[m.Product.ID]
 		if byUID == nil {
-			byUID = map[string][]int{}
+			byUID = map[string][]procHit{}
 			s.procs[m.Product.ID] = byUID
 		}
-		byUID[p.UID] = append(byUID[p.UID], p.PID)
+		byUID[p.UID] = append(byUID[p.UID], procHit{pid: p.PID, user: p.User})
 	}
 }
 
@@ -690,9 +696,27 @@ func (s *scanner) indexProcesses() {
 // who has the product, plus one machine-wide asset when it is installed but
 // nobody's home shows it.
 func (s *scanner) buildProducts() {
-	userByUID := map[string]bool{}
+	// Several scanned homes can share a uid (a home directory without a
+	// passwd entry is reported with its owner's uid; containers often run
+	// everyone as root). A process is then attributed by account name, and
+	// one that matches none of them is reported machine-wide instead of
+	// marking every such home as running it.
+	homesByUID := map[string]map[string]bool{}
 	for _, uc := range s.users {
-		userByUID[uc.u.UID] = true
+		if homesByUID[uc.u.UID] == nil {
+			homesByUID[uc.u.UID] = map[string]bool{}
+		}
+		homesByUID[uc.u.UID][uc.u.Name] = true
+	}
+	pidsFor := func(id string, uc *userCtx) []int {
+		var out []int
+		shared := len(homesByUID[uc.u.UID]) > 1
+		for _, h := range s.procs[id][uc.u.UID] {
+			if !shared || h.user == uc.u.Name {
+				out = append(out, h.pid)
+			}
+		}
+		return out
 	}
 	for i := range s.products {
 		p := &s.products[i]
@@ -703,7 +727,7 @@ func (s *scanner) buildProducts() {
 		emitted := false
 		for _, uc := range s.users {
 			ue := s.userEv[uc][p.ID]
-			pids := s.procs[p.ID][uc.u.UID]
+			pids := pidsFor(p.ID, uc)
 			if ue.empty() && len(pids) == 0 {
 				continue
 			}
@@ -719,9 +743,12 @@ func (s *scanner) buildProducts() {
 			emitted = true
 		}
 		var orphan []int
-		for uid, pids := range s.procs[p.ID] {
-			if !userByUID[uid] {
-				orphan = append(orphan, pids...)
+		for uid, hits := range s.procs[p.ID] {
+			homes := homesByUID[uid]
+			for _, h := range hits {
+				if len(homes) == 0 || len(homes) > 1 && !homes[h.user] {
+					orphan = append(orphan, h.pid)
+				}
 			}
 		}
 		if emitted && len(orphan) == 0 {

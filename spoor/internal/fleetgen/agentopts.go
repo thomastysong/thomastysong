@@ -189,7 +189,8 @@ func StripAgentOptions(current map[string]any) (map[string]any, error) {
 
 // AgentOptionsSpec renders agent options as a `fleetctl apply -f` document
 // (kind config). JSON is valid YAML, and JSON keeps numbers and strings as
-// Fleet returned them.
+// Fleet returned them; fleetctl 4.94 only applies files named .yml or
+// .yaml, so save it under such a name.
 func AgentOptionsSpec(agentOptions map[string]any) ([]byte, error) {
 	if agentOptions == nil {
 		return nil, errors.New("fleetgen: no agent options")

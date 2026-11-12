@@ -255,6 +255,13 @@ func TestScanFixtureHooksSkillsRules(t *testing.T) {
 	if pl.Version != "1.2.0" || pl.Detail["pinned"] != "true" || pl.Detail["marketplace_repo"] != "acme/plugins" || pl.Detail["enabled"] != "true" {
 		t.Errorf("plugin = %+v", pl.Detail)
 	}
+	gp := x.one(t, event.AssetPlugin, "lint@git-market")
+	if gp.Detail["marketplace_host"] != "git.example.com" || gp.Detail["pinned"] != "false" || len(gp.SHA256) != 64 {
+		t.Errorf("git marketplace plugin = %+v %s", gp.Detail, gp.SHA256)
+	}
+	if lc := x.one(t, event.AssetCommand, "lint"); lc.Scope != event.ScopePlugin || lc.Detail["plugin"] != "lint@git-market" {
+		t.Errorf("plugin command = %+v", lc)
+	}
 }
 
 func TestScanFixtureProject(t *testing.T) {
@@ -318,8 +325,8 @@ func TestScanFixtureProject(t *testing.T) {
 
 func TestScanFixtureNoCanaryLeaks(t *testing.T) {
 	f, res, _ := scanFixture(t)
-	if len(f.canaries) < 5 {
-		t.Fatal("fixture planted too few canaries")
+	if len(f.canaries) < 30 {
+		t.Fatalf("fixture planted %d canaries; every config should carry one", len(f.canaries))
 	}
 	var all strings.Builder
 	for _, e := range res.Events {

@@ -70,6 +70,6 @@ if [ $restart = 1 ]; then
 		launchctl print system/com.fleetdm.orbit >/dev/null 2>&1 && svc=system/com.fleetdm.orbit
 		nohup sh -c "sleep 10; launchctl kickstart -k $svc" >/dev/null 2>&1 &
 	fi
-	echo "spoor uninstall: osquery restarts in 10 s"
+	echo "spoor uninstall: osquery ($svc) restarts in 10 s"
 fi
 echo "spoor uninstall: removed"

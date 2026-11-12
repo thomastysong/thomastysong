@@ -19,9 +19,12 @@ package e2e
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"runtime"
@@ -134,7 +137,7 @@ func TestFleetContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, filepath.Join(e.out, "atc-apply.json"), spec)
+	writeFile(t, filepath.Join(e.out, "atc-apply.yml"), spec)
 
 	var tables []string
 	for _, td := range state.Tables {
@@ -514,4 +517,187 @@ func (h *harness) check(scenario string) {
 			t.Errorf("planted health row %v", hb[0])
 		}
 	}
+}
+
+// fleetScriptImage is a local Debian image (no Docker Hub pulls here).
+const fleetScriptImage = "mirror.gcr.io/library/redis:7"
+
+// TestFleetInstallScripts runs the Fleet install, uninstall and
+// post-install scripts in a throwaway Debian container with fake
+// systemctl and spoor binaries, under SPOOR_ROOT so nothing outside the
+// mounted directory changes. It checks: a wrong SHA-256 installs nothing;
+// install writes the binary, extension, unit and osquery's default
+// extensions.load (other lines kept) and schedules a detached osquery
+// restart; a second run changes nothing; orbit's extensions.load is never
+// touched; the atc tier unregisters; uninstall is idempotent and keeps data.
+func TestFleetInstallScripts(t *testing.T) {
+	if os.Getenv("SPOOR_E2E_FLEET") == "" {
+		t.Skip("set SPOOR_E2E_FLEET=1 (needs docker and " + fleetScriptImage + ")")
+	}
+	if err := exec.Command("docker", "image", "inspect", fleetScriptImage).Run(); err != nil {
+		t.Skipf("image %s not available: %v", fleetScriptImage, err)
+	}
+	_, file, _, _ := runtime.Caller(0)
+	scripts := filepath.Join(filepath.Dir(file), "..", "..", "deploy", "fleet", "scripts")
+	work := t.TempDir()
+	fake := filepath.Join(work, "fakebin")
+	spoorBin := "#!/bin/sh\n# fake spoor\ncase \"$1 $2\" in\n\"export config\") printf 'data_dir: /var/lib/spoor\\n' > \"$4\" ;;\n\"version \") echo spoor-fake-1 ;;\nesac\n"
+	writeFile(t, filepath.Join(work, "spoor"), []byte(spoorBin))
+	writeFile(t, filepath.Join(fake, "systemctl"), []byte("#!/bin/sh\necho \"systemctl $*\" >> /work/systemctl.log\n"+
+		"[ \"$1 $2\" = \"cat orbit.service\" ] && [ ! -f /work/orbit ] && exit 1\nexit 0\n"))
+	for _, p := range []string{filepath.Join(fake, "systemctl"), filepath.Join(work, "spoor")} {
+		if err := os.Chmod(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	root := filepath.Join(work, "root")
+	orbitLoad := filepath.Join(root, "opt", "orbit", "extensions.load")
+	writeFile(t, orbitLoad, []byte("/opt/orbit/bin/extensions/fleet.ext\n"))
+	load := filepath.Join(root, "etc", "osquery", "extensions.load")
+	writeFile(t, load, []byte("/usr/lib/other/other.ext\n"))
+
+	name := fmt.Sprintf("spoor-c5-scripts-%d", os.Getpid())
+	out, err := exec.Command("docker", "run", "-d", "--rm", "--name", name, "--network", "none",
+		"-v", scripts+":/scripts:ro", "-v", work+":/work", fleetScriptImage, "sleep", "600").CombinedOutput()
+	if err != nil {
+		t.Fatalf("docker run: %v\n%s", err, out)
+	}
+	t.Cleanup(func() { exec.Command("docker", "rm", "-f", name).Run() })
+
+	sum := sha256Hex(t, filepath.Join(work, "spoor"))
+	run := func(script string, env ...string) (string, int) {
+		t.Helper()
+		args := []string{"exec"}
+		base := []string{"PATH=/work/fakebin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+			"SPOOR_ROOT=/work/root", "SPOOR_SRC=/work/spoor",
+			"SPOOR_SHA256_LINUX_AMD64=" + sum, "SPOOR_SHA256_LINUX_ARM64=" + sum}
+		for _, e := range append(base, env...) {
+			args = append(args, "-e", e)
+		}
+		args = append(args, name, "sh", "/scripts/"+script)
+		cmd := exec.Command("docker", args...)
+		b, err := cmd.CombinedOutput()
+		code := 0
+		if ee, ok := err.(*exec.ExitError); ok {
+			code = ee.ExitCode()
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		return string(b), code
+	}
+	readLog := func() string {
+		b, _ := os.ReadFile(filepath.Join(work, "systemctl.log"))
+		os.Remove(filepath.Join(work, "systemctl.log"))
+		return string(b)
+	}
+	lines := func(p string) []string {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return nil
+		}
+		return strings.Fields(string(b))
+	}
+	ext := "/work/root/usr/lib/spoor/spoor.ext"
+
+	// 1. Wrong hash: nothing installed.
+	o, code := run("install-spoor.sh", "SPOOR_SHA256_LINUX_AMD64="+strings.Repeat("0", 64), "SPOOR_SHA256_LINUX_ARM64="+strings.Repeat("0", 64))
+	if code == 0 || !strings.Contains(o, "SHA-256 mismatch") {
+		t.Fatalf("wrong hash: exit %d\n%s", code, o)
+	}
+	if _, err := os.Stat(filepath.Join(root, "usr", "bin", "spoor")); !os.IsNotExist(err) {
+		t.Fatal("binary installed despite a hash mismatch")
+	}
+	// 2. Install.
+	o, code = run("install-spoor.sh")
+	t.Logf("install:\n%s", o)
+	if code != 0 || !strings.Contains(o, "osquery (osqueryd) restarts in 10 s") {
+		t.Fatalf("install: exit %d\n%s", code, o)
+	}
+	log := readLog()
+	for _, w := range []string{"systemctl daemon-reload", "systemctl enable spoor", "systemctl restart spoor"} {
+		if !strings.Contains(log, w) {
+			t.Errorf("install did not run %q:\n%s", w, log)
+		}
+	}
+	if got := lines(load); strings.Join(got, ",") != "/usr/lib/other/other.ext,"+ext {
+		t.Errorf("extensions.load = %v", got)
+	}
+	for p, mode := range map[string]os.FileMode{
+		filepath.Join(root, "usr", "bin", "spoor"):                       0o755,
+		filepath.Join(root, "usr", "lib", "spoor", "spoor.ext"):          0o755,
+		filepath.Join(root, "etc", "systemd", "system", "spoor.service"): 0o644,
+		filepath.Join(root, "var", "lib", "spoor"):                       0o750 | os.ModeDir,
+		load: 0o644,
+	} {
+		fi, err := os.Stat(p)
+		if err != nil {
+			t.Errorf("%s: %v", p, err)
+			continue
+		}
+		if fi.Mode()&(os.ModePerm|os.ModeDir) != mode {
+			t.Errorf("%s: mode %v, want %v", p, fi.Mode(), mode)
+		}
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, "etc", "spoor", "spoor.yaml")); !strings.Contains(string(b), "data_dir") {
+		t.Error("config not written with `spoor export config`")
+	}
+	// 3. Again: nothing changes, the service is only started.
+	o, code = run("install-spoor.sh")
+	log = readLog()
+	if code != 0 || strings.Contains(o, "restarts in 10 s") || strings.Contains(log, "restart spoor") || !strings.Contains(log, "systemctl start spoor") {
+		t.Errorf("second install not idempotent: exit %d\n%s\n%s", code, o, log)
+	}
+	if got := lines(load); len(got) != 2 {
+		t.Errorf("extensions.load after second run: %v", got)
+	}
+	// 4. With orbit present, orbit is what restarts.
+	writeFile(t, filepath.Join(work, "orbit"), nil)
+	if o, _ = run("install-spoor.sh", "SPOOR_TIER=atc"); !strings.Contains(o, "osquery (orbit) restarts") {
+		t.Errorf("atc tier with orbit:\n%s", o)
+	}
+	if got := lines(load); strings.Join(got, ",") != "/usr/lib/other/other.ext" {
+		t.Errorf("atc tier left %v", got)
+	}
+	readLog()
+	// 5. Post-install registration of a packaged binary, twice.
+	if o, code = run("register-extension.sh"); code != 0 || !strings.Contains(o, "restarts in 10 s") {
+		t.Errorf("register-extension: exit %d\n%s", code, o)
+	}
+	if o, _ = run("register-extension.sh"); strings.Contains(o, "restarts") {
+		t.Errorf("register-extension not idempotent:\n%s", o)
+	}
+	if got := lines(load); len(got) != 2 {
+		t.Errorf("after register-extension: %v", got)
+	}
+	// 6. Uninstall, twice: data kept, other autoload lines kept.
+	if o, code = run("uninstall-spoor.sh"); code != 0 || !strings.Contains(o, "restarts in 10 s") {
+		t.Errorf("uninstall: exit %d\n%s", code, o)
+	}
+	if o, code = run("uninstall-spoor.sh"); code != 0 || strings.Contains(o, "restarts") {
+		t.Errorf("second uninstall: exit %d\n%s", code, o)
+	}
+	for _, p := range []string{"usr/bin/spoor", "usr/lib/spoor/spoor.ext", "etc/systemd/system/spoor.service"} {
+		if _, err := os.Stat(filepath.Join(root, p)); !os.IsNotExist(err) {
+			t.Errorf("%s left after uninstall", p)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, "etc", "spoor", "spoor.yaml")); err != nil {
+		t.Error("uninstall removed the configuration without SPOOR_PURGE")
+	}
+	if got := lines(load); strings.Join(got, ",") != "/usr/lib/other/other.ext" {
+		t.Errorf("extensions.load after uninstall: %v", got)
+	}
+	if got := lines(orbitLoad); strings.Join(got, ",") != "/opt/orbit/bin/extensions/fleet.ext" {
+		t.Errorf("orbit's extensions.load was modified: %v", got)
+	}
+}
+
+func sha256Hex(t *testing.T, p string) string {
+	t.Helper()
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := sha256.Sum256(b)
+	return hex.EncodeToString(s[:])
 }

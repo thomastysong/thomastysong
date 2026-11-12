@@ -106,6 +106,7 @@ if [ $os = linux ]; then
 	cat >"$tmp/unit" <<'EOF'
 [Unit]
 Description=spoor AI agent detection sensor
+Documentation=https://github.com/thomastysong/thomastysong/tree/main/spoor
 After=network-online.target
 Wants=network-online.target
 
@@ -230,6 +231,6 @@ if [ $changed = 1 ] || [ $load_changed = 1 ]; then
 		launchctl print system/com.fleetdm.orbit >/dev/null 2>&1 && svc=system/com.fleetdm.orbit
 		nohup sh -c "sleep 10; launchctl kickstart -k $svc" >/dev/null 2>&1 &
 	fi
-	echo "spoor install: osquery restarts in 10 s to load $EXT"
+	echo "spoor install: osquery ($svc) restarts in 10 s to load $EXT"
 fi
 echo "spoor install: $("$BIN" version 2>/dev/null || echo spoor) installed at $BIN (tier $TIER)"

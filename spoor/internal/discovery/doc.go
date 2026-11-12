@@ -34,7 +34,9 @@
 //     keys. Hits add their flag to the agent's RiskFlags; hits in a project
 //     file are added as "project:<flag>" (and to the project_config asset),
 //     because a repository, not the user, chose them. Discovery adds
-//     managed_policy_missing and managed_policy_world_writable.
+//     managed_policy_missing and managed_policy_world_writable (a managed
+//     file, or the directory holding it, is not owned by root or is group or
+//     world writable; a sticky bit does not excuse a drop-in directory).
 //   - MCP servers from every catalogued config (user, managed, system,
 //     project, plugin), parsed with mcpconf: Asset.MCP, the definition hash
 //     as SHA256, mcpconf risk flags plus untrusted_location.
@@ -42,7 +44,10 @@
 //     definition hash, the command text in Event.Content (local only), shell
 //     analyzer flags (hook_remote_fetch_exec, hook_encoded,
 //     hook_runs_repo_script, hook_network_tool) and Detail["spoor"]="true"
-//     on spoor's own entries.
+//     on spoor's own entries. hook_runs_repo_script needs the analyzer to
+//     see a repository file executed (./x.sh, "$CLAUDE_PROJECT_DIR"/x.sh,
+//     %CLAUDE_PROJECT_DIR%\x.cmd); merely naming the project directory is
+//     not enough.
 //   - Skills (folder hash byte-compatible with uber/ADR), plugins (Claude
 //     Code marketplace, version, commit pin and enabled state), subagents,
 //     commands and rules/instruction files, with hidden_unicode,
@@ -59,7 +64,8 @@
 // With Options.Prev (asset id -> SHA256 from the state store) records carry
 // Change new or changed; unchanged assets are returned only with
 // Options.Full. Assets of Prev that a complete scan did not see are
-// returned with Change removed (only the id is known). A scan that hit the
+// returned with Change removed (only the id is known, so Asset.Kind is
+// empty: downstream joins on the id). A scan that hit the
 // deadline, a read error or an unreadable home reports no removals, since
 // absence then proves nothing. SHA256 is the content or definition hash of
 // declared items; for catalogued products it is a digest of the
@@ -73,14 +79,19 @@
 // RESOLVE_IN_ROOT|RESOLVE_NO_MAGICLINKS inside Options.HostRoot, so a link
 // planted in a container never makes the node sensor read a node file; on
 // other unix systems and on kernels without openat2 paths are walked one
-// component at a time with O_NOFOLLOW; elsewhere os.Root confines them.
+// component at a time with O_NOFOLLOW; elsewhere os.Root confines them. On
+// Windows a file confined by os.Root is then opened with FILE_SHARE_DELETE
+// (platform.OpenNoFollow) and the handle's final path is checked against the
+// root's: Go's own open shares only read and write, which would make an
+// agent's rename-over of its own config fail while the scanner reads it.
 // The final component is never followed, opens are non-blocking (a FIFO
 // named like a config cannot hang the scan), only regular files are read,
 // config files are capped at 20 MiB, and when privileged a file in a home
 // or project must belong to that user (a root-owned file in a user's home
 // is refused: it may be a hard link). Personal directories (Documents,
 // Desktop, Pictures, Mail, Messages, browser profiles, .ssh ...) are refused
-// unless the catalog or an agent's project list points inside them.
+// unless the catalog or an agent's project list points inside them (a
+// project under ~/Documents is common; only its control files are read).
 // Directory listings, ** walks, hashed bytes and the whole scan
 // (Options.Deadline) are bounded. Everything refused or skipped is counted
 // in the Ledger. Names, versions and paths read from files are sanitized
@@ -100,7 +111,12 @@
 //   - Windows: file ownership is not checked (ACLs, not uids), the
 //     registry is read for Uninstall entries and policy-key existence only,
 //     and the Windows code paths were compiled but not executed here.
-//   - Options.HostRoot on Windows uses os.Root confinement (no openat2).
+//   - Options.HostRoot on Windows uses os.Root confinement (no openat2) and
+//     plain os.Root opens (no FILE_SHARE_DELETE); Zone.Identifier is not
+//     checked there.
+//   - Download provenance (quarantined): the macOS quarantine xattr is read
+//     on the gate's descriptor; the Windows Zone.Identifier stream is probed
+//     by path (attributes only, sharing delete); Linux has no equivalent.
 //   - Git worktrees whose .git is a file: their config is not followed.
 //   - Codex hooks declared inside a project's config.toml are read; their
 //     trust state (persisted per hook) is not.

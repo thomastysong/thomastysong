@@ -246,16 +246,18 @@ func agentOf(e *event.Event) string {
 func printReport(w io.Writer, r *evalReport) {
 	for _, e := range r.Detections {
 		d := e.Detection
-		fmt.Fprintf(w, "%s  %-8s %-7s %s  %s\n", e.TS.Time.UTC().Format(time.RFC3339), d.Severity, d.Class, d.RuleID, d.Title)
+		// Records evaluated here come from other machines: every field
+		// they carry goes through clip/term before it reaches a terminal.
+		fmt.Fprintf(w, "%s  %-8s %-7s %s  %s\n", e.TS.Time.UTC().Format(time.RFC3339), term(d.Severity), term(d.Class), term(d.RuleID), clip(d.Title, 200))
 		var ctx []string
 		if e.Host != nil && e.Host.Name != "" {
-			ctx = append(ctx, "host="+e.Host.Name)
+			ctx = append(ctx, "host="+clip(e.Host.Name, 80))
 		}
 		if e.User != nil && (e.User.Name != "" || e.User.ID != "") {
-			ctx = append(ctx, "user="+firstNonEmpty(e.User.Name, e.User.ID))
+			ctx = append(ctx, "user="+clip(firstNonEmpty(e.User.Name, e.User.ID), 80))
 		}
 		if e.Agent != nil {
-			ctx = append(ctx, "agent="+e.Agent.ID)
+			ctx = append(ctx, "agent="+clip(e.Agent.ID, 60))
 		}
 		if e.Session != nil && e.Session.ID != "" {
 			ctx = append(ctx, "session="+clip(e.Session.ID, 40))
@@ -267,12 +269,12 @@ func printReport(w io.Writer, r *evalReport) {
 			fmt.Fprintf(w, "    %s\n", strings.Join(ctx, " "))
 		}
 		for _, k := range sortedKeys(d.Evidence) {
-			fmt.Fprintf(w, "    %s: %s\n", k, clip(d.Evidence[k], 200))
+			fmt.Fprintf(w, "    %s: %s\n", clip(k, 80), clip(d.Evidence[k], 200))
 		}
 	}
 	for _, e := range r.Posture {
 		if c := e.Check; c != nil && c.Status == "fail" {
-			fmt.Fprintf(w, "posture  %-8s %s  %s  %s\n", c.Severity, c.ID, clip(c.Title, 60), clip(c.Subject, 80))
+			fmt.Fprintf(w, "posture  %-8s %s  %s  %s\n", term(c.Severity), term(c.ID), clip(c.Title, 60), clip(c.Subject, 80))
 		}
 	}
 	s := r.Summary
@@ -290,7 +292,7 @@ func printReport(w io.Writer, r *evalReport) {
 	if len(s.Input.Skipped) > 0 {
 		var parts []string
 		for _, k := range sortedKeys(s.Input.Skipped) {
-			parts = append(parts, fmt.Sprintf("%s %d", k, s.Input.Skipped[k]))
+			parts = append(parts, fmt.Sprintf("%s %d", term(k), s.Input.Skipped[k]))
 		}
 		fmt.Fprintf(w, "not evaluated: %s\n", strings.Join(parts, ", "))
 	}

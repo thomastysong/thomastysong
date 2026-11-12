@@ -33,7 +33,13 @@ func (d *daemon) openSinks() error {
 	d.files = files
 	d.outbox = files
 	if cfg.Output.Stdout {
-		d.outbox = &teeSink{sinks: []sink.Sink{files, sink.NewStdout(d.env.stdout, cfg.Output.Format)}}
+		d.outbox = &teeSink{
+			primary: files,
+			mirrors: []sink.Sink{sink.NewStdout(d.env.stdout, cfg.Output.Format)},
+			onMirrorError: func(name string, err error) {
+				d.board.add("output."+name+"_errors", 1)
+			},
+		}
 	}
 	local, err := sink.NewFiles(sink.FilesOptions{
 		Dir:          d.layout.local,
@@ -133,37 +139,52 @@ func (s *shipperRun) report(b *board) {
 	}
 }
 
-// teeSink writes every batch to several sinks: the outbox files and stdout.
-type teeSink struct{ sinks []sink.Sink }
+// teeSink writes every batch to the outbox files (primary) and to mirrors
+// (stdout). The pipeline counts a batch whose write failed as dropped
+// (outbox.dropped, the state database's dropped column), so only the
+// primary's result is the batch's result: a mirror that fails (stdout
+// closed by the service manager) is counted through onMirrorError, while
+// the records are still in the outbox for Fluent Bit.
+type teeSink struct {
+	primary       sink.Sink
+	mirrors       []sink.Sink
+	onMirrorError func(name string, err error) // nil: ignore
+}
 
 func (t *teeSink) Name() string { return "tee" }
 
+func (t *teeSink) mirrorFailed(s sink.Sink, err error) {
+	if t.onMirrorError != nil {
+		t.onMirrorError(s.Name(), err)
+	}
+}
+
 func (t *teeSink) Write(batch []*event.Event) error {
-	var errs []error
-	for _, s := range t.sinks {
-		if err := s.Write(batch); err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", s.Name(), err))
+	err := t.primary.Write(batch)
+	for _, m := range t.mirrors {
+		if merr := m.Write(batch); merr != nil {
+			t.mirrorFailed(m, merr)
 		}
 	}
-	return errors.Join(errs...)
+	return err
 }
 
 func (t *teeSink) Flush() error {
-	var errs []error
-	for _, s := range t.sinks {
-		if err := s.Flush(); err != nil {
-			errs = append(errs, err)
+	err := t.primary.Flush()
+	for _, m := range t.mirrors {
+		if merr := m.Flush(); merr != nil {
+			t.mirrorFailed(m, merr)
 		}
 	}
-	return errors.Join(errs...)
+	return err
 }
 
 func (t *teeSink) Close() error {
-	var errs []error
-	for _, s := range t.sinks {
-		if err := s.Close(); err != nil && !errors.Is(err, sink.ErrClosed) {
-			errs = append(errs, err)
+	err := t.primary.Close()
+	for _, m := range t.mirrors {
+		if merr := m.Close(); merr != nil && !errors.Is(merr, sink.ErrClosed) {
+			t.mirrorFailed(m, merr)
 		}
 	}
-	return errors.Join(errs...)
+	return err
 }

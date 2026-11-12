@@ -250,24 +250,63 @@ func (h *hookView) snapshot() map[[2]string]string {
 // board collects what collectors report for the heartbeat: totals since
 // start (Gauges) and surface status (Surfaces).
 type board struct {
-	mu   sync.Mutex
-	ctr  map[string]uint64
-	surf map[string]event.SurfaceStatus
+	mu    sync.Mutex
+	ctr   map[string]uint64
+	surf  map[string]event.SurfaceStatus
+	bytes int // boardCost of every name in ctr
 }
 
-// maxBoardKeys bounds the counter names (some carry a reason code from a
-// user-writable spool); the heartbeat must fit its line.
-const maxBoardKeys = 256
+// The heartbeat is one line of at most output.max_line_bytes (16 KiB by
+// default). The engine's own counters, per-stream accounting and the
+// surfaces take up to about 7 KiB of it in the worst case (every counter
+// non-zero, 20-digit values), so the daemon's counters are held to
+// maxBoardBytes of encoded JSON. Counter names come from closed sets
+// (reason codes are mapped, never copied from input; see hookReasonKey) or
+// from the operator's configuration, which stay far below the bound; it
+// is a safety net, and what it refuses is counted in omittedCounter. With
+// a smaller max_line_bytes the engine trims the heartbeat itself (coverage
+// rows, then surfaces, then counters) and lists what it cut.
+const (
+	maxBoardBytes  = 6 << 10
+	omittedCounter = "daemon.counters_omitted"
+)
+
+// boardCost is what one counter adds to the encoded heartbeat at most:
+// "name":18446744073709551615, plus the name's own length.
+func boardCost(name string) int { return len(name) + 24 }
 
 func newBoard() *board {
 	return &board{ctr: map[string]uint64{}, surf: map[string]event.SurfaceStatus{}}
 }
 
+// admit reports whether a name not yet on the board fits it, and takes its
+// room. The caller holds b.mu.
+func (b *board) admit(name string) bool {
+	need := boardCost(name)
+	if _, ok := b.ctr[omittedCounter]; !ok && name != omittedCounter {
+		need += boardCost(omittedCounter) // room for the counter of refusals stays free
+	}
+	if b.bytes+need > maxBoardBytes {
+		return false
+	}
+	b.bytes += boardCost(name)
+	return true
+}
+
+// omit counts a refused update. The caller holds b.mu.
+func (b *board) omit(n uint64) {
+	if _, ok := b.ctr[omittedCounter]; !ok {
+		b.bytes += boardCost(omittedCounter) // reserved by admit
+	}
+	b.ctr[omittedCounter] += n
+}
+
 func (b *board) add(name string, n uint64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if _, ok := b.ctr[name]; !ok && len(b.ctr) >= maxBoardKeys {
-		name = "daemon.counters_omitted"
+	if _, ok := b.ctr[name]; !ok && !b.admit(name) {
+		b.omit(max(n, 1))
+		return
 	}
 	b.ctr[name] += n
 }
@@ -275,7 +314,8 @@ func (b *board) add(name string, n uint64) {
 func (b *board) set(name string, v uint64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if _, ok := b.ctr[name]; !ok && len(b.ctr) >= maxBoardKeys {
+	if _, ok := b.ctr[name]; !ok && !b.admit(name) {
+		b.omit(1)
 		return
 	}
 	b.ctr[name] = v
@@ -283,8 +323,11 @@ func (b *board) set(name string, v uint64) {
 
 func (b *board) unset(name string) {
 	b.mu.Lock()
-	delete(b.ctr, name)
-	b.mu.Unlock()
+	defer b.mu.Unlock()
+	if _, ok := b.ctr[name]; ok {
+		delete(b.ctr, name)
+		b.bytes -= boardCost(name)
+	}
 }
 
 func (b *board) get(name string) uint64 {

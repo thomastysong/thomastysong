@@ -327,39 +327,88 @@ func TestCanaryCorpusAllProfiles(t *testing.T) {
 	}
 	leaks, records := 0, 0
 	evFields := []string{"target.command", "target.url", "process.args", "prompt.text", "tool.output", "tool.input", "tool.input.command", "asset.mcp.args", "check.actual", "repo.remote"}
-	for _, v := range variants {
-		for _, c := range corpus {
-			src := c.build()
-			var outs []string
-			out, _, ok := v.p.Emit(src)
-			if !ok {
-				t.Errorf("%s %s: dropped", v.name, c.name)
-				continue
-			}
-			outs = append(outs, line(t, out))
-			outs = append(outs, jsonOf(v.p.Evidence(c.build(), evFields)))
-			for _, ce := range v.p.ContextFor("det-1", []*event.Event{c.build()}, 5) {
-				outs = append(outs, line(t, ce))
-			}
-			for _, o := range outs {
-				records++
-				if strings.Contains(o, "Canary") {
-					leaks++
-					t.Errorf("LEAK %s %s:\n%s", v.name, c.name, o)
+	// Every canary is written twice: cold, with the command memo emptied
+	// before each call so the structural redactor runs on every field,
+	// and warm, served from what the cold pass remembered. Both must be
+	// leak-free and byte-identical.
+	// The records are built once (event.New stamps a fresh id and time)
+	// and shared: Emit, Evidence and ContextFor never modify their input,
+	// which the input check below and TestCanaryInputNotMutated verify.
+	type built struct{ emit, evid, ctx *event.Event }
+	srcs := make([]built, len(corpus))
+	snap := func(b built) string {
+		var sb strings.Builder
+		for _, e := range []*event.Event{b.emit, b.evid, b.ctx} {
+			sb.WriteString(jsonOf(e) + fmt.Sprint(e.Content) + "\n")
+		}
+		return sb.String()
+	}
+	before := make([]string, len(corpus))
+	for i, c := range corpus {
+		srcs[i] = built{c.build(), c.build(), c.build()}
+		before[i] = snap(srcs[i])
+	}
+	cold := map[string][]string{}
+	for _, pass := range []string{"cold", "warm"} {
+		resetCommandMemo()
+		for _, v := range variants {
+			for ci, c := range corpus {
+				reset := func() {
+					if pass == "cold" {
+						resetCommandMemo()
+					}
 				}
-				if m := unkeyedMarkerRe.FindString(o); m != "" {
-					t.Errorf("unkeyed fingerprint %s in %s %s:\n%s", m, v.name, c.name, o)
+				src := srcs[ci].emit
+				var outs []string
+				reset()
+				out, _, ok := v.p.Emit(src)
+				if !ok {
+					t.Errorf("%s %s %s: dropped", pass, v.name, c.name)
+					continue
 				}
-				if nestedMarkerRe.MatchString(o) {
-					t.Errorf("nested marker in %s %s:\n%s", v.name, c.name, o)
+				outs = append(outs, line(t, out))
+				reset()
+				outs = append(outs, jsonOf(v.p.Evidence(srcs[ci].evid, evFields)))
+				reset()
+				for _, ce := range v.p.ContextFor("det-1", []*event.Event{srcs[ci].ctx}, 5) {
+					outs = append(outs, line(t, ce))
+				}
+				for _, o := range outs {
+					records++
+					if strings.Contains(o, "Canary") {
+						leaks++
+						t.Errorf("LEAK %s %s %s:\n%s", pass, v.name, c.name, o)
+					}
+					if m := unkeyedMarkerRe.FindString(o); m != "" {
+						t.Errorf("unkeyed fingerprint %s in %s %s %s:\n%s", m, pass, v.name, c.name, o)
+					}
+					if nestedMarkerRe.MatchString(o) {
+						t.Errorf("nested marker in %s %s %s:\n%s", pass, v.name, c.name, o)
+					}
+				}
+				id := v.name + "|" + c.name
+				if pass == "cold" {
+					cold[id] = outs
+				} else if want := cold[id]; strings.Join(want, "\n") != strings.Join(outs, "\n") {
+					t.Errorf("%s %s: memoized output differs from uncached:\ncold %q\nwarm %q", v.name, c.name, want, outs)
+				}
+				if src.Content != nil && src.Content.PromptText != "" && !strings.Contains(src.Content.PromptText, "Canary") {
+					t.Errorf("%s: input was modified", c.name)
 				}
 			}
-			if src.Content != nil && src.Content.PromptText != "" && !strings.Contains(src.Content.PromptText, "Canary") {
-				t.Errorf("%s: input was modified", c.name)
+		}
+		if pass == "warm" {
+			if _, _, hits, _ := commandMemo.stats(); hits == 0 {
+				t.Error("warm pass made no use of the command memo")
 			}
 		}
 	}
-	t.Logf("canary corpus: %d canaries, %d profile variants, %d records written, leaks %d", len(corpus), len(variants), records, leaks)
+	for i, c := range corpus {
+		if snap(srcs[i]) != before[i] {
+			t.Errorf("%s: a source record was modified", c.name)
+		}
+	}
+	t.Logf("canary corpus: %d canaries, %d profile variants, 2 passes (cold, warm), %d records written, leaks %d", len(corpus), len(variants), records, leaks)
 }
 
 // TestCanaryInputNotMutated: Emit works on a copy; detection keeps the

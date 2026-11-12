@@ -27,6 +27,13 @@ import (
 //   - A consumer is Fluent Bit's tail database (read-only) or a spoor shipper's
 //     checkpoint. A segment is consumed when every consumer that reads its
 //     stream has read it to the end.
+//   - A tail database reads the streams it has ever listed a segment of
+//     (remembered: Fluent Bit drops the row of a deleted file). The shipped
+//     Fluent Bit configuration has one input, and one database, per stream
+//     group; under the minimal profile the activity input never has a file,
+//     so a readable database that lists nothing reads nothing yet. Only a
+//     consumer that cannot be read and has never listed anything is assumed
+//     to read every stream, so that nothing it may still need is removed.
 //   - Age (retention.outbox) removes consumed segments only, and segments of
 //     streams nobody reads. With no consumer configured at all it removes by
 //     age alone, as the sink would.
@@ -44,7 +51,46 @@ type readPos struct {
 // consumerView is one consumer's positions by segment base name.
 type consumerView struct {
 	files map[string]readPos
-	all   bool // reads every stream (a shipper reads the whole directory)
+	// more holds further rows for a name already in files: a tail database
+	// can list an older file of the same name (another inode) that Fluent
+	// Bit has not cleaned up yet. readOffset picks the row for the file on
+	// disk.
+	more map[string][]readPos
+	all  bool // reads every stream (a shipper reads the whole directory)
+}
+
+// readOffset is how far the view has read segment s: the row recorded for
+// the inode on disk; failing that, the least of the rows that cannot be told
+// apart from it (no inode on one side); 0 when every row is about another
+// file of that name.
+func (v consumerView) readOffset(s *outSeg) int64 {
+	var exact, loose []int64
+	note := func(pos readPos) {
+		switch {
+		case pos.inode == 0 || s.inode == 0:
+			loose = append(loose, pos.off)
+		case pos.inode == s.inode:
+			exact = append(exact, pos.off)
+		}
+	}
+	if pos, ok := v.files[s.name]; ok {
+		note(pos)
+	}
+	for _, pos := range v.more[s.name] {
+		note(pos)
+	}
+	pick := exact
+	if len(pick) == 0 {
+		pick = loose
+	}
+	if len(pick) == 0 {
+		return 0
+	}
+	off := pick[0]
+	for _, o := range pick[1:] {
+		off = min(off, o)
+	}
+	return min(max(off, 0), s.size)
 }
 
 // consumer is something that reads the outbox.
@@ -408,11 +454,11 @@ func (p *outboxPruner) measure(now time.Time) ([]*outSeg, pruneResult) {
 		first := true
 		for _, x := range views {
 			applies := x.v.all || x.cov[s.stream]
-			if !applies && len(x.cov) == 0 {
-				// A consumer that has never listed a segment (unreadable,
-				// or Fluent Bit has not discovered the files yet) might
-				// read anything: assume it does, so nothing it may still
-				// need is removed by age.
+			if !applies && x.err != nil && len(x.cov) == 0 {
+				// A consumer that cannot be read and has never listed a
+				// segment might read anything: assume it does, so nothing
+				// it may still need is removed by age. A readable one that
+				// lists nothing reads nothing yet (see the top of the file).
 				applies = true
 			}
 			if !applies {
@@ -420,9 +466,7 @@ func (p *outboxPruner) measure(now time.Time) ([]*outSeg, pruneResult) {
 			}
 			var off int64
 			if x.err == nil {
-				if pos, ok := x.v.files[s.name]; ok && (pos.inode == 0 || s.inode == 0 || pos.inode == s.inode) {
-					off = min(max(pos.off, 0), s.size)
-				}
+				off = x.v.readOffset(s)
 			}
 			x.lag += s.size - off
 			if first || off < s.readFrom {

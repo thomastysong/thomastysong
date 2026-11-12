@@ -33,12 +33,15 @@ import (
 // cut at the 63-byte DNS label limit, and runs of consecutive labels joined
 // (an encoder spreads one value over several labels) are candidates, raw
 // and decoded as hex, base64, base64url or base32. A raw label match counts
-// only for values that are credentials by format or by name: values kept
-// only because they look machine generated are often identifiers (project
-// refs, bucket names) that are legitimately used as subdomains.
+// only for values of 16 bytes or more that are credentials by format or by
+// name: values kept only because they look machine generated are often
+// identifiers (project refs, bucket names) that are legitimately used as
+// subdomains, and short values collide with ordinary labels (measured: one
+// 11-byte value in the benign replay).
 
 const (
 	minSecretValue  = 8
+	minLabelValue   = 16 // a raw DNS-label match needs a value at least this long
 	maxSecretValue  = 4096
 	maxSecretText   = 256 << 10 // secret-file output read for values: head and tail half each
 	maxEnvLines     = 4096
@@ -413,16 +416,21 @@ type flowScan struct {
 	match     func(c string, weakToo bool)
 	exhausted bool
 	// names are the dotted tokens met by the token pass, for the label
-	// pass; named dedups them.
-	names []string
-	named map[string]bool
+	// pass; named dedups them. The rest is scratch space it reuses.
+	names  []string
+	named  map[string]bool
+	labels [][2]int
+	pieces []string
+	ok64   []bool
+	buf    []byte
 }
 
 // What consider did with a candidate.
 const (
 	seenAll     uint8 = 1 << iota // fingerprinted against every remembered value
 	seenStrong                    // fingerprinted against values that are credentials by format or name
-	seenDecoded                   // decodings tried
+	seenDecoded                   // base64 and hex decodings tried
+	seenBase32                    // base32 decoding tried (labels only)
 )
 
 // candMode says where a candidate came from, which decides which
@@ -493,13 +501,20 @@ func (sc *flowScan) consider(c string, mode candMode) {
 	}
 	var want uint8
 	if sc.anyLen || sc.lens[len(c)] {
-		want = seenStrong
-		if mode == candToken || mode == candDecoded {
-			want |= seenAll
+		switch {
+		case mode == candToken || mode == candDecoded:
+			want = seenAll | seenStrong
+		case len(c) >= minLabelValue:
+			// Raw in a host name: a short value ("staging-api") is as
+			// likely an ordinary label as a leak.
+			want = seenStrong
 		}
 	}
 	if (mode == candToken || mode == candLabel) && len(c) >= 12 {
 		want |= seenDecoded // decodings need 12+ bytes
+	}
+	if mode == candLabel && len(c) >= 13 {
+		want |= seenBase32
 	}
 	have, ok := sc.seen[c]
 	todo := want &^ have
@@ -517,10 +532,10 @@ func (sc *flowScan) consider(c string, mode candMode) {
 	if todo&(seenAll|seenStrong) != 0 {
 		sc.match(c, todo&seenAll != 0)
 	}
-	if todo&seenDecoded == 0 {
+	if todo&(seenDecoded|seenBase32) == 0 {
 		return
 	}
-	for _, d := range decodings(c, mode == candLabel) {
+	for _, d := range decodings(c, todo&seenDecoded != 0, todo&seenBase32 != 0) {
 		sc.consider(strings.TrimSpace(d), candDecoded)
 		fields(d, sepDecoded, func(tok string) { sc.consider(tok, candDecoded) })
 	}
@@ -540,7 +555,8 @@ const (
 // concatenation; and every run of whole labels with its dots, raw, for a
 // value that has dots of its own (a JWT).
 func (sc *flowScan) labelCandidates(name string) {
-	var labels [][2]int // [start, end) of each label, empty ones included
+	labels := sc.labels[:0] // [start, end) of each label, empty ones included
+	defer func() { sc.labels = labels[:0] }()
 	start := 0
 	for i := 0; i <= len(name); i++ {
 		if i == len(name) || name[i] == '.' {
@@ -562,7 +578,7 @@ func (sc *flowScan) labelCandidates(name string) {
 			}
 		}
 	}
-	var pieces []string
+	pieces := sc.pieces[:0]
 	for _, l := range labels {
 		p := name[l[0]:l[1]]
 		for len(p) > maxDNSLabel {
@@ -573,11 +589,12 @@ func (sc *flowScan) labelCandidates(name string) {
 			pieces = append(pieces, p)
 		}
 	}
-	ok64 := make([]bool, len(pieces))
-	for i, p := range pieces {
-		ok64[i] = isBase64ish(p)
+	ok64 := sc.ok64[:0]
+	for _, p := range pieces {
+		ok64 = append(ok64, isBase64ish(p))
 	}
-	var buf []byte
+	buf := sc.buf[:0]
+	defer func() { sc.pieces, sc.ok64, sc.buf = pieces[:0], ok64[:0], buf[:0] }()
 	for i := range pieces {
 		if sc.exhausted {
 			return
@@ -604,19 +621,48 @@ func (sc *flowScan) labelCandidates(name string) {
 // padding; labels are case-insensitive, so input is upper-cased first).
 var base32NoPad = base32.StdEncoding.WithPadding(base32.NoPadding)
 
-// decodings returns c decoded as base64 (any alphabet) or hex, and with
-// dns also as base32, when it decodes to text.
-func decodings(c string, dns bool) []string {
+// decodings returns c decoded as base64 (any alphabet) or hex (with b64hex)
+// and as base32 (with dns), when it decodes to text. Of the base64 decoders the
+// first that yields text is used, in the order standard, raw standard,
+// URL, raw URL; decoders that must fail on c are not tried (each attempt
+// allocates): a '-' or '_' rules out the standard alphabet, a '+' or '/'
+// the URL one, '=' the raw forms and a length that is not a multiple of 4
+// the padded ones, and without '-', '_', '+' and '/' the URL decoders
+// decode exactly as the standard ones already did.
+func decodings(c string, b64hex, dns bool) []string {
 	var out []string
-	if len(c) >= 12 && isBase64ish(c) {
-		for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
+	if b64hex && len(c) >= 12 && isBase64ish(c) {
+		std, url := true, true
+		pad := false
+		for i := 0; i < len(c); i++ {
+			switch c[i] {
+			case '-', '_':
+				std = false
+			case '+', '/':
+				url = false
+			case '=':
+				pad = true
+			}
+		}
+		var encs [2]*base64.Encoding
+		switch {
+		case std && url, std:
+			encs = [2]*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding}
+		case url:
+			encs = [2]*base64.Encoding{base64.URLEncoding, base64.RawURLEncoding}
+		}
+		for i, enc := range encs {
+			raw := i == 1
+			if enc == nil || raw && pad || !raw && len(c)%4 != 0 {
+				continue
+			}
 			if b, err := enc.DecodeString(c); err == nil && printable(b) {
 				out = append(out, string(b))
 				break
 			}
 		}
 	}
-	if len(c) >= 16 && len(c)%2 == 0 {
+	if b64hex && len(c) >= 16 && len(c)%2 == 0 && hexDigits(c) {
 		if b, err := hex.DecodeString(c); err == nil && printable(b) {
 			out = append(out, string(b))
 		}
@@ -627,6 +673,16 @@ func decodings(c string, dns bool) []string {
 		}
 	}
 	return out
+}
+
+func hexDigits(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
+			return false
+		}
+	}
+	return true
 }
 
 func isBase64ish(s string) bool {

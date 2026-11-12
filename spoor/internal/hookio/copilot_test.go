@@ -45,7 +45,7 @@ func TestCopilotGolden(t *testing.T) {
 				t.Errorf("outcome.error = %q", outcome(e).Error)
 			}
 			// "String to replace not found: ..." (49 bytes).
-			eq(t, "outcome.error", outcome(e).Error, "tool error class:not_found len:49")
+			eq(t, "outcome.error", outcome(e).Error, "tool error class:not_found")
 			if !strings.Contains(e.Content.ToolOutput, "hunter2") {
 				t.Error("raw error text must be available to local detection")
 			}

@@ -17,23 +17,33 @@
 //     user's own fallback spool (platform.UserDirs(home).Spool), which hooks
 //     use when they cannot reach the system one. Identity comes from the file
 //     owner; reader problems are counted per kind, hook supervisor failures
-//     as hook_errors.<reason>.
+//     as hook_errors.<reason> for hookcmd's own reasons and hook_errors.other
+//     for anything else a spool claims (its user can write any code there).
 //   - Transcripts: transcript.Tailer with transcript.HomeRoots for every user
 //     plus transcript.ConfigRoots for configuration homes the process monitor
 //     sees in agents' environments (CLAUDE_CONFIG_DIR, CODEX_HOME, ...).
 //     Files that exist when a root is first seen are started at their end:
 //     no retroactive collection of what happened before spoor was deployed
-//     (sources.transcripts.backfill opts into reading back). A root is "first
-//     seen" once per data directory: the admitted roots are remembered in the
-//     checkpoint directory, so a restart does not skip what was written while
-//     the daemon was down.
+//     (sources.transcripts.backfill opts into reading back). Only the new
+//     root is primed: files created since in roots already followed are read
+//     from their first line. A root is "first seen" once per data directory:
+//     the admitted roots are remembered in the checkpoint directory, also
+//     while they are not listed (a configuration home is listed again only
+//     once the process monitor sees an agent using it after a restart), and
+//     forgotten after seven days unlisted, so a restart does not skip what
+//     was written while the daemon was down.
 //   - Processes: procmon (Linux process connector, then osquery's evented
 //     tables through internal/osqexec when sources.osquery_exec is enabled,
 //     then polling). The monitor's agent table answers the pipeline's RootSaw
 //     and supplies configuration-home overrides and project directories.
 //   - OTel: the loopback otelrecv receiver when sources.otlp.enabled.
-//   - Adapters: numbat NDJSON files from sources.adapters, tailed from their
-//     end like transcripts, with the file owner as the user.
+//   - Adapters: numbat NDJSON files from sources.adapters, with the file
+//     owner as the user. As for transcripts, files that exist when their
+//     pattern is first looked at start at their end; files that appear later
+//     (rotation, the other sensor starting after spoor, a file written while
+//     the daemon was down) are read from their first line, and a renamed
+//     file continues from its checkpoint. One pass reads at most 16 MiB of a
+//     file, partial lines included.
 //   - Scans: a full discovery.Scan at start and every scan.full_every,
 //     differential scans every scan.interval (state.Snapshot as the previous
 //     view), state.MarkScan after every complete scan, and discovery.ScanProject
@@ -51,12 +61,13 @@
 //     the command line) is audited and hot-loaded: Pipeline.SetRules for rules
 //     and lists, Catalog.LoadOverlay for catalog overlays.
 //   - Outbox: sink.Files segments (dir root:<output.group> 0750 with the
-//     set-group-id bit, files 0640) and optionally stdout. The daemon prunes
-//     the outbox itself (the sink's own pruning is off): segments are
+//     set-group-id bit, files 0640) and optionally stdout (a failing stdout
+//     is counted as output.stdout_errors, never as outbox loss). The daemon
+//     prunes the outbox itself (the sink's own pruning is off): segments are
 //     consumed when Fluent Bit's tail database(s) (output.fluent_bit.tail_db,
 //     comma-separated paths or globs, read without writing anything beside
-//     them: see readTailDB) and every configured
-//     shipper's checkpoint show them read to the end. Read segments are pruned
+//     them: see readTailDB) and every configured shipper's checkpoint show
+//     them read to the end. Read segments are pruned
 //     by age; the hard byte cap removes read segments first, then segments of
 //     streams no consumer reads, then unread data (activity first, detections
 //     last), and every unread byte dropped is reported as a health.error with
@@ -116,8 +127,11 @@
 //     monitor's marker tables are built at start.
 //   - Fluent Bit's tail database is matched by segment base name and inode,
 //     so Fluent Bit may see the outbox under another path (a container).
-//     A stream that no tail database has ever listed is treated as having
-//     no consumer.
+//     A tail database reads the streams it has ever listed a segment of: a
+//     stream that no tail database has ever listed is treated as having no
+//     consumer, and a readable database that lists nothing (the activity
+//     input under the minimal profile) reads nothing. Only a database that
+//     cannot be read and has never listed anything holds everything back.
 //   - Hook spools written under $SPOOR_SPOOL (containers, CI) are not known
 //     to the daemon.
 package daemon

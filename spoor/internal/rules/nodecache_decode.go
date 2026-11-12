@@ -59,20 +59,44 @@ func (t *cacheTree) materialize(n *yaml.Node, tests bool) (err error) {
 	if len(t.deferred) == 0 {
 		return nil
 	}
+	// One reader for the rule, its arena sized to the nodes it builds.
+	want := func(i int) (deferredRef, bool) {
+		ref, ok := t.deferred[n.Content[i]]
+		return ref, ok && (tests || n.Content[i-1].Value != "tests")
+	}
+	total := 0
 	for i := 1; i < len(n.Content); i += 2 {
-		v := n.Content[i]
-		ref, ok := t.deferred[v]
-		if !ok || !tests && n.Content[i-1].Value == "tests" {
+		if ref, ok := want(i); ok {
+			total += ref.nodes
+		}
+	}
+	if total == 0 {
+		return nil
+	}
+	r := &cacheReader{b: t.b, strs: t.strs, tags: t.tags, limit: total}
+	type done struct {
+		v    *yaml.Node
+		kids []*yaml.Node
+	}
+	var built []done
+	for i := 1; i < len(n.Content); i += 2 {
+		ref, ok := want(i)
+		if !ok {
 			continue
 		}
-		r := &cacheReader{b: t.b, off: ref.off, strs: t.strs, limit: ref.nodes, tags: t.tags}
-		kids := make([]*yaml.Node, ref.kids)
+		v := n.Content[i]
+		r.off = ref.off
+		before := r.visited
+		kids := r.newPtrs(ref.kids)
 		r.children(v.Kind, ref.kids, ref.depth, true, posNone, kids)
-		if r.err != nil || r.visited != ref.nodes {
+		if r.err != nil || r.visited-before != ref.nodes {
 			return fmt.Errorf("%w: deferred subtree at line %d", errCache, v.Line)
 		}
-		v.Content = kids
-		delete(t.deferred, v)
+		built = append(built, done{v, kids})
+	}
+	for _, d := range built {
+		d.v.Content = d.kids
+		delete(t.deferred, d.v)
 	}
 	return nil
 }
@@ -345,8 +369,11 @@ func (r *cacheReader) newNode() *yaml.Node {
 // it can never overwrite a neighbour's children.
 func (r *cacheReader) newPtrs(k int) []*yaml.Node {
 	if len(r.ptrs) < k {
-		n := 1024
-		if k > n {
+		n := r.limit - r.visited // no node has more children than nodes remain
+		if n > 1024 {
+			n = 1024
+		}
+		if n < k {
 			n = k
 		}
 		r.ptrs = make([]*yaml.Node, n)

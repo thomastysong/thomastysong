@@ -3,7 +3,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -118,4 +120,56 @@ func (a *accessor) canRead(dir string, files []string) (bool, string) {
 		}
 	}
 	return true, ""
+}
+
+// rewriteFlags are added when purge opens a spool file for writing: a FIFO
+// planted where a spool file belongs must not block the open, and a tty must
+// not become the controlling terminal.
+const rewriteFlags = syscall.O_NONBLOCK | syscall.O_NOCTTY
+
+// linkCount is the number of names of the file fi describes.
+func linkCount(fi os.FileInfo) uint64 {
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+		return uint64(st.Nlink)
+	}
+	return 0
+}
+
+// prepareOutbox creates what a daemonless `scan --outbox` (tier 2) writes
+// into with the modes the daemon gives them, so that the shipper can read
+// it: the data directory traversable by everyone (0711, hooks reach their
+// spool through it) and the outbox 2750 owned by output.group, whose setgid
+// bit gives every new segment that group. Directories that exist are left
+// as they are: the daemon owns them and doctor reports their modes.
+func prepareOutbox(dataDir, outbox, group string) []string {
+	var notes []string
+	if _, err := os.Lstat(dataDir); errors.Is(err, fs.ErrNotExist) {
+		if err := os.MkdirAll(filepath.Dir(dataDir), 0o755); err == nil {
+			if err := os.Mkdir(dataDir, 0o711); err == nil {
+				_ = os.Chmod(dataDir, 0o711) // the umask narrowed Mkdir's mode
+			}
+		}
+	}
+	if _, err := os.Lstat(outbox); !errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err := os.Mkdir(outbox, 0o750); err != nil {
+		return nil // the sink reports why it cannot create it
+	}
+	_ = os.Chmod(outbox, 0o750|os.ModeSetgid)
+	if group == "" {
+		return nil
+	}
+	g, err := user.LookupGroup(group)
+	if err != nil {
+		return append(notes, fmt.Sprintf("output.group %q does not exist: the outbox is readable by its owner only", group))
+	}
+	gid, err := strconv.Atoi(g.Gid)
+	if err != nil {
+		return notes
+	}
+	if err := os.Chown(outbox, -1, gid); err != nil {
+		notes = append(notes, fmt.Sprintf("cannot give the outbox to group %q: %v", group, err))
+	}
+	return notes
 }

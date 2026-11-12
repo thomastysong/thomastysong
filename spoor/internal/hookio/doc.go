@@ -31,14 +31,22 @@
 //     enum fields keep only word-shaped values (anything else becomes
 //     "other"); identifier labels are reduced to a fixed alphabet. Tool error
 //     text can quote file content or credentials, so only a normalized
-//     summary ("exit code 1", "tool error class:not_found len:57") is
-//     emitted and the raw text stays in Content.ToolOutput.
-//   - No serialized field holds an unkeyed hash of free text (prompt, tool
-//     output, error or denial text). Such a hash is a guessing oracle for
-//     short values, and these events reach the local spool before the
+//     summary ("exit code 1", "tool error class:not_found") is emitted and
+//     the raw text stays in Content.ToolOutput.
+//   - No serialized field holds an unkeyed hash of short free text (prompt,
+//     tool output, error or denial text). Such a hash is a guessing oracle
+//     for short values, and these events reach the local spool before the
 //     privacy stage, which owns the tenant key and derives the keyed
 //     digests. Error and denial text is summarized by a closed-vocabulary
-//     class (ErrorClass) and its byte length instead.
+//     class (ErrorClass) alone: not its exact length either, which the
+//     privacy stage rounds up to a power of four outside the full profile
+//     but would pass through inside Outcome.Error. The one exception to
+//     the rule is Tool.OutputSHA256 of an output over 64 KiB (below).
+//   - ErrorClass follows the cause a message states, not words it quotes:
+//     fixed agent leads first, then OS error texts, then the earliest
+//     whole-word phrase outside quoted spans, paths and URLs. A tool or a
+//     model can still word its own error to pick a class; the class is a
+//     triage hint, never evidence.
 //
 // # Events are pre-redaction
 //
@@ -62,7 +70,11 @@
 //     Tool.InputSHA256 is unkeyed because it is the cross-surface join key
 //     toolmap defines; the privacy stage keys it before anything ships.
 //   - Tool.OutputLen is the byte length of Content.ToolOutput. Tool.OutputSHA256
-//     is left empty: the privacy stage derives it, keyed, from the content.
+//     is left empty up to 64 KiB of output: the privacy stage derives it,
+//     keyed, from the content. A longer output may reach the privacy stage
+//     cut (the spool keeps its first and last 32 KiB when a record is over
+//     its line cap), so its unkeyed SHA-256 is recorded for the privacy
+//     stage to key; see recordOutput.
 //   - Tool arguments sent as a JSON-encoded string (Copilot toolArgs, Cursor
 //     MCP tool_input) are decoded first; a string that is not a JSON object
 //     is kept as {"_raw": "<string>"}.
@@ -72,9 +84,9 @@
 //     the redaction stage, which owns the tenant key.
 //   - Outcome.Error of a failed tool call is "exit code N" when the text
 //     starts with Claude Code's "Exit code N" line, else
-//     "tool error class:<class> len:<bytes>" (ErrorSummary). A PermissionDenied
-//     reason is the classifier's bracketed rule label, "no_verdict",
-//     "classifier_unavailable", or "denied class:other len:<bytes>".
+//     "tool error class:<class>" (ErrorSummary). A PermissionDenied reason
+//     is the classifier's bracketed rule label, "no_verdict",
+//     "classifier_unavailable", or "denied class:other".
 //   - Other labels. Enum-valued: session_source, end_reason,
 //     notification_type, config_source, compact_trigger, compact_phase,
 //     mcp_source, memory_type, load_reason, prompt_kind, expansion_type,

@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/thomastysong/spoor/internal/event"
 )
@@ -39,6 +40,35 @@ func joinName(parent, child string) string {
 	return parent + "." + child
 }
 
+// jsonField is an exported, encoded field of a struct type.
+type jsonField struct {
+	index int
+	name  string
+}
+
+// structFieldCache maps a struct type to its jsonFields. The walk runs
+// several times per record (safety pass, key rewrite, every line-cap
+// pass); reading struct tags each time was a tenth of Emit.
+var structFieldCache sync.Map // reflect.Type -> []jsonField
+
+func jsonFields(t reflect.Type) []jsonField {
+	if v, ok := structFieldCache.Load(t); ok {
+		return v.([]jsonField)
+	}
+	out := make([]jsonField, 0, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		if jn, ok := jsonName(f); ok {
+			out = append(out, jsonField{index: i, name: jn})
+		}
+	}
+	v, _ := structFieldCache.LoadOrStore(t, out)
+	return v.([]jsonField)
+}
+
 func jsonName(f reflect.StructField) (string, bool) {
 	tag := f.Tag.Get("json")
 	if tag == "-" {
@@ -64,17 +94,8 @@ func walkValue(v reflect.Value, name string, depth int, add func(slot)) {
 		if v.Type() == timeType {
 			return
 		}
-		t := v.Type()
-		for i := 0; i < t.NumField(); i++ {
-			f := t.Field(i)
-			if !f.IsExported() {
-				continue
-			}
-			jn, ok := jsonName(f)
-			if !ok {
-				continue
-			}
-			walkValue(v.Field(i), joinName(name, jn), depth+1, add)
+		for _, f := range jsonFields(v.Type()) {
+			walkValue(v.Field(f.index), joinName(name, f.name), depth+1, add)
 		}
 	case reflect.String:
 		if !v.CanSet() {
@@ -183,13 +204,8 @@ func rekeyValue(v reflect.Value, depth int, fn func(string) string) {
 		if v.Type() == timeType {
 			return
 		}
-		t := v.Type()
-		for i := 0; i < t.NumField(); i++ {
-			if f := t.Field(i); f.IsExported() {
-				if _, ok := jsonName(f); ok {
-					rekeyValue(v.Field(i), depth+1, fn)
-				}
-			}
+		for _, f := range jsonFields(v.Type()) {
+			rekeyValue(v.Field(f.index), depth+1, fn)
 		}
 	case reflect.Slice:
 		if v.Type().Elem().Kind() == reflect.Struct || v.Type().Elem().Kind() == reflect.Pointer {

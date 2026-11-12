@@ -304,17 +304,41 @@ func sortedKeys[V any](m map[string]V) []string {
 	return out
 }
 
-// clip shortens s for a table cell.
+// clip shortens s for a table cell and makes it safe for a terminal.
+// Printed values often come from records written on other machines or
+// from files other accounts control, so every control character (C0, DEL
+// and C1, which some terminals take as an 8-bit CSI) and every bidi
+// override or isolate (which reorders what the reader sees) becomes a
+// space: a forged record must not send escape sequences to the operator.
 func clip(s string, n int) string {
-	s = strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
-			return ' '
-		}
-		return r
-	}, s)
+	s = sanitize(s)
 	if len([]rune(s)) <= n {
 		return s
 	}
 	r := []rune(s)
 	return string(r[:n-1]) + "…"
+}
+
+// sanitize is clip without shortening, for text shown whole (diffs).
+func sanitize(s string) string {
+	return strings.Map(func(r rune) rune {
+		if termUnsafe(r) {
+			return ' '
+		}
+		return r
+	}, s)
+}
+
+// term is clip with a generous limit, for values that are short by
+// construction but come from outside (host, user and agent names, ids).
+func term(s string) string { return clip(s, 256) }
+
+func termUnsafe(r rune) bool {
+	switch {
+	case r < 0x20, r == 0x7f, r >= 0x80 && r <= 0x9f:
+		return true
+	case r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069, r == 0x200e, r == 0x200f, r == 0x061c:
+		return true
+	}
+	return false
 }

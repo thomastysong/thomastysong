@@ -467,3 +467,135 @@ func TestConsumerKey(t *testing.T) {
 		}
 	}
 }
+
+// TestPruneEmptyTailDBReadsNothing: the shipped Fluent Bit configuration has
+// one tail input and one database per stream group (spoor-findings.db,
+// spoor-activity.db; output.fluent_bit.tail_db names both with a glob).
+// Under the minimal profile no activity segment is ever written, so the
+// activity database never lists a file. It must not count as a consumer of
+// every stream: detections Fluent Bit read to the end are pruned by age,
+// shipper_lag_bytes is what is unread, and the cap does not report shipped
+// data as outbox.dropped_unshipped.
+func TestPruneEmptyTailDBReadsNothing(t *testing.T) {
+	o := newOutboxFixture(t)
+	old, oldSize := o.seg("detection", 300, 0, 3, 1)
+	recent, recentSize := o.seg("detection", 3, 0, 3, 4)
+	newest, newestSize := o.seg("detection", 0, 0, 1, 7)
+	ino := func(n string) uint64 {
+		p := filepath.Join(o.dir, n)
+		return inodeOf(mustLstat(t, p), p)
+	}
+	fb := t.TempDir()
+	makeTailDB(t, filepath.Join(fb, "spoor-findings.db"), []tailRow{
+		{name: "/var/lib/spoor/outbox/" + old, offset: oldSize, inode: ino(old)},
+		{name: "/var/lib/spoor/outbox/" + recent, offset: recentSize, inode: ino(recent)},
+		{name: "/var/lib/spoor/outbox/" + newest, offset: newestSize, inode: ino(newest)},
+	}).Close()
+	makeTailDB(t, filepath.Join(fb, "spoor-activity.db"), nil).Close()
+	spec := filepath.Join(fb, "spoor-*.db")
+	p := newOutboxPruner(pruneOptions{
+		dir: o.dir, maxAge: 7 * 24 * time.Hour,
+		consumers: func() []consumer { return tailDBConsumers(spec, "") },
+		statePath: filepath.Join(t.TempDir(), "covered.json"),
+	})
+	res := p.prune(o.now)
+	if o.exists(old) {
+		t.Errorf("a 300 h old detection segment Fluent Bit read to the end was not pruned by age (unread_past_age=%d)", res.unreadOld)
+	}
+	if res.lag != 0 || res.consumerLag["fluent-bit:"+filepath.Join(fb, "spoor-activity.db")] != 0 {
+		t.Errorf("shipper_lag_bytes = %d (per consumer %v) with every byte read by the only input that tails detections, want 0", res.lag, res.consumerLag)
+	}
+	// The cap removes data Fluent Bit has read without reporting a loss ...
+	p.o.maxBytes = newestSize + 1
+	res = p.prune(o.now)
+	if o.exists(recent) || res.unread.bytes != 0 || res.removedCap != 1 {
+		t.Errorf("the cap reported %d bytes Fluent Bit had read as outbox.dropped_unshipped (removed by cap %d)", res.unread.bytes, res.removedCap)
+	}
+	// ... and reports what it has not read.
+	o.seg("detection", 2, 0, 2, 8)
+	res = p.prune(o.now)
+	if res.unread.bytes == 0 || res.unread.events != 2 {
+		t.Errorf("the cap removed an unread detection segment without reporting it: %+v", res.unread)
+	}
+	// Activity appears (the profile was raised): the activity database
+	// lists it, and from then on it holds activity back until read.
+	act, _ := o.seg("activity", 300, 0, 2, 1)
+	o.seg("activity", 0, 0, 1, 3)
+	makeTailDB(t, filepath.Join(fb, "spoor-activity2.db"), []tailRow{{name: "/x/" + act, offset: 1, inode: ino(act)}}).Close()
+	p.o.maxBytes = 0
+	p.prune(o.now)
+	if !o.exists(act) {
+		t.Error("an activity segment its database has not read to the end was pruned by age")
+	}
+
+	// A database that cannot be read and has never listed anything still
+	// holds every stream back.
+	o2 := newOutboxFixture(t)
+	old2, _ := o2.seg("detection", 300, 0, 3, 1)
+	o2.seg("detection", 0, 0, 1, 4)
+	p2 := newOutboxPruner(pruneOptions{
+		dir: o2.dir, maxAge: 7 * 24 * time.Hour,
+		consumers: func() []consumer { return tailDBConsumers(filepath.Join(t.TempDir(), "spoor-*.db"), "") },
+	})
+	p2.prune(o2.now)
+	if !o2.exists(old2) {
+		t.Error("a tail database that does not exist yet must hold segments back")
+	}
+}
+
+// TestTailDBDuplicateNamePicksInodeOnDisk: two rows for one segment name (an
+// older file of that name Fluent Bit has not cleaned up, and the current
+// one) are told apart by inode; the stale row's larger offset must not
+// count, nor hide that the current file was read to the end.
+func TestTailDBDuplicateNamePicksInodeOnDisk(t *testing.T) {
+	o := newOutboxFixture(t)
+	old, oldSize := o.seg("detection", 300, 0, 3, 1)
+	mid, midSize := o.seg("detection", 200, 0, 3, 4)
+	o.seg("detection", 0, 0, 1, 7)
+	ino := func(n string) uint64 {
+		p := filepath.Join(o.dir, n)
+		return inodeOf(mustLstat(t, p), p)
+	}
+	fb := filepath.Join(t.TempDir(), "spoor-findings.db")
+	makeTailDB(t, fb, []tailRow{
+		{name: "/var/lib/spoor/outbox/" + old, offset: oldSize, inode: ino(old)},                // the file on disk, read to the end
+		{name: "/var/lib/spoor/outbox/" + old, offset: oldSize + 4096, inode: ino(old) + 12345}, // a previous file of that name
+		{name: "/var/lib/spoor/outbox/" + mid, offset: midSize + 4096, inode: ino(mid) + 12345}, // only a previous file of that name
+		{name: "/elsewhere/" + mid, offset: midSize / 2, inode: ino(mid) + 999},                 // same name in another directory
+	}).Close()
+	pr := newOutboxPruner(pruneOptions{
+		dir: o.dir, maxAge: 7 * 24 * time.Hour,
+		consumers: func() []consumer { return tailDBConsumers(fb, "") },
+	})
+	res := pr.prune(o.now)
+	if o.exists(old) {
+		t.Error("a segment whose current inode row shows it read to the end was kept as unread")
+	}
+	if !o.exists(mid) || res.unreadOld != 1 {
+		t.Errorf("a segment with rows only for other inodes was taken as read (unreadOld %d)", res.unreadOld)
+	}
+}
+
+func TestReadOffset(t *testing.T) {
+	s := &outSeg{name: "detection-20261112-05-0000.ndjson", size: 100, inode: 7}
+	for _, tc := range []struct {
+		name  string
+		files map[string]readPos
+		more  map[string][]readPos
+		want  int64
+	}{
+		{"none", nil, nil, 0},
+		{"exact", map[string]readPos{s.name: {off: 60, inode: 7}}, nil, 60},
+		{"other inode only", map[string]readPos{s.name: {off: 100, inode: 8}}, nil, 0},
+		{"exact wins over larger stale", map[string]readPos{s.name: {off: 100, inode: 8}}, map[string][]readPos{s.name: {{off: 40, inode: 7}}}, 40},
+		{"exact wins over smaller stale", map[string]readPos{s.name: {off: 10, inode: 8}}, map[string][]readPos{s.name: {{off: 90, inode: 7}}}, 90},
+		{"unknown inodes: the least", map[string]readPos{s.name: {off: 80}}, map[string][]readPos{s.name: {{off: 30}}}, 30},
+		{"clamped", map[string]readPos{s.name: {off: 500, inode: 7}}, nil, 100},
+		{"negative", map[string]readPos{s.name: {off: -5, inode: 7}}, nil, 0},
+	} {
+		v := consumerView{files: tc.files, more: tc.more}
+		if got := v.readOffset(s); got != tc.want {
+			t.Errorf("%s: readOffset = %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}

@@ -9,13 +9,14 @@ import (
 )
 
 // daemonRun and daemonStatus are the two calls cmd/spoor makes into
-// internal/daemon. Doctor renders the snapshot through JSON, so it depends
-// on nothing but the function signatures.
+// internal/daemon. Doctor renders the snapshot through JSON and judges the
+// directory layout by the snapshot's own expectations (Dirs), so the modes
+// the daemon creates and the modes doctor accepts are one table.
 func daemonRun(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	daemon.Version = versionString()
 	return daemon.Run(ctx, cfg, log)
 }
 
-func daemonStatus(cfg *config.Config) (any, error) {
+func daemonStatus(cfg *config.Config) (daemon.Snapshot, error) {
 	return daemon.Status(cfg)
 }

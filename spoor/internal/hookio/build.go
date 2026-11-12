@@ -1,6 +1,8 @@
 package hookio
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"math"
 	"strconv"
@@ -165,14 +167,36 @@ func forceKind(ev *event.Event, kind event.ToolKind) {
 	setTarget(ev, ev.Content.ToolInput)
 }
 
+// fullDigestAbove is the output length above which Tool.OutputSHA256 is
+// recorded at the hook. The privacy stage derives the keyed output digest
+// from Content.ToolOutput, but on the hook path that content reaches it
+// through the user spool, which keeps only the first and last 32 KiB of a
+// longer output when a record exceeds the spool's line cap
+// (spool.MaxRecord). The digest of what is left would describe the cut
+// text, not the output Tool.OutputLen measures, and two outputs that share
+// head and tail would share it. Up to 64 KiB the content always arrives
+// whole.
+const fullDigestAbove = 64 << 10
+
 // setOutput records tool output for local detection and its size for
-// emission. The text itself is never placed in a serialized field here, and
-// neither is a hash of it: an unkeyed SHA-256 of a short output ("ok", a
-// version string, a one-line secret) is recovered with a dictionary, and
-// these records reach the local spool before the privacy stage, which
-// derives Tool.OutputSHA256 from Content.ToolOutput with the tenant key.
+// emission; see recordOutput.
 func setOutput(ev *event.Event, v any) {
-	text := outputText(v)
+	recordOutput(ev, outputText(v))
+}
+
+// recordOutput keeps text in Content.ToolOutput and its byte length in
+// Tool.OutputLen. The text itself is never placed in a serialized field,
+// and for outputs up to fullDigestAbove neither is a hash of it: an
+// unkeyed SHA-256 of a short output ("ok", a version string, a one-line
+// secret) is recovered with a dictionary, so the privacy stage, which
+// holds the tenant key, derives the keyed digest from the content. A
+// longer output may be cut before the privacy stage sees it, so its
+// unkeyed SHA-256 rides in Tool.OutputSHA256 for the privacy stage to key
+// (or drop, without a key) before anything ships. That hash is no
+// guessing oracle (no dictionary holds a 64 KiB output), it is what the
+// transcript surface records for every output, and the only record that
+// holds it unkeyed, the user's spool line, holds the text too.
+func recordOutput(ev *event.Event, text string) {
 	if text == "" {
 		return
 	}
@@ -181,6 +205,10 @@ func setOutput(ev *event.Event, v any) {
 		return
 	}
 	ev.Tool.OutputLen = len(text)
+	if len(text) > fullDigestAbove {
+		sum := sha256.Sum256([]byte(text))
+		ev.Tool.OutputSHA256 = hex.EncodeToString(sum[:])
+	}
 }
 
 // outputText flattens the many shapes a tool result takes into text:
@@ -296,8 +324,8 @@ func durationMS(o obj, keys ...string) int64 {
 // failure builds the Outcome for a failed tool call. errText is tool output
 // under the model's influence and may quote file content or credentials, so
 // it is kept only in Content.ToolOutput; the serialized Outcome.Error is a
-// fixed-format summary: "exit code N", else ErrorSummary's class and byte
-// length (never a hash of the text, see ErrorSummary). Claude Code
+// fixed-format summary: "exit code N", else ErrorSummary's class (never a
+// hash or the exact length of the text, see ErrorSummary). Claude Code
 // documents "Exit code N" as the first line for shell failures (hooks
 // reference, PostToolUseFailure input).
 func failure(ev *event.Event, errText string, interrupted bool) *event.Outcome {
@@ -309,10 +337,7 @@ func failure(ev *event.Event, errText string, interrupted bool) *event.Outcome {
 		return out
 	}
 	if ev.Content.ToolOutput == "" {
-		ev.Content.ToolOutput = errText
-		if ev.Tool != nil {
-			ev.Tool.OutputLen = len(errText)
-		}
+		recordOutput(ev, errText)
 	}
 	if code, ok := exitCode(errText); ok {
 		out.ExitCode = &code
@@ -402,8 +427,8 @@ func firstNum(a, b obj, keys ...string) (float64, bool) {
 // denial. A classifier verdict names the matched rule in square brackets
 // ("[Data Exfiltration]"); that label is kept. The documented fixed texts
 // map to codes, and any other text, free text that may describe the call,
-// is reduced to "denied class:other len:<bytes>": no hash of it, for the
-// reason given at ErrorSummary.
+// is reduced to the constant "denied class:other": neither a hash nor the
+// exact length of it, for the reasons given at ErrorSummary.
 func denialReason(s string) string {
 	s = strings.TrimSpace(s)
 	switch {
@@ -429,5 +454,5 @@ func denialReason(s string) string {
 			}
 		}
 	}
-	return summary("denied", ErrClassOther, len(s))
+	return "denied class:" + ErrClassOther
 }

@@ -72,6 +72,18 @@
 // every profile and require zero leaks, and report the over-redaction rate
 // on a benign corpus.
 //
+// The redaction of a command line is a pure function of its text and
+// dialect hint, and the same text recurs (the hook's pre and post records
+// and the transcript twin of one call, detection context, evidence, the
+// same build and test commands all session), so results are remembered in
+// a bounded LRU keyed by SHA-256 of hint and text (memo.go); it holds no
+// raw command text. Within one line, the views hand identical argument
+// vectors to the flag rules once. Features' shellx parse is not reused:
+// Event.Feat lacks the inline and decoded payload texts the redactor
+// re-lexes and does not say which text it was computed from. The canary
+// corpus runs both uncached and from the memo and requires identical
+// output.
+//
 // # Secret markers and digests
 //
 // classify marks a secret as "[REDACTED:<kind>:<fp>]" with an unkeyed
@@ -106,7 +118,11 @@
 // content. A field that is asked for but not allowed is reported as
 // Withheld, so the request stays visible; stamping rule and bundle
 // versions on findings (so such a request is attributable) is the rule
-// engine's job, and Emit passes those labels through.
+// engine's job, and Emit passes those labels through. Labels are free text
+// capped at 256 bytes, except rules_version and rules_hash when their
+// value is in the version vocabulary (pack@version list, hex digest):
+// those get their own bound (1 KiB, 128 bytes; versionlabel.go), so a
+// finding stays attributable at any realistic number of rule packs.
 //
 // # Known gaps
 //

@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SKETCH, UNTESTED: a WiX v4 source for the spoor Windows installer (.msi).
+  It has not been compiled (no WiX toolset and no Windows host where this
+  release was built) and nothing below has run. Until it is built and tested,
+  install with packaging/windows/install-service.ps1 or the Fleet script
+  deploy/fleet/scripts/install-spoor.ps1, which do the same steps.
+
+    wix build -arch x64 -d Version=1.2.3 -d Binary=dist\spoor_windows_amd64_v1\spoor.exe ^
+      -ext WixToolset.Util.wixext -o dist\spoor_1.2.3_windows_amd64.msi packaging\windows\spoor.wxs
+
+  What it is meant to do (the same as install-service.ps1):
+    - %ProgramFiles%\spoor\spoor.exe; users may read and run it (hooks run
+      `spoor.exe hook`), only SYSTEM and Administrators may change it;
+    - %ProgramData%\spoor (configuration and data): SYSTEM and Administrators
+      full control, nothing for Users (the daemon sets its own DACLs on what
+      it creates inside; internal/daemon);
+    - service "spoor", LocalSystem, delayed automatic start, restart after 5 s
+      on the first three failures, command line
+      "%ProgramFiles%\spoor\spoor.exe" run --config "%ProgramData%\spoor\spoor.yaml";
+      Windows Installer writes the service command line itself, so the
+      PowerShell 5.1 quoting problem of `sc.exe binPath=` does not arise;
+    - after install: `spoor.exe export config` when spoor.yaml is missing,
+      and `spoor.exe hooks install --scope managed` for agents that already
+      have spoor's managed hook entries (install-service.ps1 shows the
+      selection; a custom action that runs a small script is the likely shape);
+    - before uninstall: `spoor.exe hooks uninstall --scope managed`; the
+      osquery extension registration is removed by Fleet's uninstall script
+      (deploy/fleet/scripts/uninstall-spoor.ps1) or by hand.
+  The binary is unsigned: sign spoor.exe and the .msi with your
+  Authenticode certificate before distributing.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <Package Name="spoor" Manufacturer="spoor" Version="$(var.Version)"
+           UpgradeCode="6f3d0b2a-6a49-4c55-9f1e-3b2a8f6d7c41" Scope="perMachine"
+           InstallerVersion="500" Compressed="yes">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of spoor is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="spoor" />
+    </StandardDirectory>
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="DATAFOLDER" Name="spoor" />
+    </StandardDirectory>
+
+    <ComponentGroup Id="SpoorComponents">
+      <Component Id="SpoorExe" Directory="INSTALLFOLDER" Bitness="always64">
+        <File Id="SpoorExeFile" Source="$(var.Binary)" Name="spoor.exe" KeyPath="yes">
+          <!-- Users: read and execute; SYSTEM and Administrators: full. -->
+          <util:PermissionEx User="Users" GenericRead="yes" GenericExecute="yes" />
+          <util:PermissionEx User="Administrators" GenericAll="yes" />
+          <util:PermissionEx User="SYSTEM" GenericAll="yes" />
+        </File>
+        <ServiceInstall Id="SpoorService" Name="spoor" DisplayName="spoor AI agent detection sensor"
+                        Description="Detects risky AI coding agent activity and reports sensor health."
+                        Type="ownProcess" Start="auto" Account="LocalSystem" ErrorControl="normal"
+                        Arguments="run --config &quot;[DATAFOLDER]spoor.yaml&quot;">
+          <ServiceConfig DelayedAutoStart="yes" OnInstall="yes" OnReinstall="yes" />
+          <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart"
+                              ThirdFailureActionType="restart" RestartServiceDelayInSeconds="5"
+                              ResetPeriodInDays="1" />
+        </ServiceInstall>
+        <ServiceControl Id="SpoorServiceControl" Name="spoor" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+      </Component>
+      <Component Id="SpoorData" Directory="DATAFOLDER" Guid="3c9a2f5e-1d7b-4e8a-9b6c-0f2e4d8a1b37">
+        <CreateFolder>
+          <!-- Replaces the inherited ACL: no access for Users. -->
+          <util:PermissionEx User="SYSTEM" GenericAll="yes" />
+          <util:PermissionEx User="Administrators" GenericAll="yes" />
+        </CreateFolder>
+      </Component>
+    </ComponentGroup>
+
+    <!-- Deferred, elevated custom actions (UNTESTED): default configuration
+         after the files are installed; hook cleanup before they are removed. -->
+    <CustomAction Id="WriteDefaultConfig" Directory="INSTALLFOLDER" Execute="deferred" Impersonate="no" Return="ignore"
+                  ExeCommand="&quot;[INSTALLFOLDER]spoor.exe&quot; export config --out &quot;[DATAFOLDER]spoor.yaml&quot;" />
+    <CustomAction Id="RemoveManagedHooks" Directory="INSTALLFOLDER" Execute="deferred" Impersonate="no" Return="ignore"
+                  ExeCommand="&quot;[INSTALLFOLDER]spoor.exe&quot; hooks uninstall --scope managed" />
+    <InstallExecuteSequence>
+      <!-- export config refuses to overwrite an existing file (no --force). -->
+      <Custom Action="WriteDefaultConfig" Before="StartServices" Condition="NOT REMOVE" />
+      <Custom Action="RemoveManagedHooks" Before="RemoveFiles" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+    </InstallExecuteSequence>
+
+    <Feature Id="Main" Title="spoor" Level="1">
+      <ComponentGroupRef Id="SpoorComponents" />
+    </Feature>
+  </Package>
+</Wix>

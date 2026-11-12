@@ -27,8 +27,17 @@ import (
 const maxHookFile = 1 << 20
 
 // installedBinaries returns the spoor binaries the hook entries of one file
-// name, in the order found, without duplicates.
-func installedBinaries(path string) ([]string, error) {
+// name, in the order found, without duplicates. The file belongs to whoever
+// owns the home it is in: when doctor runs as root it reads every account's
+// settings, so nothing in it may make this panic, and only the hook-command
+// positions of the dialects hookinstall writes are read (a status line,
+// an MCP server or a note elsewhere in the file is not a hook).
+func installedBinaries(path string) (bins []string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			bins, err = nil, fmt.Errorf("%s: internal error while reading the hook entries", path)
+		}
+	}()
 	f, err := platform.OpenNoFollow(path)
 	if err != nil {
 		return nil, err
@@ -59,7 +68,11 @@ func installedBinaries(path string) ([]string, error) {
 		}
 	}
 	if doc != nil {
-		walkHookValues(doc, 0, add)
+		// Every dialect keeps its registrations under the top-level
+		// "hooks" key (grouped, flat or [[hooks.<Event>]] tables).
+		if root, ok := doc.(map[string]any); ok {
+			walkHookValues(root["hooks"], 0, add)
+		}
 	} else {
 		// JSONC or a file the decoder refuses: the quoted strings are still
 		// enough to find the command lines.
@@ -69,6 +82,11 @@ func installedBinaries(path string) ([]string, error) {
 	}
 	return out, nil
 }
+
+// hookCommandKeys are the handler fields hookinstall writes a command line
+// into: "command" (Claude Code shell form, Codex, Gemini CLI, Cursor),
+// "commandWindows" (Codex on Windows), "bash" and "powershell" (Copilot).
+var hookCommandKeys = map[string]bool{"command": true, "commandWindows": true, "bash": true, "powershell": true}
 
 func walkHookValues(v any, depth int, add func(string)) {
 	if depth > 64 {
@@ -82,7 +100,13 @@ func walkHookValues(v any, depth int, add func(string)) {
 				add(cmd)
 			}
 		}
-		for _, x := range t {
+		for k, x := range t {
+			if s, ok := x.(string); ok {
+				if hookCommandKeys[k] {
+					add(binaryFromCommand(s))
+				}
+				continue
+			}
 			walkHookValues(x, depth+1, add)
 		}
 	case []any:
@@ -93,8 +117,6 @@ func walkHookValues(v any, depth int, add func(string)) {
 		for _, x := range t {
 			walkHookValues(x, depth+1, add)
 		}
-	case string:
-		add(binaryFromCommand(t))
 	}
 }
 
@@ -109,7 +131,12 @@ func binaryFromCommand(s string) string {
 	}
 	prefix := s[:i]
 	if !strings.ContainsAny(prefix, `'"`) {
+		// Only blanks before " hook --agent " (a user's own string in a
+		// file doctor reads as root) name no program.
 		f := strings.Fields(prefix)
+		if len(f) == 0 {
+			return ""
+		}
 		return f[len(f)-1]
 	}
 	ps := strings.Contains(s, "Test-Path") || strings.HasPrefix(strings.TrimSpace(s), "&")

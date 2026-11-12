@@ -101,8 +101,10 @@
 //   - Label values and Outcome.Error never carry free text, nor a hash of
 //     it: values are reduced to a fixed alphabet, and errors to the agent's
 //     error category or, without one, to hookio.ErrorSummary's
-//     closed-vocabulary class and byte length ("tool error class:timeout
-//     len:31"), the summary the hook surface gives for the same text.
+//     closed-vocabulary class ("tool error class:timeout"), the summary
+//     the hook surface gives for the same text. No exact length either:
+//     the privacy stage rounds lengths up outside the full profile, and
+//     would pass one inside Outcome.Error through unrounded.
 //   - Account e-mail addresses are never kept; only the domain is, as
 //     Labels["account_domain"].
 //

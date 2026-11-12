@@ -1,0 +1,35 @@
+# In-image hook mode: add spoor to a development or agent image you build.
+# README.md ("In-image hook mode") says what it gives and what it does not;
+# test/e2e/container_test.go (TestContainerInImageHookMode) runs this layout.
+#
+# Use the BARE binary (release download, or `docker build --target binary`),
+# never /usr/bin/spoor from the node sensor image: that copy carries file
+# capabilities and does not start in a container without SYS_PTRACE and
+# DAC_READ_SEARCH.
+
+FROM your-base-image
+
+# 1. The binary, verified against the release's checksums.txt.
+ARG SPOOR_VERSION=0.1.0
+ARG SPOOR_SHA256=<sha256 of spoor_linux_amd64 from checksums.txt>
+ADD --checksum=sha256:${SPOOR_SHA256} \
+    https://downloads.example.com/spoor/${SPOOR_VERSION}/spoor_linux_amd64 /usr/local/bin/spoor
+RUN chmod 0755 /usr/local/bin/spoor
+
+# 2. Managed hooks for the agents in this image (root-owned policy files the
+#    workspace user cannot edit), a small configuration, and a data
+#    directory owned by the user the daemon runs as (here uid 1000).
+RUN /usr/local/bin/spoor hooks install --scope managed --binary /usr/local/bin/spoor \
+      --agents claude-code,codex,gemini-cli,copilot-cli \
+ && install -d -m 0755 /etc/spoor /usr/local/share/spoor \
+ && printf 'data_dir: /var/lib/spoor\noutput:\n  stdout: true\n' > /etc/spoor/spoor.yaml \
+ && chmod 0644 /etc/spoor/spoor.yaml \
+ && install -d -m 0700 -o 1000 -g 1000 /var/lib/spoor
+COPY spoor-entrypoint.sh /usr/local/share/spoor/spoor-entrypoint.sh
+RUN chmod 0755 /usr/local/share/spoor/spoor-entrypoint.sh
+
+USER 1000
+# With a read-only root file system, mount a writable volume (emptyDir) at
+# /var/lib/spoor owned by that user (fsGroup or an init step).
+ENTRYPOINT ["/usr/local/share/spoor/spoor-entrypoint.sh"]
+CMD ["sleep", "infinity"]

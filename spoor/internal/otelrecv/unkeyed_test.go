@@ -13,6 +13,7 @@ import (
 
 	"github.com/thomastysong/spoor/internal/event"
 	"github.com/thomastysong/spoor/internal/hookio"
+	"github.com/thomastysong/spoor/internal/privacy"
 )
 
 // noFingerprint fails when the serialized event carries a prefix of an
@@ -31,7 +32,8 @@ func noFingerprint(t *testing.T, ev *event.Event, text string) {
 }
 
 // An error without a category is summarized by a closed-vocabulary class
-// and its byte length, never by a hash of the message, on every agent.
+// alone, never by a hash or the exact length of the message, on every
+// agent.
 func TestErrorWithoutCategoryHasNoFingerprint(t *testing.T) {
 	cases := []struct {
 		name, msg, class string
@@ -71,13 +73,49 @@ func TestErrorWithoutCategoryHasNoFingerprint(t *testing.T) {
 				t.Fatalf("no event with an error among %d", len(res.Events))
 			}
 			checkInvariants(t, ev)
-			eq(t, "error", ev.Outcome.Error, "tool error class:"+c.class+" len:"+strconv.Itoa(len(c.msg)))
+			eq(t, "error", ev.Outcome.Error, "tool error class:"+c.class)
 			eq(t, "same summary as the hook surface", ev.Outcome.Error, hookio.ErrorSummary(c.msg))
 			if ev.Content == nil || ev.Content.ToolOutput != c.msg {
 				t.Errorf("message not kept for local detection: %+v", ev.Content)
 			}
 			noFingerprint(t, ev, c.msg)
 		})
+	}
+}
+
+// The privacy stage rounds content lengths up to a power of four outside
+// the full profile and passes Outcome.Error through, so the error summary
+// must not carry the message's exact length: on a failed call the message
+// is the tool output whose length Tool.OutputLen reports, rounded.
+// (Review finding PP-1.)
+func TestErrorSummaryLengthNotShipped(t *testing.T) {
+	msg := "Command timed out after 120s: curl https://paste.example/x" // 58 bytes
+	res := mustConvert(t, otlpBody(geminiRes, "", geminiRec("tool_call", "", kv{
+		"function_name": "run_shell_command", "success": false, "tool_type": "native",
+		"error": msg, "content_length": len(msg),
+	})))
+	var ev *event.Event
+	for _, e := range res.Events {
+		if e.Outcome != nil && e.Outcome.Error != "" {
+			ev = e
+		}
+	}
+	if ev == nil {
+		t.Fatal("no event with an error")
+	}
+	for _, prof := range []privacy.Profile{privacy.ProfileMinimal, privacy.ProfileStandard} {
+		p := &privacy.Policy{Profile: prof, Key: bytes.Repeat([]byte{7}, 32)}
+		out, _, ok := p.Emit(ev)
+		if !ok {
+			t.Fatalf("%s: dropped", prof)
+		}
+		eq(t, string(prof)+" outcome.error", out.Outcome.Error, "tool error class:timeout")
+		if out.Tool != nil && out.Tool.OutputLen == len(msg) {
+			t.Fatalf("%s: precondition: output_len is no longer rounded", prof)
+		}
+		if w := wire(t, out); strings.Contains(w, "len:") || strings.Contains(out.Outcome.Error, strconv.Itoa(len(msg))) {
+			t.Errorf("%s: the exact message length %d is on the wire: %s", prof, len(msg), w)
+		}
 	}
 }
 

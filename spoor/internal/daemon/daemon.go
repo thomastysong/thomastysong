@@ -7,7 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"strconv"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -537,15 +537,7 @@ func (d *daemon) refreshUsers() error {
 		return err
 	}
 	if !d.env.privileged {
-		// Unprivileged, only the caller's own home is ours to read.
-		uid := strconv.Itoa(os.Geteuid())
-		kept := list[:0]
-		for _, u := range list {
-			if u.UID == uid || u.UID == "" {
-				kept = append(kept, u)
-			}
-		}
-		list = kept
+		list = ownAccount(list, currentUID(), os.UserHomeDir)
 	}
 	for _, u := range list {
 		if err := ensureUserSpool(d.layout, u, d.env.privileged); err != nil {
@@ -556,6 +548,33 @@ func (d *daemon) refreshUsers() error {
 	d.users.set(list)
 	d.board.set("users", uint64(len(list)))
 	return nil
+}
+
+// ownAccount keeps the caller's own account: unprivileged, only its home is
+// ours to read. uid is currentUID(): the numeric uid on POSIX and the SID
+// on Windows, where os.Geteuid is always -1 and platform.Users names the
+// account by SID. When the process's own identity cannot be read, the home
+// directory decides.
+func ownAccount(list []platform.UserHome, uid string, home func() (string, error)) []platform.UserHome {
+	var kept []platform.UserHome
+	if uid != "" {
+		for _, u := range list {
+			if u.UID == uid || u.UID == "" {
+				kept = append(kept, u)
+			}
+		}
+		return kept
+	}
+	h, err := home()
+	if err != nil || h == "" {
+		return nil
+	}
+	for _, u := range list {
+		if u.Home != "" && filepath.Clean(u.Home) == filepath.Clean(h) {
+			kept = append(kept, u)
+		}
+	}
+	return kept
 }
 
 func (d *daemon) runMonitor(ctx context.Context) error {

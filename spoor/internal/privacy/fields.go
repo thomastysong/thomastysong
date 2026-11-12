@@ -556,7 +556,21 @@ func (r *run) labels() {
 	if len(r.out.Labels) == 0 {
 		return
 	}
-	r.out.Labels = r.strMap(r.out.Labels, "labels", maxNameLen)
+	in := r.out.Labels
+	keys := make([]string, 0, len(in))
+	for k := range in {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	if len(keys) > maxMapLen {
+		keys = keys[:maxMapLen]
+		r.note("labels")
+	}
+	out := make(map[string]string, len(keys))
+	for _, k := range keys {
+		out[k] = r.labelStr(k, in[k])
+	}
+	r.out.Labels = out
 }
 
 // safetyPass runs every string of the record, whatever its field, through
@@ -584,7 +598,7 @@ func (r *run) safetyPass() {
 		if len(nv) >= 8 {
 			nv = redactText(nv)
 		}
-		nv = r.finishStr(nv, sl.name, r.s.maxField, false)
+		nv = r.finishStr(nv, sl.name, r.slotCap(sl.name, nv), false)
 		if nv != v {
 			sl.set(nv)
 		}

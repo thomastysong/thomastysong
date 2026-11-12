@@ -1,0 +1,15 @@
+# Namespace of the spoor node sensor.
+#
+# The sensor needs hostPID and two capabilities outside the Pod Security
+# Standards' "baseline" list (SYS_PTRACE, DAC_READ_SEARCH), so the namespace
+# must admit "privileged" pods. Keep nothing else in it: whoever can create
+# pods here can create pods with the same access to every process on the node.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: spoor
+  labels:
+    app.kubernetes.io/name: spoor
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/warn: privileged
+    pod-security.kubernetes.io/audit: privileged

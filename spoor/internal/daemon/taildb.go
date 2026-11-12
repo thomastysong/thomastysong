@@ -70,13 +70,21 @@ func (c *tailDBConsumer) view() (consumerView, error) {
 		if _, ok := sink.ParseSegmentName(base); !ok {
 			continue
 		}
-		// Two rows for one name (an old inode Fluent Bit has not yet
-		// cleaned up, and the current file): keep the one for the inode
-		// on disk, which measure() checks; otherwise the furthest read.
-		if cur, ok := v.files[base]; ok && cur.off >= r.offset {
+		pos := readPos{off: r.offset, inode: r.inode}
+		if _, ok := v.files[base]; !ok {
+			v.files[base] = pos
 			continue
 		}
-		v.files[base] = readPos{off: r.offset, inode: r.inode}
+		// Two rows for one name (an old inode Fluent Bit has not cleaned
+		// up yet, and the current file, or one name in two directories):
+		// all are kept, and consumerView.readOffset picks the row for the
+		// inode on disk.
+		if v.more == nil {
+			v.more = map[string][]readPos{}
+		}
+		if len(v.more[base]) < 8 {
+			v.more[base] = append(v.more[base], pos)
+		}
 	}
 	return v, nil
 }

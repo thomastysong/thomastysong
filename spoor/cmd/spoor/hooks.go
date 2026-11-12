@@ -244,17 +244,20 @@ A file that held nothing but spoor's entries is removed (kept as a backup).`
 func (a *app) printPlans(res planResult, dry bool) {
 	changed := 0
 	for _, p := range res.Plans {
-		fmt.Fprintf(a.stdout, "%-12s %-8s %-11s %s\n", p.Agent, p.Scope, p.Action, p.Path)
+		// Paths, notes and diffs quote files other accounts own (an
+		// administrator's install into every home): sanitized for the
+		// terminal.
+		fmt.Fprintf(a.stdout, "%-12s %-8s %-11s %s\n", term(p.Agent), term(string(p.Scope)), term(p.Action), sanitize(p.Path))
 		if p.Note != "" {
 			for _, l := range strings.Split(strings.TrimSpace(p.Note), "\n") {
-				fmt.Fprintf(a.stdout, "    note: %s\n", l)
+				fmt.Fprintf(a.stdout, "    note: %s\n", sanitize(l))
 			}
 		}
 		if len(p.Diff) > 0 {
 			changed++
 			if dry {
 				for _, l := range p.Diff {
-					fmt.Fprintf(a.stdout, "    %s\n", l)
+					fmt.Fprintf(a.stdout, "    %s\n", sanitize(l))
 				}
 			}
 		}
@@ -380,12 +383,12 @@ the caller's user tier.`)
 	tw := a.table()
 	fmt.Fprintln(tw, "AGENT\tSCOPE\tUSER\tSTATUS\tPATH")
 	for _, s := range states {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", s.Agent, s.Scope, s.User, s.Status, s.Path)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", term(s.Agent), term(string(s.Scope)), term(s.User), term(s.Status), sanitize(s.Path))
 	}
 	tw.Flush()
 	for _, s := range states {
 		if s.Detail != "" && s.Status != hookinstall.StatusMissing {
-			fmt.Fprintf(a.stdout, "%s (%s): %s\n", s.Agent, s.Scope, clip(s.Detail, 300))
+			fmt.Fprintf(a.stdout, "%s (%s): %s\n", term(s.Agent), term(string(s.Scope)), clip(s.Detail, 300))
 		}
 	}
 	return exitOK

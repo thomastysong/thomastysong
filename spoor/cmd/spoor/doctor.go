@@ -567,9 +567,9 @@ func (a *app) doctorDaemon(r *doctorReport, cfg *config.Config) {
 }
 
 func (a *app) printDoctor(r *doctorReport) {
-	fmt.Fprintf(a.stdout, "spoor %s on %s/%s, host %s, data %s\n\n", r.Version.Version, r.Host.OS, r.Host.Arch, firstNonEmpty(r.Host.Name, "?"), r.DataDir)
+	fmt.Fprintf(a.stdout, "spoor %s on %s/%s, host %s, data %s\n\n", r.Version.Version, r.Host.OS, r.Host.Arch, term(firstNonEmpty(r.Host.Name, "?")), sanitize(r.DataDir))
 	for _, c := range r.Checks {
-		fmt.Fprintf(a.stdout, "[%-4s] %-12s %s\n", strings.ToUpper(c.Status), c.ID, c.Summary)
+		fmt.Fprintf(a.stdout, "[%-4s] %-12s %s\n", strings.ToUpper(c.Status), c.ID, sanitize(c.Summary))
 		if c.Detail != "" && c.Status != "ok" {
 			for _, d := range strings.Split(c.Detail, "\n") {
 				fmt.Fprintf(a.stdout, "       %-12s %s\n", "", clip(d, 200))
@@ -586,7 +586,7 @@ func (a *app) printDoctor(r *doctorReport) {
 		fmt.Fprintln(a.stdout, "\nHooks (missing ones omitted):")
 		tw := a.table()
 		for _, s := range shown {
-			fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n", s.Agent, s.Scope, s.User, s.Status)
+			fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n", term(s.Agent), term(string(s.Scope)), term(s.User), term(s.Status))
 		}
 		tw.Flush()
 	}

@@ -441,11 +441,13 @@ func setOutcomeStatus(o *event.Outcome, a attrs) {
 
 // setError records a failure without emitting its text: an error category
 // when the agent gives one, else hookio.ErrorSummary's closed-vocabulary
-// class and byte length, the same summary the hook surface gives for the
-// same text. Error messages quote file content and command output, so the
-// message itself goes to Content only, and no hash of it is kept: an
-// unkeyed hash of a short message is recovered with a dictionary, and these
-// events reach local storage before the privacy stage keys anything.
+// class, the same summary the hook surface gives for the same text.
+// Error messages quote file content and command output, so the message
+// itself goes to Content only. No hash of it is kept (an unkeyed hash of a
+// short message is recovered with a dictionary, and these events reach
+// local storage before the privacy stage keys anything), and no exact
+// length: the privacy stage buckets Tool.OutputLen outside the full
+// profile but passes Outcome.Error through.
 func setError(ev *event.Event, o *event.Outcome, category, message string) {
 	if category != "" {
 		o.Error = labelValue(category, maxLabel)

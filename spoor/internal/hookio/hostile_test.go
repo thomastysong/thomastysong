@@ -348,12 +348,12 @@ func TestFailureSummaries(t *testing.T) {
 		"Exit code 127":                    {"exit code 127", 127},
 		"exit code -9\nkilled":             {"exit code -9", -9},
 		"  Exit code 2  \nx":               {"exit code 2", 2},
-		"Exit code 1 and my password is x": {"tool error class:other len:32", noCode},
-		"Exit code 99999999999999999999":   {"tool error class:other len:30", noCode},
-		"Exit code abc":                    {"tool error class:other len:13", noCode},
-		"Command timed out after 2m 0s":    {"tool error class:timeout len:29", noCode},
-		"ENOENT: no such file or directory, open '/home/u/.aws/credentials'": {"tool error class:not_found len:66", noCode},
-		"File has not been read yet. Read it first before writing to it.":    {"tool error class:conflict len:63", noCode},
+		"Exit code 1 and my password is x": {"tool error class:other", noCode},
+		"Exit code 99999999999999999999":   {"tool error class:other", noCode},
+		"Exit code abc":                    {"tool error class:other", noCode},
+		"Command timed out after 2m 0s":    {"tool error class:timeout", noCode},
+		"ENOENT: no such file or directory, open '/home/u/.aws/credentials'": {"tool error class:not_found", noCode},
+		"File has not been read yet. Read it first before writing to it.":    {"tool error class:conflict", noCode},
 	} {
 		e := &event.Event{Content: &event.Content{}, Tool: &event.Tool{}}
 		out := failure(e, in, false)
@@ -381,9 +381,9 @@ func TestFailureSummaries(t *testing.T) {
 		"Auto mode could not evaluate this action and is blocking it for safety: x": "no_verdict",
 		"":                                   "",
 		"   ":                                "",
-		"[x; rm -rf /]":                      "denied class:other len:13",
-		"the command `cat ~/.ssh/id_rsa`":    "denied class:other len:31",
-		"[" + strings.Repeat("a", 200) + "]": "denied class:other len:202",
+		"[x; rm -rf /]":                      "denied class:other",
+		"the command `cat ~/.ssh/id_rsa`":    "denied class:other",
+		"[" + strings.Repeat("a", 200) + "]": "denied class:other",
 	} {
 		got := denialReason(in)
 		eq(t, "denialReason("+in+")", got, want)

@@ -31,3 +31,18 @@ func lookupAccessor(name string) (*accessor, error) {
 func (a *accessor) canRead(string, []string) (bool, string) {
 	return false, "unsupported on Windows"
 }
+
+// rewriteFlags: Windows has no FIFO-on-open hazard for ordinary paths.
+const rewriteFlags = 0
+
+// linkCount is not read on Windows: NTFS hard links need write access to
+// the target, so a link the account planted reaches only files it could
+// change itself.
+// UNVERIFIED: compiled and vetted only.
+func linkCount(os.FileInfo) uint64 { return 1 }
+
+// prepareOutbox is a no-op on Windows: the outbox inherits the ACL of the
+// data directory, which the installer (or the daemon) sets.
+// UNVERIFIED: the daemon's explicit ACLs are not applied by a daemonless
+// scan.
+func prepareOutbox(dataDir, outbox, group string) []string { return nil }

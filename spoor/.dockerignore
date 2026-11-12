@@ -1,0 +1,13 @@
+# Build context of the Dockerfile: sources only. Test binaries, release
+# output and local state never go into the image build.
+.git
+.github
+dist
+bin
+tmp
+**/*.test
+**/*.out
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/zz_*_test.go

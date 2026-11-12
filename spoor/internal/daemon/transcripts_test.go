@@ -10,6 +10,7 @@ import (
 
 	"github.com/thomastysong/spoor/internal/config"
 	"github.com/thomastysong/spoor/internal/event"
+	"github.com/thomastysong/spoor/internal/platform"
 	"github.com/thomastysong/spoor/internal/procmon"
 )
 
@@ -185,4 +186,162 @@ func TestTranscriptFirstSessionOnEmptyHome(t *testing.T) {
 	if !got["toolu_first"] || !got["toolu_down"] {
 		t.Errorf("collected %v", got)
 	}
+}
+
+// TestTranscriptNewRootPrimesOnlyItself: when a new root appears (here a
+// relocated configuration home reported by the process monitor), only that
+// root is primed. A session file created in an already admitted root since
+// the steady tailer's last poll did not exist when its root was first seen
+// and is read from its first line.
+func TestTranscriptNewRootPrimesOnlyItself(t *testing.T) {
+	f := newFixture(t)
+	home := f.user.Home
+	cwd := filepath.Join(home, "repo")
+	proj := filepath.Join(home, ".claude", "projects", "-repo")
+	mustMkdir(t, proj, 0o755)
+	alt := filepath.Join(f.root, "alt-claude")
+	mustMkdir(t, filepath.Join(alt, "projects", "-repo"), 0o755)
+	mustWrite(t, filepath.Join(alt, "projects", "-repo", "old.jsonl"), claudeLines("s-old", cwd, "toolu_alt_old", "ls", time.Now()), 0o600)
+	if err := os.Chmod(alt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	d, out := f.unitDaemon()
+	r := newTranscriptRunner(d)
+	ctx := context.Background()
+	r.step(ctx) // first start: the home root is primed
+	r.step(ctx) // steady tailer
+
+	// A new session starts in the home root, which is long admitted ...
+	mustWrite(t, filepath.Join(proj, "new.jsonl"), claudeLines("s-new", cwd, "toolu_new_session", "ls", time.Now()), 0o600)
+	// ... and before the next poll the monitor reports a relocated home.
+	d.procs.set([]procmon.AgentProc{{PID: 7, AgentID: "claude-code", User: event.User{Name: "alice", ID: f.user.UID}, ConfigHome: alt}}, d.users)
+	r.step(ctx)
+	r.step(ctx)
+	r.commit()
+	if err := d.pipe.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if d.board.get("transcript.primes") != 2 {
+		t.Fatalf("primes = %d, want 2", d.board.get("transcript.primes"))
+	}
+	got := out.useIDs()
+	if !got["toolu_new_session"] {
+		t.Error("a session file created after its root was admitted was started at its end because another root appeared: its first records were lost")
+	}
+	if got["toolu_alt_old"] {
+		t.Error("a file that existed when the new root was first seen was read back")
+	}
+}
+
+// TestTranscriptRestartRemembersConfigHome: admitted roots are remembered
+// across a restart even while they are not listed. After a restart the
+// process monitor has not reported configuration homes yet; another root
+// that is new first (a new account) must not make the daemon forget the
+// relocated home, or the session written there while the daemon was down
+// would be started at its end when the home is reported again.
+func TestTranscriptRestartRemembersConfigHome(t *testing.T) {
+	f := newFixture(t)
+	cwd := filepath.Join(f.user.Home, "repo")
+	alt := filepath.Join(f.root, "alt-claude")
+	altProj := filepath.Join(alt, "projects", "-repo")
+	mustMkdir(t, altProj, 0o755)
+	if err := os.Chmod(alt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	d, out := f.unitDaemon()
+	ctx := context.Background()
+	agent := []procmon.AgentProc{{PID: 9, AgentID: "claude-code", User: event.User{Name: "alice", ID: f.user.UID}, ConfigHome: alt}}
+	d.procs.set(agent, d.users)
+	r := newTranscriptRunner(d)
+	r.step(ctx) // first start: home and relocated home primed together
+	r.step(ctx)
+	r.commit()
+
+	// Daemon down: a session is written in the relocated home.
+	mustWrite(t, filepath.Join(altProj, "down.jsonl"), claudeLines("s-down", cwd, "toolu_alt_down", "ls", time.Now()), 0o600)
+
+	// Restart: a second account exists now; the monitor has not reported
+	// the relocated home yet.
+	bobHome := filepath.Join(f.root, "home", "bob")
+	mustMkdir(t, bobHome, 0o755)
+	d.users.set([]platform.UserHome{f.user, {Name: "bob", UID: f.user.UID, Home: bobHome}})
+	d.procs = newProcView()
+	r2 := newTranscriptRunner(d)
+	r2.step(ctx)
+	d.procs.set(agent, d.users) // the agent is seen again
+	r2.step(ctx)
+	r2.step(ctx)
+	r2.commit()
+	d.pipe.Close()
+	if n := d.board.get("transcript.primes"); n != 2 {
+		t.Errorf("primes = %d, want 2 (first start, the new account)", n)
+	}
+	if !out.useIDs()["toolu_alt_down"] {
+		t.Error("a session written in a remembered configuration home while the daemon was down was skipped after the restart")
+	}
+}
+
+// TestTranscriptAdmittedRootExpires: a root that has not been listed for
+// admittedGrace is forgotten, and primed again if it comes back; one that
+// is listed keeps its admission.
+func TestTranscriptAdmittedRootExpires(t *testing.T) {
+	f := newFixture(t)
+	cwd := filepath.Join(f.user.Home, "repo")
+	alt := filepath.Join(f.root, "alt-claude")
+	altProj := filepath.Join(alt, "projects", "-repo")
+	mustMkdir(t, altProj, 0o755)
+	if err := os.Chmod(alt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	d, out := f.unitDaemon()
+	clock := time.Now()
+	d.env.now = func() time.Time { return clock }
+	ctx := context.Background()
+	agent := []procmon.AgentProc{{PID: 9, AgentID: "claude-code", User: event.User{Name: "alice", ID: f.user.UID}, ConfigHome: alt}}
+	d.procs.set(agent, d.users)
+	r := newTranscriptRunner(d)
+	r.step(ctx)
+	if d.board.get("transcript.primes") != 1 {
+		t.Fatalf("primes = %d", d.board.get("transcript.primes"))
+	}
+	d.procs = newProcView() // the home is no longer listed
+	clock = clock.Add(admittedGrace / 2)
+	r.step(ctx)
+	if !r.hasAdmitted(alt) {
+		t.Fatal("a root was forgotten before its grace ran out")
+	}
+	clock = clock.Add(admittedGrace/2 + time.Hour)
+	r.step(ctx)
+	if r.hasAdmitted(alt) {
+		t.Fatal("a root unlisted for longer than its grace is still admitted")
+	}
+	// The home comes back: what is in it now existed before this sighting.
+	mustWrite(t, filepath.Join(altProj, "later.jsonl"), claudeLines("s-later", cwd, "toolu_alt_later", "ls", time.Now()), 0o600)
+	d.procs.set(agent, d.users)
+	r.step(ctx)
+	r.commit()
+	d.pipe.Close()
+	if n := d.board.get("transcript.primes"); n != 2 {
+		t.Errorf("primes = %d, want 2", n)
+	}
+	if out.useIDs()["toolu_alt_later"] {
+		t.Error("a file in a root seen again after its grace was read back")
+	}
+	// The roots file carries the listing times.
+	b, err := os.ReadFile(filepath.Join(d.layout.check, "transcript-roots.json"))
+	if err != nil || !strings.Contains(string(b), `"v":2`) {
+		t.Errorf("roots file = %s, %v", b, err)
+	}
+}
+
+// hasAdmitted reports whether any admitted root lies under dir.
+func (r *transcriptRunner) hasAdmitted(dir string) bool {
+	pre := filepath.Clean(dir) + string(filepath.Separator)
+	for g := range r.admitted {
+		if strings.HasPrefix(g, pre) {
+			return true
+		}
+	}
+	return false
 }

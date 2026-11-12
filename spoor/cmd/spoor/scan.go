@@ -29,7 +29,12 @@ executed. Output passes through the configured privacy profile.
 extension and Fleet read (with a heartbeat, so the fail-closed Fleet
 policies see a live sensor): this is tier 2, a scheduled scan without the
 daemon. --outbox also writes the shipped records to the outbox for Fluent
-Bit. While the kill switch is on, --state and --outbox record nothing.`
+Bit. It never deletes a segment a configured consumer (the Fluent Bit tail
+database in output.fluent_bit.tail_db, a forward or OTLP shipper) may not
+have read: that pruning is the daemon's, which reads those positions. With
+no consumer configured it applies retention.outbox and retention.outbox_bytes
+as the daemon does. While the kill switch is on, --state and --outbox record
+nothing.`
 
 func (a *app) cmdScan(args []string) int {
 	fs := a.newFlags("scan", "scan [--json|--ndjson] [--state] [--outbox] [--host-root dir] [--projects=false]", scanAbout)
@@ -107,6 +112,7 @@ type scanResult struct {
 	Disabled bool              `json:"kill_switch,omitempty"`
 	Counts   map[string]int    `json:"counts"`
 	Engine   map[string]uint64 `json:"engine,omitempty"`
+	Notes    []string          `json:"notes,omitempty"`
 }
 
 // scan runs discovery and pushes its records through a scan-mode pipeline,
@@ -147,10 +153,22 @@ func (a *app) scan(ctx context.Context, cfg *config.Config, o scanOptions) (*sca
 	}
 	capture := newCaptureSink("scan", event.KindInventory, event.KindPosture, event.KindDetection)
 	var outbox sink.Sink = capture
+	var notes []string
 	if o.outbox {
+		notes = append(notes, prepareOutbox(cfg.DataDir, cfg.OutboxDir(), cfg.Output.Group)...)
+		age, size := cfg.Retention.Outbox.D(), cfg.Retention.OutboxBytes
+		if outboxConsumers(cfg) {
+			// The sink prunes blindly whenever it starts a segment; with a
+			// consumer configured that would delete segments it has not
+			// read (DECISIONS A14). Only the daemon prunes then: it reads
+			// the tail database and shipper checkpoints, keeps unread data
+			// until the hard cap and reports outbox.dropped_unshipped.
+			age, size = -1, -1
+			notes = append(notes, "outbox not pruned by scan: a consumer is configured (Fluent Bit tail database or shipper), so only the daemon prunes, by what was read")
+		}
 		files, err := sink.NewFiles(sink.FilesOptions{
 			Dir: cfg.OutboxDir(), MaxSegment: cfg.Output.MaxSegment, MaxLineBytes: cfg.Output.MaxLine,
-			RetainAge: cfg.Retention.Outbox.D(), RetainBytes: cfg.Retention.OutboxBytes, Format: cfg.Output.Format,
+			RetainAge: age, RetainBytes: size, FileMode: 0o640, Format: cfg.Output.Format,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("outbox: %w", err)
@@ -159,7 +177,7 @@ func (a *app) scan(ctx context.Context, cfg *config.Config, o scanOptions) (*sca
 		outbox = teeSink{capture, files}
 	}
 	started := a.now()
-	res := &scanResult{Started: started.UTC(), Disabled: disabled, Counts: map[string]int{}}
+	res := &scanResult{Started: started.UTC(), Disabled: disabled, Counts: map[string]int{}, Notes: notes}
 	dres, err := discovery.Scan(ctx, discovery.Options{
 		Catalog: cat, HostRoot: cfg.HostRoot, Projects: o.projects, Deadline: o.deadline,
 		Prev: prev, Full: o.full || prev == nil, Host: &host, Now: a.now,
@@ -208,6 +226,15 @@ func (a *app) scan(ctx context.Context, cfg *config.Config, o scanOptions) (*sca
 		res.Counts[string(e.Kind)]++
 	}
 	return res, nil
+}
+
+// outboxConsumers reports whether something is configured to read the
+// outbox whose read position the daemon knows: a Fluent Bit tail database
+// or one of spoor's own shippers.
+func outboxConsumers(cfg *config.Config) bool {
+	return cfg.Output.FluentBit.TailDB != "" ||
+		(cfg.Output.Forward != nil && cfg.Output.Forward.Addr != "") ||
+		(cfg.Output.OTLP != nil && cfg.Output.OTLP.Endpoint != "")
 }
 
 // scanComplete applies discovery's own rule for a scan that can prove
@@ -279,7 +306,7 @@ func (a *app) printScan(r *scanResult) {
 			continue
 		}
 		as := e.Asset
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", as.Kind, clip(as.Name, 40), clip(as.Version, 16), as.Owner, as.Scope, as.Change, clip(as.Path, 70))
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", term(string(as.Kind)), clip(as.Name, 40), clip(as.Version, 16), clip(as.Owner, 32), term(string(as.Scope)), term(string(as.Change)), clip(as.Path, 70))
 	}
 	tw.Flush()
 	fails := 0
@@ -290,7 +317,7 @@ func (a *app) printScan(r *scanResult) {
 			}
 			fails++
 			c := e.Check
-			fmt.Fprintf(a.stdout, "  %-8s %s  %s  %s\n", c.Severity, c.ID, clip(c.Title, 60), clip(c.Subject, 70))
+			fmt.Fprintf(a.stdout, "  %-8s %s  %s  %s\n", term(c.Severity), term(c.ID), clip(c.Title, 60), clip(c.Subject, 70))
 		}
 	}
 	l := r.Ledger
@@ -303,6 +330,9 @@ func (a *app) printScan(r *scanResult) {
 		l.Roots, l.Files, l.Denied, l.Skipped, l.Errors)
 	for _, n := range l.Notes {
 		fmt.Fprintf(a.stdout, "  note: %s\n", clip(n, 200))
+	}
+	for _, n := range r.Notes {
+		fmt.Fprintf(a.stdout, "  note: %s\n", clip(n, 300))
 	}
 	if r.State != "" {
 		fmt.Fprintf(a.stdout, "recorded in %s\n", r.State)

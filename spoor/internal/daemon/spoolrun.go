@@ -8,6 +8,7 @@ import (
 
 	"github.com/thomastysong/spoor/internal/config"
 	"github.com/thomastysong/spoor/internal/event"
+	"github.com/thomastysong/spoor/internal/hookcmd"
 	"github.com/thomastysong/spoor/internal/platform"
 	"github.com/thomastysong/spoor/internal/spool"
 )
@@ -149,8 +150,7 @@ func (r *spoolRunner) count(probs []spool.Problem) uint64 {
 	for _, p := range probs {
 		switch p.Kind {
 		case "hook_error":
-			// The reader only passes reason codes of the form hook_[a-z_]+.
-			r.d.board.add("hook_errors."+p.Detail, 1)
+			r.d.board.add("hook_errors."+hookReasonKey(p.Detail), 1)
 		case "owner_mismatch", "symlink_refused", "not_regular":
 			k := p.Kind + "\x00" + p.Path
 			if last, ok := r.standing[k]; ok && now.Sub(last) < standingEvery {
@@ -167,6 +167,29 @@ func (r *spoolRunner) count(probs []spool.Problem) uint64 {
 		n++
 	}
 	return n
+}
+
+// hookReasons are the reasons hookcmd reports. The reader passes on any
+// code of the form hook_[a-z_]{1,40} from a spool its user can write, so a
+// counter name is made only from this closed set: a user who writes a few
+// hundred invented reasons must not be able to crowd the daemon's own
+// counters and surfaces out of the heartbeat line.
+var hookReasons = map[string]bool{
+	hookcmd.ReasonWorkerStart:   true,
+	hookcmd.ReasonWorkerTimeout: true,
+	hookcmd.ReasonWorkerCrash:   true,
+	hookcmd.ReasonBadReply:      true,
+	hookcmd.ReasonSpool:         true,
+	hookcmd.ReasonRender:        true,
+	hookcmd.ReasonStdin:         true,
+}
+
+// hookReasonKey is the counter name component for a hook error reason.
+func hookReasonKey(reason string) string {
+	if hookReasons[reason] {
+		return reason
+	}
+	return "other"
 }
 
 // safeKind keeps counter names inside the reader's closed vocabulary.

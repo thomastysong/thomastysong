@@ -1,18 +1,24 @@
 package daemon
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/thomastysong/spoor/internal/catalog"
+	"github.com/thomastysong/spoor/internal/engine"
 	"github.com/thomastysong/spoor/internal/event"
 	"github.com/thomastysong/spoor/internal/hookinstall"
 	"github.com/thomastysong/spoor/internal/platform"
+	"github.com/thomastysong/spoor/internal/privacy"
 	"github.com/thomastysong/spoor/internal/procmon"
+	"github.com/thomastysong/spoor/internal/rules"
 	"github.com/thomastysong/spoor/internal/sink"
 )
 
@@ -156,15 +162,39 @@ func TestProcViewRootSawAndEnv(t *testing.T) {
 
 func TestBoardBounds(t *testing.T) {
 	b := newBoard()
-	for i := 0; i < maxBoardKeys+50; i++ {
-		b.add(fmt.Sprintf("hook_errors.hook_x%d", i), 1)
+	b.set("early.gauge", 7)
+	for i := 0; i < 1000; i++ {
+		b.add(fmt.Sprintf("hook_errors.hook_%s", strings.Repeat("x", 40)+fmt.Sprint(i)), 1)
 	}
 	m := b.counters()
-	if len(m) > maxBoardKeys+1 {
-		t.Errorf("%d counter names", len(m))
+	enc, _ := json.Marshal(func() map[string]uint64 {
+		w := map[string]uint64{}
+		for k := range m {
+			w[k] = ^uint64(0) // the widest value a counter can take
+		}
+		return w
+	}())
+	if len(enc) > maxBoardBytes {
+		t.Errorf("the board encodes to %d bytes with %d names, over its %d byte bound", len(enc), len(m), maxBoardBytes)
 	}
-	if m["daemon.counters_omitted"] == 0 {
+	if m[omittedCounter] == 0 {
 		t.Error("overflow not counted")
+	}
+	// A gauge set after the board is full is refused, and counted; one set
+	// before keeps updating; unset frees room.
+	b.set("late.gauge", 1)
+	if _, ok := b.counters()["late.gauge"]; ok {
+		t.Error("a new name was admitted beyond the bound")
+	}
+	before := b.get(omittedCounter)
+	b.set("early.gauge", 8)
+	if b.get("early.gauge") != 8 || b.get(omittedCounter) != before {
+		t.Error("an existing gauge was refused")
+	}
+	b.unset("early.gauge")
+	b.set("late.gauge", 1)
+	if b.get("late.gauge") != 1 {
+		t.Error("unset did not free room")
 	}
 	b.surface(event.SurfaceStatus{Name: "b"})
 	b.update("a", func(s *event.SurfaceStatus) { s.Errors = 3 })
@@ -197,7 +227,8 @@ func TestUserSetHome(t *testing.T) {
 
 func TestTeeSink(t *testing.T) {
 	a, b := &captureSink{}, &captureSink{}
-	tee := &teeSink{sinks: []sink.Sink{a, b}}
+	var mirrorErrs int
+	tee := &teeSink{primary: a, mirrors: []sink.Sink{b}, onMirrorError: func(string, error) { mirrorErrs++ }}
 	ev := event.New(event.KindHealth, event.TypeHealthHeartbeat, event.SourceSensor)
 	if err := tee.Write([]*event.Event{ev}); err != nil {
 		t.Fatal(err)
@@ -208,7 +239,40 @@ func TestTeeSink(t *testing.T) {
 	if tee.Flush() != nil || tee.Close() != nil || tee.Name() != "tee" {
 		t.Error("tee flush/close")
 	}
+	if mirrorErrs != 0 {
+		t.Errorf("mirror errors = %d", mirrorErrs)
+	}
+
+	// A failing mirror (stdout closed) is counted, never reported as a
+	// failure of the outbox write: the pipeline would count the records as
+	// dropped although the outbox holds them.
+	c := &captureSink{}
+	tee = &teeSink{primary: c, mirrors: []sink.Sink{failSink{}}, onMirrorError: func(string, error) { mirrorErrs++ }}
+	if err := tee.Write([]*event.Event{ev}); err != nil {
+		t.Errorf("a mirror failure failed the write: %v", err)
+	}
+	if err := tee.Flush(); err != nil {
+		t.Errorf("a mirror failure failed the flush: %v", err)
+	}
+	if err := tee.Close(); err != nil {
+		t.Errorf("a mirror failure failed the close: %v", err)
+	}
+	if len(c.all()) != 1 || mirrorErrs != 3 {
+		t.Errorf("primary got %d records, mirror errors = %d", len(c.all()), mirrorErrs)
+	}
+	// A failing primary is the write's result.
+	tee = &teeSink{primary: failSink{}, mirrors: []sink.Sink{c}}
+	if err := tee.Write([]*event.Event{ev}); err == nil {
+		t.Error("a primary failure was hidden")
+	}
 }
+
+type failSink struct{}
+
+func (failSink) Name() string               { return "fail" }
+func (failSink) Write([]*event.Event) error { return errors.New("closed") }
+func (failSink) Flush() error               { return errors.New("closed") }
+func (failSink) Close() error               { return errors.New("closed") }
 
 func TestValidUID(t *testing.T) {
 	for in, want := range map[string]bool{
@@ -218,5 +282,71 @@ func TestValidUID(t *testing.T) {
 		if validUID(in) != want {
 			t.Errorf("validUID(%q) != %v", in, want)
 		}
+	}
+}
+
+// TestHeartbeatFitsWithFullBoard: with the board filled to its bound
+// (maxBoardBytes, every value at its widest) and every surface the daemon
+// reports set, the heartbeat still fits the default line without the
+// engine cutting surfaces or counters, with room left for what this test
+// cannot fill (every stream's accounting, wider engine counter values).
+func TestHeartbeatFitsWithFullBoard(t *testing.T) {
+	f := newFixture(t)
+	d, _ := f.unitDaemon()
+	d.pipe.Close()
+	for i := 0; ; i++ {
+		name := fmt.Sprintf("daemon.filler.%s.%03d", strings.Repeat("n", 30), i)
+		d.board.set(name, ^uint64(0))
+		if d.board.get(omittedCounter) > 0 {
+			break
+		}
+	}
+	for _, n := range []string{"adapters", "hooks", "transcripts", "processes", "osquery", "otel", "outbox", "scan"} {
+		d.board.surface(event.SurfaceStatus{Name: n, Status: "degraded", Reason: "exec_selftest_failed", Errors: ^uint64(0),
+			Events: ^uint64(0), SchemaDrift: true, LastEvent: event.At(time.Now())})
+	}
+	sinkC := &captureSink{}
+	set, err := rules.Load(map[string][]byte{"test.yaml": []byte(testRulePack)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, src := d.env.host()
+	pipe, err := engine.New(engine.Options{
+		Config: f.cfg, Catalog: d.cat, Rules: set, Outbox: sinkC, Host: host, HostIDSource: src,
+		Mode: engine.ModeDaemon, Now: time.Now, Disabled: func() bool { return false },
+		Surfaces: d.board.surfaces, Gauges: d.board.counters,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pipe.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var hb *event.Event
+	for _, e := range sinkC.all() {
+		if e.Type == event.TypeHealthHeartbeat {
+			hb = e
+		}
+	}
+	if hb == nil || hb.Health == nil {
+		t.Fatal("no heartbeat")
+	}
+	if len(hb.Truncated) > 0 || len(hb.Health.Surfaces) < 8 {
+		t.Errorf("a full board pushed the heartbeat over its line: truncated %v, %d surfaces", hb.Truncated, len(hb.Health.Surfaces))
+	}
+	for k := range d.board.counters() {
+		if _, ok := hb.Health.Counters[k]; !ok {
+			t.Errorf("board counter %s missing from the heartbeat", k)
+			break
+		}
+	}
+	line, err := hb.MarshalLine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	budget := f.cfg.Output.MaxLine - privacy.LineHeadroom - 1 - 512
+	t.Logf("heartbeat %d bytes of %d with %d counters", len(line), budget, len(hb.Health.Counters))
+	if room := budget - len(line); room < 3<<10 {
+		t.Errorf("only %d bytes left in the heartbeat line with a full board", room)
 	}
 }

@@ -132,15 +132,12 @@ type cmdRedactor struct {
 	topOld   map[string]string // top-level original value -> redacted value
 	fail     bool              // a secret could not be placed: emit the skeleton
 	nameMemo map[string]bool
-	lexStop  int // where the word lexer's token cap stopped it, -1 when it did not
+	argMemo  *argvMemo // shared with the sub-redactors of nested texts
+	lexStop  int       // where the word lexer's token cap stopped it, -1 when it did not
 }
 
-// redactCommand returns cmd with credentials removed. precapped reports
-// that the end of the input was dropped, because it lies beyond
-// maxCommandScan or beyond where a structural view stopped; the result
-// then ends in a truncation marker and callers must keep only a head of
-// it, never a tail near the cut.
-func redactCommand(cmd string, hint shellx.Dialect) (out string, precapped bool) {
+// redactCommandUncached is redactCommand without the memo (memo.go).
+func redactCommandUncached(cmd string, hint shellx.Dialect) (out string, precapped bool) {
 	defer func() {
 		if recover() != nil {
 			out, precapped = failMarker, false
@@ -208,7 +205,7 @@ func cover(src string, hint shellx.Dialect) (*shellx.Facts, *cmdRedactor) {
 }
 
 func newCmdRedactor(src string, d shellx.Dialect) *cmdRedactor {
-	r := &cmdRedactor{src: src, d: d, topOld: map[string]string{}}
+	r := &cmdRedactor{src: src, d: d, topOld: map[string]string{}, argMemo: &argvMemo{}}
 	r.toks, r.lexStop = lexStop(src, d)
 	r.vals = make([]string, len(r.toks))
 	r.dirty = make([]bool, len(r.toks))
@@ -277,7 +274,7 @@ func (r *cmdRedactor) topLevel() {
 			continue
 		}
 		argv := r.argv(s)
-		red := redactArgs(argv)
+		red := r.argMemo.redact(argv)
 		for k := range argv {
 			if k < len(red) && red[k] != argv[k] {
 				r.edit(s.words[k], red[k])
@@ -311,6 +308,7 @@ func (r *cmdRedactor) nested(f *shellx.Facts) {
 			r.fail = true
 		}
 		sub.nameMemo = r.nameMemo
+		sub.argMemo = r.argMemo
 		sub.topLevel()
 		r.nameMemo = sub.nameMemo
 		for i, t := range sub.toks {
@@ -379,7 +377,7 @@ func (r *cmdRedactor) nested(f *shellx.Facts) {
 	// still hands every flag and value to argument-vector redaction. It
 	// covers the whole line (at most maxCommandScan bytes).
 	for _, argv := range naiveSegments(r.src) {
-		red := redactArgs(argv)
+		red := r.argMemo.redact(argv)
 		for k := range argv {
 			if k < len(red) && red[k] != argv[k] {
 				r.addPair(&pair{oldVal: argv[k], newVal: red[k], secrets: alignSecrets(argv[k], red[k]), optional: true})
@@ -390,7 +388,7 @@ func (r *cmdRedactor) nested(f *shellx.Facts) {
 		argv := make([]string, 0, len(c.Args)+1)
 		argv = append(argv, c.Path)
 		argv = append(argv, c.Args...)
-		red := redactArgs(argv)
+		red := r.argMemo.redact(argv)
 		for k := range argv {
 			if k >= len(red) || red[k] == argv[k] {
 				continue

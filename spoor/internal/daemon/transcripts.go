@@ -21,15 +21,25 @@ import (
 // spoor first looks at a root are not read back. transcript.Tailer applies
 // TailerOptions.FromStart to every file it has not seen before, so one
 // tailer cannot both skip what existed and read new sessions from their
-// first line. The runner therefore primes: when a root is new (first start
+// first line. The runner therefore primes: when roots are new (first start
 // on this data directory, a new account, a configuration home the process
 // monitor just reported), a tailer with FromStart false makes one pass over
-// every root, which records the current end of every file it has not seen
-// and continues the ones it knows; its checkpoints are committed and the
-// steady tailer (FromStart true) then loads them, so every file created
-// afterwards is read from its first line. The admitted roots are kept in
-// the checkpoint directory, so a restart does not prime again and the
-// sessions written while the daemon was down are read.
+// those new roots only, which records the current end of every file in
+// them; its checkpoints are committed and the steady tailer (FromStart
+// true) then loads them, so every file created afterwards, in any root, is
+// read from its first line. Priming only the new roots matters: a session
+// file created in an admitted root since the steady tailer's last poll did
+// not exist when its root was first seen and must not be started at its
+// end because some other root appeared. The steady tailer follows admitted
+// roots only, so a root whose priming failed is never read from the start.
+//
+// The admitted roots are kept in the checkpoint directory with the time
+// each was last listed, and a root that is not listed is remembered for
+// admittedGrace before it is forgotten (and primed again if it comes
+// back). A configuration home is listed only once the process monitor has
+// reported an agent using it, which after a restart can take a while; it
+// must not be primed again then, or the sessions written there while the
+// daemon was down would be skipped.
 //
 // sources.transcripts.backfill > 0 turns priming off: files modified within
 // that window are read from the start on first sight.
@@ -39,13 +49,23 @@ type transcriptRunner struct {
 	rootsFile string
 	backfill  time.Duration
 
-	mu       sync.Mutex // guards t (commit from the shutdown path)
+	mu       sync.Mutex // guards t and roots (commit from the shutdown path)
 	t        *transcript.Tailer
-	roots    []transcript.Root
-	admitted map[string]bool
+	roots    []transcript.Root // what the steady tailer follows
+	admitted map[string]int64  // root glob -> last listed (Unix seconds)
+	savedAt  int64             // when the roots file was last written
 	loaded   bool
 	off      bool // the kill switch was on at the last look
 }
+
+const (
+	// admittedGrace is how long an admitted root outlives its last listing:
+	// the transcript tailer keeps a checkpoint as long after its root
+	// disappears (orphanGrace), so the two expire together.
+	admittedGrace = 7 * 24 * time.Hour
+	// admittedRefresh bounds how stale the persisted listing times get.
+	admittedRefresh = time.Hour
+)
 
 func newTranscriptRunner(d *daemon) *transcriptRunner {
 	return &transcriptRunner{
@@ -53,7 +73,7 @@ func newTranscriptRunner(d *daemon) *transcriptRunner {
 		stateFile: filepath.Join(d.layout.check, "transcripts.json"),
 		rootsFile: filepath.Join(d.layout.check, "transcript-roots.json"),
 		backfill:  d.cfg.Sources.Transcripts.Backfill.D(),
-		admitted:  map[string]bool{},
+		admitted:  map[string]int64{},
 	}
 }
 
@@ -111,25 +131,30 @@ func (r *transcriptRunner) step(ctx context.Context) {
 		return
 	}
 	roots := d.transcriptRoots()
-	fresh := false
+	var fresh []transcript.Root
 	for _, rt := range roots {
-		if !r.admitted[rt.Glob] {
-			fresh = true
-			break
+		if _, ok := r.admitted[rt.Glob]; !ok {
+			fresh = append(fresh, rt)
+		}
+	}
+	if len(fresh) > 0 {
+		if r.backfill > 0 {
+			r.admit(fresh)
+		} else {
+			r.prime(ctx, fresh)
+		}
+	}
+	r.touch(roots)
+	steady := roots[:0:0]
+	for _, rt := range roots {
+		if _, ok := r.admitted[rt.Glob]; ok {
+			steady = append(steady, rt)
 		}
 	}
 	r.mu.Lock()
-	r.roots = roots
-	needPrime := r.backfill <= 0 && fresh
-	r.mu.Unlock()
-	if needPrime {
-		r.prime(ctx, roots)
-	} else if fresh {
-		r.admit(roots)
-	}
-	r.mu.Lock()
+	r.roots = steady
 	if r.t == nil {
-		r.t = r.newTailer(true)
+		r.t = r.newTailer(true, r.currentRoots)
 	}
 	tl := r.t
 	r.mu.Unlock()
@@ -142,9 +167,9 @@ func (r *transcriptRunner) step(ctx context.Context) {
 	r.handle(evs, probs, err)
 }
 
-func (r *transcriptRunner) newTailer(fromStart bool) *transcript.Tailer {
+func (r *transcriptRunner) newTailer(fromStart bool, roots func() []transcript.Root) *transcript.Tailer {
 	o := transcript.TailerOptions{
-		Roots:       r.currentRoots,
+		Roots:       roots,
 		StateFile:   r.stateFile,
 		FromStart:   fromStart,
 		DeferCommit: true,
@@ -155,53 +180,71 @@ func (r *transcriptRunner) newTailer(fromStart bool) *transcript.Tailer {
 	return transcript.NewTailer(o)
 }
 
+// currentRoots is the steady tailer's Roots: the admitted roots.
 func (r *transcriptRunner) currentRoots() []transcript.Root {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]transcript.Root(nil), r.roots...)
 }
 
-// prime records the end of every file not yet known (see the type comment).
-func (r *transcriptRunner) prime(ctx context.Context, roots []transcript.Root) {
+// prime records the end of every file not yet known in the given new roots
+// (see the type comment) and admits them.
+func (r *transcriptRunner) prime(ctx context.Context, fresh []transcript.Root) {
 	r.mu.Lock()
-	r.roots = roots // the priming tailer reads them through currentRoots
 	if r.t != nil {
+		// The priming tailer loads the checkpoint store: everything the
+		// steady tailer knows must be in it, and the steady tailer is
+		// reloaded from it afterwards.
 		if err := r.t.Commit(); err != nil {
 			r.d.board.add("transcript.checkpoint_errors", 1)
 		}
 		r.t = nil
 	}
 	r.mu.Unlock()
-	p := r.newTailer(false)
+	only := append([]transcript.Root(nil), fresh...)
+	p := r.newTailer(false, func() []transcript.Root { return only })
 	evs, probs, err := p.Poll(ctx)
 	r.handle(evs, probs, err)
 	if err := p.Commit(); err != nil {
 		r.d.board.add("transcript.checkpoint_errors", 1)
 		return // admit again next time rather than read the files from the start
 	}
-	r.admit(roots)
+	r.admit(fresh)
 	r.d.board.add("transcript.primes", 1)
 	if r.d.env.onTranscriptPrimed != nil {
 		r.d.env.onTranscriptPrimed()
 	}
 }
 
+// admit records roots as seen and saves the list.
 func (r *transcriptRunner) admit(roots []transcript.Root) {
+	now := r.d.env.now().Unix()
 	for _, rt := range roots {
-		r.admitted[rt.Glob] = true
+		r.admitted[rt.Glob] = now
 	}
-	// Roots that no longer exist are forgotten, so a home that comes back
-	// later is primed again.
-	cur := map[string]bool{}
-	for _, rt := range roots {
-		cur[rt.Glob] = true
-	}
-	for g := range r.admitted {
-		if !cur[g] {
-			delete(r.admitted, g)
+	r.saveAdmitted(now)
+}
+
+// touch notes that the listed roots are still there and forgets admitted
+// roots that have not been listed for admittedGrace, so a home that comes
+// back after that is primed again.
+func (r *transcriptRunner) touch(listed []transcript.Root) {
+	now := r.d.env.now().Unix()
+	for _, rt := range listed {
+		if _, ok := r.admitted[rt.Glob]; ok {
+			r.admitted[rt.Glob] = now
 		}
 	}
-	r.saveAdmitted()
+	changed := false
+	for g, last := range r.admitted {
+		if now-last > int64(admittedGrace/time.Second) {
+			delete(r.admitted, g)
+			changed = true
+		}
+	}
+	if changed || now-r.savedAt >= int64(admittedRefresh/time.Second) {
+		r.saveAdmitted(now)
+	}
 }
 
 // reset drops every checkpoint so that the next step primes all roots.
@@ -212,7 +255,7 @@ func (r *transcriptRunner) reset() {
 	if err := os.Remove(r.stateFile); err != nil && !errors.Is(err, os.ErrNotExist) {
 		r.d.board.add("transcript.checkpoint_errors", 1)
 	}
-	r.admitted = map[string]bool{}
+	r.admitted = map[string]int64{}
 	_ = os.Remove(r.rootsFile)
 }
 
@@ -262,10 +305,16 @@ func (r *transcriptRunner) commit() {
 	}
 }
 
+// admittedFile is the roots file. Version 1 listed globs only; version 2
+// adds when each was last listed.
 type admittedFile struct {
-	V     int      `json:"v"`
-	Globs []string `json:"globs"`
+	V     int              `json:"v"`
+	Globs []string         `json:"globs,omitempty"`
+	Roots map[string]int64 `json:"roots,omitempty"`
 }
+
+// maxAdmitted bounds the roots file (accounts x agents x configuration homes).
+const maxAdmitted = 1 << 14
 
 // loadAdmitted reads the roots primed by an earlier run. The checkpoint
 // store itself may not exist (no session file had been seen yet); the roots
@@ -278,27 +327,38 @@ func (r *transcriptRunner) loadAdmitted() {
 		return
 	}
 	var f admittedFile
-	if json.Unmarshal(b, &f) != nil || f.V != 1 {
+	if json.Unmarshal(b, &f) != nil {
 		return
 	}
-	for _, g := range f.Globs {
-		r.admitted[g] = true
+	now := r.d.env.now().Unix()
+	switch f.V {
+	case 1:
+		for _, g := range f.Globs {
+			if len(r.admitted) < maxAdmitted {
+				r.admitted[g] = now
+			}
+		}
+	case 2:
+		for g, last := range f.Roots {
+			if len(r.admitted) < maxAdmitted {
+				r.admitted[g] = min(last, now)
+			}
+		}
 	}
+	r.savedAt = now
 }
 
-func (r *transcriptRunner) saveAdmitted() {
-	f := admittedFile{V: 1}
-	for g := range r.admitted {
-		f.Globs = append(f.Globs, g)
-	}
-	sort.Strings(f.Globs)
+func (r *transcriptRunner) saveAdmitted(now int64) {
+	f := admittedFile{V: 2, Roots: r.admitted}
 	b, err := json.Marshal(f)
 	if err != nil {
 		return
 	}
 	if err := writeFileAtomic(r.rootsFile, b, 0o600); err != nil {
 		r.d.board.add("transcript.checkpoint_errors", 1)
+		return
 	}
+	r.savedAt = now
 }
 
 // transcriptRoots lists the session-log roots of every account: the default

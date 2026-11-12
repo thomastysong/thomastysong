@@ -9,33 +9,34 @@ import (
 
 const maxURLScan = 8 << 10
 
+// maxNetURLs bounds the URLs the network pass examines: the first and last
+// half of them, the rest marking the network features incomplete.
+const maxNetURLs = 4 * maxList
+
 func (c *computer) network() {
-	var hosts, urls []string
+	var hosts, urlSet uniqList
 	if t := c.e.Target; t != nil {
-		if t.URL != "" {
-			uniq(&urls, t.URL)
-		}
-		uniq(&hosts, normHost(t.Host))
+		urlSet.add(t.URL)
+		hosts.add(normHost(t.Host))
 		for _, h := range t.Hosts {
-			uniq(&hosts, normHost(h))
+			hosts.add(normHost(h))
 		}
 	}
-	for _, u := range c.urls {
-		uniq(&urls, u)
-	}
+	urlSet.addAll(c.urls)
 	for _, h := range c.hosts {
-		uniq(&hosts, normHost(h))
+		hosts.add(normHost(h))
 	}
-	var schemes []string
+	urls, urlsCut := headTailCut(urlSet.list, maxNetURLs)
+	var schemes uniqList
 	hasSecret := false
 	queryLen := 0
 	for _, u := range urls {
 		if len(u) > maxURLScan {
 			u = u[:maxURLScan]
 		}
-		uniq(&hosts, classify.URLHost(u))
+		hosts.add(classify.URLHost(u))
 		if i := strings.Index(u, "://"); i > 0 && i <= 32 {
-			uniq(&schemes, strings.ToLower(u[:i]))
+			schemes.add(strings.ToLower(u[:i]))
 		}
 		if q := urlQuery(u); len(q) > queryLen {
 			queryLen = len(q)
@@ -44,14 +45,19 @@ func (c *computer) network() {
 			hasSecret = true
 		}
 	}
-	if len(hosts) == 0 && len(urls) == 0 {
+	if len(hosts.list) == 0 && len(urls) == 0 {
 		return
 	}
-	c.setList("net.host", hosts)
-	c.setList("net.host_classes", hostClasses(hosts))
-	c.setList("net.scheme", schemes)
+	cut := c.netCut || urlsCut
+	kept := c.setList("net.host", hosts.list)
+	cut = cut || c.cut["net.host"]
+	if cut && kept != nil {
+		c.markCut("net.host")
+	}
+	c.setDerived("net.host_classes", hostClasses(kept), cut)
+	c.setDerived("net.scheme", schemes.list, cut)
 	isIP := false
-	for _, h := range hosts {
+	for _, h := range hosts.list {
 		if isIPHost(h) {
 			isIP = true
 			break

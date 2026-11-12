@@ -24,14 +24,26 @@ const (
 	scanHead = 64 << 10
 	scanTail = 64 << 10
 
-	maxList   = 64   // entries kept in any derived []string feature
-	maxArgv   = 256  // entries in shell.argv
-	maxArgLen = 1024 // bytes kept of one argument in shell.argv / shell.cmds
-	maxCmds   = 128  // entries in shell.cmds
-	maxCmdArg = 64   // args kept per shell.cmds entry
-	maxPaths  = 64   // paths classified per family
-)
+	// List caps. Each is at least the cap of the analyzer that feeds it
+	// (shellx keeps 512 entries per list, 2048 commands per analysis and
+	// 1024 arguments per command), so a list is cut here only when several
+	// analyses were merged (head, tail and tail rescan of an oversized
+	// command line) or an analyzer already stopped. A cut keeps the first
+	// and the last half, because a payload appended after padding sits at
+	// the end, and it is never silent: the field is named in
+	// content.truncated_fields (and shell.truncated is set for shell
+	// features), which makes in_list and operator suppressions on it fail
+	// closed.
+	maxList   = 512  // entries kept in any derived []string feature
+	maxArgv   = 4096 // entries in shell.argv
+	maxCmds   = 4096 // entries in shell.cmds
+	maxCmdArg = 1024 // args kept per shell.cmds entry, packages and flags per install entry
 
+	// shellxListCap is shellx's own per-list cap. A Facts list that long may
+	// have been cut by the analyzer without Facts.Truncated being set, so
+	// it is treated as incomplete.
+	shellxListCap = 512
+)
 // computedKey marks a Feat map as filled. It is not part of the field view.
 const computedKey = "features.computed"
 
@@ -70,6 +82,37 @@ func Compute(e *event.Event, ctx Context) {
 	c.run(c.mcp)
 	c.run(c.network)
 	c.run(c.content)
+	c.finish()
+}
+
+// truncatedKey is the feature naming the incomplete list features.
+const truncatedKey = "content.truncated_fields"
+
+// markCut records that the feature key holds an incomplete value.
+func (c *computer) markCut(key string) {
+	if c.cut == nil {
+		c.cut = map[string]bool{}
+	}
+	c.cut[key] = true
+}
+
+// finish publishes the truncation record: content.truncated_fields lists
+// every incomplete feature (sorted), and an incomplete shell feature also
+// sets shell.truncated, the one signal rules score for an analysis they
+// cannot fully see.
+func (c *computer) finish() {
+	if len(c.cut) == 0 {
+		return
+	}
+	keys := make([]string, 0, len(c.cut))
+	for k := range c.cut {
+		keys = append(keys, k)
+		if strings.HasPrefix(k, "shell.") {
+			c.f["shell.truncated"] = true
+		}
+	}
+	sort.Strings(keys)
+	c.f[truncatedKey] = keys
 }
 
 // computer carries one Compute call.
@@ -81,6 +124,10 @@ type computer struct {
 	// pass.
 	urls  []string
 	hosts []string
+	// cut names the features whose value is incomplete; netCut says that
+	// the hosts and URLs handed to the network pass are.
+	cut    map[string]bool
+	netCut bool
 }
 
 func (c *computer) run(fn func()) {
@@ -139,34 +186,81 @@ func (c *computer) toolKind() event.ToolKind {
 	return c.e.Tool.Kind
 }
 
-// setList stores a non-empty, capped copy of list under key.
-func (c *computer) setList(key string, list []string) {
-	if len(list) == 0 {
-		return
+// headTailCut returns l, or its first n/2 and last n - n/2 entries when it
+// is longer than n, and whether it cut.
+func headTailCut[T any](l []T, n int) ([]T, bool) {
+	if len(l) <= n {
+		return l, false
 	}
-	if len(list) > maxList {
-		list = list[:maxList]
-	}
-	c.f[key] = append([]string(nil), list...)
+	h := n / 2
+	out := make([]T, 0, n)
+	out = append(out, l[:h]...)
+	out = append(out, l[len(l)-(n-h):]...)
+	return out, true
 }
 
-// uniq appends v to *list unless present or empty, keeping first-seen order
-// and the maxList cap.
-func uniq(list *[]string, v string) {
-	if v == "" || len(*list) >= maxList {
+// setList stores a non-empty copy of list under key, cut to maxList head
+// and tail entries (recorded in content.truncated_fields), and returns what
+// it stored.
+func (c *computer) setList(key string, list []string) []string {
+	if len(list) == 0 {
+		return nil
+	}
+	kept, cut := headTailCut(list, maxList)
+	if cut {
+		c.markCut(key)
+	} else {
+		kept = append([]string(nil), list...)
+	}
+	c.f[key] = kept
+	return kept
+}
+
+// setDerived stores list under key like setList and marks it incomplete
+// when the list it was derived from is.
+func (c *computer) setDerived(key string, list []string, srcCut bool) {
+	if c.setList(key, list) != nil && srcCut {
+		c.markCut(key)
+	}
+}
+
+// uniqList collects distinct non-empty strings in first-seen order. It
+// switches from a linear scan to a set once it holds more than a few
+// entries, so thousands of hostile names cost linear time.
+type uniqList struct {
+	list []string
+	seen map[string]struct{}
+}
+
+func (u *uniqList) add(v string) {
+	if v == "" {
 		return
 	}
-	for _, x := range *list {
-		if x == v {
+	if u.seen != nil {
+		if _, ok := u.seen[v]; ok {
 			return
 		}
+		u.seen[v] = struct{}{}
+	} else {
+		for _, x := range u.list {
+			if x == v {
+				return
+			}
+		}
+		if len(u.list) >= 16 {
+			u.seen = make(map[string]struct{}, 2*len(u.list)+2)
+			for _, x := range u.list {
+				u.seen[x] = struct{}{}
+			}
+			u.seen[v] = struct{}{}
+		}
 	}
-	*list = append(*list, v)
+	u.list = append(u.list, v)
 }
 
-func uniqAll(list *[]string, vs []string) {
+func (u *uniqList) addAll(vs []string) {
 	for _, v := range vs {
-		uniq(list, v)
+		u.add(v)
 	}
 }
 

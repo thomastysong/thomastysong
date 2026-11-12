@@ -32,10 +32,10 @@ rules:
       any:
         - all:
             - tool.kind|in: [file_write, file_edit, file_read]
-            - target.path|re: "(?i)([/\\\\]\\.github[/\\\\]setup\\.js|setup_bun\\.js|bun_environment\\.js|[/\\\\]\\.config[/\\\\]index\\.js|[/\\\\]inventory\\.txt(\\.bak)?)$"
-        - shell.writes|any_re: "(?i)([/\\\\]\\.github[/\\\\]setup\\.js|setup_bun\\.js|bun_environment\\.js|[/\\\\]\\.config[/\\\\]index\\.js|/tmp/inventory\\.txt(\\.bak)?)$"
-        - shell.executes_paths|any_re: "(?i)(\\.github[/\\\\]setup\\.js|setup_bun\\.js|bun_environment\\.js|\\.config[/\\\\]index\\.js)$"
-        - shell.argv|any_re: "(?i)(\\.github/setup\\.js|setup_bun\\.js|bun_environment\\.js|s1ngularity-repository|sha1-?hulud)"
+            - target.path|endswith: ["/.github/setup.js", "\\.github\\setup.js", setup_bun.js, bun_environment.js, "/.config/index.js", "/tmp/inventory.txt", "/tmp/inventory.txt.bak"]
+        - shell.writes|any_endswith: [".github/setup.js", setup_bun.js, bun_environment.js, "/.config/index.js", "/tmp/inventory.txt", "/tmp/inventory.txt.bak"]
+        - shell.executes_paths|any_endswith: [".github/setup.js", setup_bun.js, bun_environment.js, ".config/index.js"]
+        - shell.argv|icontains: [".github/setup.js", setup_bun.js, bun_environment.js, s1ngularity-repository, sha1hulud, sha1-hulud]
     evidence: [target.path, target.command]
     escalate: true
     remedy: Isolate the host, rotate every credential the user holds and check which packages ran install scripts.
@@ -116,7 +116,7 @@ rules:
       type: [tool.pre, process.exec]
     match:
       any_install:
-        flags|any_re: "(?i)^--?(registry|index-url|extra-index-url|index|default-index|i)="
+        flags|any_startswith: ["--registry=", "--index-url=", "--extra-index-url=", "--index=", "--default-index=", "-i="]
     allow:
       shell.install_sources|in_list: approved_package_indexes
     dedup: [shell.install_sources]
@@ -155,7 +155,7 @@ rules:
       type: [tool.pre, process.exec]
     match:
       any_install:
-        packages|any_re: "^(git\\+|https?://|git@|github:|gitlab:)"
+        packages|any_startswith: ["git+", "http://", "https://", "git@", "github:", "gitlab:"]
     dedup: [shell.install_sources]
     evidence: [target.command, shell.install_sources]
     remedy: No action on its own; pin a commit when a git source is needed.

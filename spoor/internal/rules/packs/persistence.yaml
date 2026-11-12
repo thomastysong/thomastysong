@@ -201,8 +201,8 @@ rules:
       any:
         - all:
             - tool.kind|in: [file_write, file_edit]
-            - target.path|re: "(?i)(\\.pth|[/\\\\](site|user)customize\\.py)$"
-        - shell.writes|any_re: "(?i)(\\.pth|[/\\\\](site|user)customize\\.py)$"
+            - target.path|endswith: [".pth", sitecustomize.py, usercustomize.py]
+        - shell.writes|any_endswith: [".pth", sitecustomize.py, usercustomize.py]
     dedup: [target.path, shell.writes]
     evidence: [target.path, target.command, shell.writes]
     remedy: Read the file; a startup hook should only adjust sys.path.

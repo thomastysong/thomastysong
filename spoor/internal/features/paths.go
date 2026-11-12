@@ -37,15 +37,18 @@ func (c *computer) paths() {
 	if t == nil {
 		return
 	}
-	var paths []string
-	uniq(&paths, t.Path)
-	uniqAll(&paths, t.Paths)
-	if len(paths) == 0 {
+	var all uniqList
+	all.add(t.Path)
+	all.addAll(t.Paths)
+	if len(all.list) == 0 {
 		return
 	}
+	// A tool call naming thousands of paths is classified on its first and
+	// last maxList; path.classes is then marked incomplete.
+	paths, cut := headTailCut(all.list, maxList)
 	pc := c.pathCtx()
 	classes := pathClasses(paths, pc)
-	c.setList("path.classes", classes)
+	c.setDerived("path.classes", classes, cut)
 	read := k == event.ToolFileRead || k == event.ToolFileList
 	c.f["path.sensitive_read"] = read && classify.IsSensitiveRead(classes)
 	c.f["path.sensitive_write"] = !read && classify.IsSensitiveWrite(classes)
@@ -55,10 +58,7 @@ func (c *computer) paths() {
 		c.f["path.ext"] = ext
 	}
 	evasion := false
-	for i, p := range paths {
-		if i >= maxPaths {
-			break
-		}
+	for _, p := range paths {
 		if NormalizationEvasion(p, pc) {
 			evasion = true
 			break

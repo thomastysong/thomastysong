@@ -902,8 +902,8 @@ func TestHostileTOMLIsBounded(t *testing.T) {
 	} {
 		for _, scope := range []event.Scope{event.ScopeUser, event.ScopeManaged} {
 			o := opts(t, "linux", scope, "codex")
-			o.OTel = "http://127.0.0.1:4319"
 			path := targetPath(t, c, o, "codex")
+			o.OTel = "http://127.0.0.1:4319"
 			writeFile(t, filepath.Join(filepath.Dir(path), "config.toml"), cfg, 0o644)
 			var plans []Plan
 			alloc := allocDuring(func() { plans = mustPlan(t, c, o) })

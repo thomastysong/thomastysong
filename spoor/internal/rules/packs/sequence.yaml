@@ -75,7 +75,7 @@ rules:
         - all:
             - shell.read_classes|contains_any: [secret_env, ssh_private_key, cloud_credentials, kube_config, docker_config, git_credentials, netrc, npm_token, pypi_token, gpg_keyring, password_store, keychain, browser_data, crypto_wallet, token_file, cert_private_key, proc_environ]
             - not:
-                shell.reads|any_re: "[*?\\[{]"
+                shell.reads|any_contains: ["*", "?", "[", "{"]
         - mcp.arg_path_classes|contains_any: [secret_env, ssh_private_key, cloud_credentials, kube_config, docker_config, git_credentials, netrc, npm_token, pypi_token, password_store, keychain, browser_data, crypto_wallet, token_file, cert_private_key]
     flags:
       set: [secret_read]
@@ -310,7 +310,7 @@ rules:
         - all:
             - shell.read_classes|contains_any: [secret_env, ssh_private_key, cloud_credentials, kube_config, docker_config, git_credentials, netrc, npm_token, pypi_token, gpg_keyring, password_store, keychain, browser_data, crypto_wallet, token_file, cert_private_key, proc_environ]
             - not:
-                shell.reads|any_re: "[*?\\[{]"
+                shell.reads|any_contains: ["*", "?", "[", "{"]
         - mcp.arg_path_classes|contains_any: [secret_env, ssh_private_key, cloud_credentials, kube_config, docker_config, git_credentials, netrc, npm_token, pypi_token, password_store, keychain, browser_data, crypto_wallet, token_file, cert_private_key]
     flags:
       set: [credential_source_read]

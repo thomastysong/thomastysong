@@ -168,8 +168,6 @@ func TestPayloadKeyIsKeyed(t *testing.T) {
 		}
 	}
 	// Without a usable secret there is no payload key at all.
-	saved := appendRecord
-	defer func() { appendRecord = saved }()
 	st := &stamper{payload: prompt}
 	if st.payloadKey() != "" {
 		t.Fatal("payload key without a secret")

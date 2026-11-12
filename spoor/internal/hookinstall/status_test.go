@@ -261,3 +261,100 @@ func TestStatusCodexBlockOutsideMarkers(t *testing.T) {
 		t.Errorf("install: %s %s", p.Action, p.Note)
 	}
 }
+
+// TestStatusHookSwitches: a switch that turns every hook off makes an
+// installed registration ineffective. Claude Code: "Only disableAllHooks
+// set at the managed settings level can disable managed hooks", and the
+// last managed file that sets it wins; at user level it turns off user
+// hooks. Gemini CLI: hooksConfig.enabled=false, with system settings
+// outranking the user's.
+func TestStatusHookSwitches(t *testing.T) {
+	c := testCatalog(t)
+	type file struct{ rel, body string }
+	cases := []struct {
+		name, agent string
+		scope       event.Scope
+		files       []file
+		self        string // merged into the target after install
+		want        string
+	}{
+		{"claude managed off", "claude-code", event.ScopeManaged,
+			[]file{{"etc/claude-code/managed-settings.json", `{"disableAllHooks": true}`}}, "", StatusShadowed},
+		{"claude managed off then on in a later drop-in", "claude-code", event.ScopeManaged,
+			[]file{{"etc/claude-code/managed-settings.json", `{"disableAllHooks": true}`}, {"etc/claude-code/managed-settings.d/90-on.json", `{"disableAllHooks": false}`}}, "", StatusManaged},
+		{"claude managed quoted value is ignored", "claude-code", event.ScopeManaged,
+			[]file{{"etc/claude-code/managed-settings.json", `{"disableAllHooks": "true"}`}}, "", StatusManaged},
+		{"claude user off by managed", "claude-code", event.ScopeUser,
+			[]file{{"etc/claude-code/managed-settings.d/10-x.json", `{"disableAllHooks": true}`}}, "", StatusShadowed},
+		{"claude user off in own file", "claude-code", event.ScopeUser, nil, "disableAllHooks", StatusShadowed},
+		{"claude user off overridden by managed", "claude-code", event.ScopeUser,
+			[]file{{"etc/claude-code/managed-settings.json", `{"disableAllHooks": false}`}}, "disableAllHooks", StatusUser},
+		{"gemini system off", "gemini-cli", event.ScopeManaged, nil, "hooksConfig", StatusShadowed},
+		{"gemini user off by system", "gemini-cli", event.ScopeUser,
+			[]file{{"etc/gemini-cli/settings.json", `{"hooksConfig": {"enabled": false}}`}}, "", StatusShadowed},
+		{"gemini user off in own file", "gemini-cli", event.ScopeUser, nil, "hooksConfig", StatusShadowed},
+		{"gemini user off but system on", "gemini-cli", event.ScopeUser,
+			[]file{{"etc/gemini-cli/settings.json", `{"hooksConfig": {"enabled": true}}`}}, "hooksConfig", StatusUser},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			o := opts(t, "linux", tc.scope, tc.agent)
+			for _, f := range tc.files {
+				writeFile(t, filepath.Join(o.Root, filepath.FromSlash(f.rel)), []byte(f.body), 0o644)
+			}
+			plans := mustPlan(t, c, o)
+			mustApply(t, plans)
+			if tc.self != "" {
+				path := only(t, plans, tc.agent).Path
+				d := mustParse(t, readBytes(t, path))
+				var v any = true
+				if tc.self == "hooksConfig" {
+					v = jobj{{"enabled", false}}
+				}
+				writeFile(t, path, d.addMember(d.root, tc.self, v), 0o644)
+			}
+			s := stateOf(t, c, o, tc.agent)
+			if s.Status != tc.want {
+				t.Errorf("Status %s, want %s (%s)", s.Status, tc.want, s.Detail)
+			}
+			if tc.want == StatusShadowed && !strings.Contains(s.Detail, "disableAllHooks") && !strings.Contains(s.Detail, "hooksConfig.enabled") {
+				t.Errorf("Detail does not name the switch: %s", s.Detail)
+			}
+		})
+	}
+}
+
+// TestStatusCodexMDM: Codex reads MDM requirements only on macOS, from the
+// managed-preferences domain com.openai.codex, which is a file on disk.
+// Detail must say what was looked at instead of calling MDM invisible.
+func TestStatusCodexMDM(t *testing.T) {
+	c := testCatalog(t)
+	for _, goos := range []string{"linux", "windows", "darwin"} {
+		o := opts(t, goos, event.ScopeManaged, "codex")
+		mustApply(t, mustPlan(t, c, o))
+		s := stateOf(t, c, o, "codex")
+		if strings.Contains(s.Detail, "MDM requirements (not visible") || strings.Contains(s.Detail, "cloud and MDM") {
+			t.Errorf("%s: %s", goos, s.Detail)
+		}
+		if !strings.Contains(s.Detail, "cloud requirements") {
+			t.Errorf("%s: cloud requirements not mentioned: %s", goos, s.Detail)
+		}
+		if goos != "darwin" && !strings.Contains(s.Detail, "no MDM requirements source exists on this OS") {
+			t.Errorf("%s: %s", goos, s.Detail)
+		}
+		if goos == "darwin" {
+			if !strings.Contains(s.Detail, "/Library/Managed Preferences/com.openai.codex.plist") {
+				t.Errorf("darwin: MDM location not checked: %s", s.Detail)
+			}
+			writeFile(t, filepath.Join(o.Root, "Library", "Managed Preferences", "com.openai.codex.plist"), []byte("bplist00"), 0o644)
+			s = stateOf(t, c, o, "codex")
+			if !strings.Contains(s.Detail, "com.openai.codex.plist (when its requirements define hooks") {
+				t.Errorf("darwin: present profile not reported: %s", s.Detail)
+			}
+			p := only(t, mustPlan(t, c, o), "codex")
+			if !strings.Contains(p.Note, "MDM profile for com.openai.codex is installed") {
+				t.Errorf("darwin: plan note: %s", p.Note)
+			}
+		}
+	}
+}

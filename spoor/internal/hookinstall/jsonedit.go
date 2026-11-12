@@ -366,7 +366,7 @@ func (m *cmodel) drop(i int) {
 			if c := separatorComma([]byte(last)); c >= 0 {
 				last = last[:c] + last[c+1:]
 			}
-			m.segs = []string{first[:lastNonBlank(first)] + last}
+			m.segs = []string{joinSep(first[:lastNonBlank(first)], last)}
 		} else {
 			m.segs = []string{""}
 		}
@@ -387,7 +387,7 @@ func (m *cmodel) drop(i int) {
 				for j < len(after) && isBlank(after[j]) {
 					j++
 				}
-				merged := m.segs[i] + after[j:]
+				merged := joinSep(m.segs[i], after[j:])
 				m.segs = append(append(m.segs[:i:i], merged), m.segs[i+2:]...)
 				m.kids = append(m.kids[:i:i], m.kids[i+1:]...)
 				return
@@ -408,13 +408,55 @@ func (m *cmodel) drop(i int) {
 		comma := separatorComma([]byte(before))
 		nl := strings.LastIndexByte(before, '\n')
 		if comma >= 0 && nl > comma && blank([]byte(before[nl+1:])) {
-			m.segs = append(m.segs[:i:i], before[:comma]+before[comma+1:nl]+m.segs[n])
+			m.segs = append(m.segs[:i:i], joinSep(before[:comma]+before[comma+1:nl], m.segs[n]))
 			m.kids = m.kids[:i:i]
 			return
 		}
 	}
 	m.segs = append(m.segs[:i:i], m.segs[n])
 	m.kids = m.kids[:i:i]
+}
+
+// joinSep joins two pieces of separator. When the first ends inside a line
+// comment and the second does not start a new line, a line break is kept
+// between them, or the comment would swallow what follows.
+func joinSep(a, b string) string {
+	if !endsInLineComment(a) {
+		return a + b
+	}
+	rest := strings.TrimLeft(b, " \t")
+	if strings.HasPrefix(rest, "\n") || strings.HasPrefix(rest, "\r\n") {
+		return a + b
+	}
+	nl := "\n"
+	if strings.Contains(a, "\r\n") {
+		nl = "\r\n"
+	}
+	return a + nl + b
+}
+
+// endsInLineComment reports whether a separator ends inside a // comment
+// (separators hold no strings, so only comments need tracking).
+func endsInLineComment(s string) bool {
+	line := false
+	for i := 0; i < len(s); i++ {
+		switch {
+		case line:
+			if s[i] == '\n' {
+				line = false
+			}
+		case s[i] == '/' && i+1 < len(s) && s[i+1] == '/':
+			line = true
+			i++
+		case s[i] == '/' && i+1 < len(s) && s[i+1] == '*':
+			k := strings.Index(s[i+2:], "*/")
+			if k < 0 {
+				return false
+			}
+			i += k + 3
+		}
+	}
+	return line
 }
 
 // lastNonBlank returns the length of s without its trailing blanks.

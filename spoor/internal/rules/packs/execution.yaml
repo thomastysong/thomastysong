@@ -213,7 +213,14 @@ rules:
       any:
         - any_command:
             name: git
-            args|any_re: ["(?i)^(core\\.(fsmonitor|sshcommand|hookspath|gitproxy)|alias\\.[^=]+=!|diff\\.[^.=]+\\.(textconv|command)|filter\\.[^.=]+\\.(clean|smudge|process)|uploadpack\\.packobjectshook|credential\\.helper=!)", "--(upload|receive)-pack"]
+            all:
+              - args|contains_any: ["-c"]
+              - args|any_re: "(?i)^(core\\.(fsmonitor|sshcommand|hookspath|gitproxy)=|alias\\.[^=]+=!|diff\\.[^.=]+\\.(textconv|command)=|filter\\.[^.=]+\\.(clean|smudge|process)=|uploadpack\\.packobjectshook=|credential\\.helper=!)"
+            not:
+              args|any_re: "(?i)^filter\\.lfs\\."
+        - any_command:
+            name: git
+            args|any_re: "^--(upload|receive)-pack"
         - any_command:
             name: tar
             args|any_startswith: ["--checkpoint-action=exec", "--to-command"]
@@ -244,6 +251,9 @@ rules:
         expect: match
       - name: sed in-place substitution
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "sed -i -e 's/old/new/g' main.go" } }
+        expect: no_match
+      - name: git config sets an lfs filter
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "git lfs install && git config filter.lfs.process 'git-lfs filter-process'" } }
         expect: no_match
       - name: git with a harmless -c
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "git -c user.email=a@b.example -c core.pager=cat log -3" } }

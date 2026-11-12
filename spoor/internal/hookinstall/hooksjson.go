@@ -337,7 +337,7 @@ func removeSpoor(src []byte, kind fileKind) ([]byte, int, error) {
 	}
 
 	// Handlers inside groups (grouped layouts).
-	groupGone := map[*node]bool{}  // group vanishes from its event array
+	groupGone := map[*node]bool{}   // group vanishes from its event array
 	groupText := map[*node]string{} // group with an edited "hooks" array
 	if kind != kindFlat {
 		for _, h := range mine {

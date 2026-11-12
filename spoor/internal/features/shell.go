@@ -16,19 +16,17 @@ const maxProcArgs = 4096
 
 // commandText returns the command line a shell-family event runs: the
 // target command of any tool that carries one, or the argv of an observed
-// child process.
-func commandText(e *event.Event) string {
+// child process, and whether that argv was cut to its first and last
+// maxProcArgs/2 entries.
+func commandText(e *event.Event) (string, bool) {
 	if e.Target != nil && e.Target.Command != "" {
-		return e.Target.Command
+		return e.Target.Command, false
 	}
 	if e.Type == event.TypeProcessExec && e.Process != nil && len(e.Process.Args) > 0 {
-		args := e.Process.Args
-		if len(args) > maxProcArgs {
-			args = args[:maxProcArgs]
-		}
-		return toolmap.CommandFromArgv(args)
+		args, cut := headTailCut(e.Process.Args, maxProcArgs)
+		return toolmap.CommandFromArgv(args), cut
 	}
-	return ""
+	return "", false
 }
 
 func (c *computer) dialectHint() shellx.Dialect {
@@ -122,15 +120,15 @@ func mergeFacts(a, b *shellx.Facts) *shellx.Facts {
 }
 
 func (c *computer) shell() {
-	cmd := commandText(c.e)
-	if cmd == "" {
+	raw, argvCut := commandText(c.e)
+	if raw == "" {
 		return
 	}
-	fx := c.analyzeBounded(cmd)
+	fx := c.analyzeBounded(raw)
 	if fx == nil {
 		return
 	}
-	cmd = c.bound(cmd)
+	cmd := c.bound(raw)
 	f := c.f
 	f["shell.parse_ok"] = fx.ParseOK
 	f["shell.dialect"] = string(fx.Dialect)
@@ -144,142 +142,193 @@ func (c *computer) shell() {
 	f["shell.heredoc"] = fx.HereDoc
 	f["shell.decoded"] = len(fx.Decoded) > 0
 
-	var names, argv []string
-	cmds := make([]map[string]any, 0, min(len(fx.Commands), maxCmds))
+	// An analysis that stopped early (or saw only the head and tail of an
+	// oversized command line) leaves every list it produced incomplete.
+	partial := fx.Truncated || argvCut || len(cmd) != len(raw)
+
+	var names uniqList
 	dynamic := false
 	for _, cm := range fx.Commands {
 		dynamic = dynamic || cm.Dynamic
-		uniq(&names, cm.Name)
-		for _, a := range cm.Args {
-			if len(argv) < maxArgv {
-				argv = append(argv, cutHead(a, maxArgLen))
-			}
-		}
-		if len(cmds) < maxCmds {
-			args := cm.Args
-			if len(args) > maxCmdArg {
-				args = args[:maxCmdArg]
-			}
-			cargs := make([]string, len(args))
-			for i, a := range args {
-				cargs[i] = cutHead(a, maxArgLen)
-			}
-			cmds = append(cmds, map[string]any{
-				"name":    cm.Name,
-				"path":    cutHead(cm.Path, maxArgLen),
-				"args":    cargs,
-				"origin":  cm.Origin,
-				"dynamic": cm.Dynamic,
-			})
-		}
+		names.add(cm.Name)
 	}
 	f["shell.dynamic"] = dynamic
-	c.setList("shell.commands", names)
-	if len(argv) > 0 {
-		f["shell.argv"] = argv
-	}
-	if len(cmds) > 0 {
-		f["shell.cmds"] = cmds
-	}
+	c.setDerived("shell.commands", names.list, partial)
+	c.argv(fx.Commands, partial)
+	c.cmds(fx.Commands, partial)
 
-	c.setList("shell.urls", fx.URLs)
-	c.setList("shell.hosts", fx.Hosts)
+	list := func(key string, l []string) []string {
+		kept := c.setList(key, l)
+		if kept != nil && (partial || len(l) >= shellxListCap) {
+			c.markCut(key)
+		}
+		return kept
+	}
+	hosts := list("shell.hosts", fx.Hosts)
+	list("shell.urls", fx.URLs)
 	c.urls = append(c.urls, fx.URLs...)
 	c.hosts = append(c.hosts, fx.Hosts...)
-	c.setList("shell.host_classes", hostClasses(fx.Hosts))
+	hostsCut := c.cut["shell.hosts"]
+	c.netCut = c.netCut || hostsCut || c.cut["shell.urls"]
+	c.setDerived("shell.host_classes", hostClasses(hosts), hostsCut)
 
-	c.setList("shell.reads", fx.Reads)
-	c.setList("shell.writes", fx.Writes)
-	c.setList("shell.deletes", fx.Deletes)
 	pc := c.pathCtx()
-	c.setList("shell.read_classes", pathClasses(fx.Reads, pc))
-	c.setList("shell.write_classes", pathClasses(fx.Writes, pc))
-	c.setList("shell.delete_classes", pathClasses(fx.Deletes, pc))
-
-	c.setList("shell.interpreters", fx.Interpreters)
-	var langs []string
-	for _, ic := range fx.Inline {
-		uniq(&langs, ic.Lang)
+	for _, fam := range []struct {
+		key, classes string
+		paths        []string
+	}{
+		{"shell.reads", "shell.read_classes", fx.Reads},
+		{"shell.writes", "shell.write_classes", fx.Writes},
+		{"shell.deletes", "shell.delete_classes", fx.Deletes},
+	} {
+		kept := list(fam.key, fam.paths)
+		c.setDerived(fam.classes, pathClasses(kept, pc), c.cut[fam.key])
 	}
-	c.setList("shell.inline_langs", langs)
 
-	c.setList("shell.obfuscation", fx.Obfuscation)
-	c.setList("shell.opaque", fx.Opaque)
-	c.setList("shell.executes_paths", fx.ExecutesPaths)
-	c.setList("shell.destructive", fx.Destructive)
-	c.setList("shell.persistence", fx.Persistence)
-	c.setList("shell.defense_evasion", fx.DefenseEvasion)
-	c.setList("shell.cred_access", fx.CredAccess)
-	c.setList("shell.exfil", fx.Exfil)
-	c.setList("shell.net_tools", fx.NetTools)
-	c.setList("shell.recon", fx.Recon)
-	c.setList("shell.privilege", fx.Privilege)
-	c.setList("shell.git_ops", fx.GitOps)
-	c.setList("shell.env_assign", fx.EnvAssign)
+	list("shell.interpreters", fx.Interpreters)
+	var langs uniqList
+	for _, ic := range fx.Inline {
+		langs.add(ic.Lang)
+	}
+	c.setDerived("shell.inline_langs", langs.list, partial)
 
-	c.installs(fx.Installs)
+	list("shell.obfuscation", fx.Obfuscation)
+	list("shell.opaque", fx.Opaque)
+	list("shell.executes_paths", fx.ExecutesPaths)
+	list("shell.destructive", fx.Destructive)
+	list("shell.persistence", fx.Persistence)
+	list("shell.defense_evasion", fx.DefenseEvasion)
+	list("shell.cred_access", fx.CredAccess)
+	list("shell.exfil", fx.Exfil)
+	list("shell.net_tools", fx.NetTools)
+	list("shell.recon", fx.Recon)
+	list("shell.privilege", fx.Privilege)
+	list("shell.git_ops", fx.GitOps)
+	list("shell.env_assign", fx.EnvAssign)
+
+	c.installs(fx.Installs, partial || len(fx.Installs) >= shellxListCap)
 
 	kinds := secretKinds(cmd)
 	f["shell.has_secret"] = len(kinds) > 0
 	c.setList("shell.secret_kinds", kinds)
 }
 
-func (c *computer) installs(list []shellx.PkgInstall) {
+// argv stores shell.argv: every literal argument of every command, the
+// first and last maxArgv/2 when there are more. It walks the commands
+// twice instead of building the full list, which a hostile command line
+// can make very long.
+func (c *computer) argv(cmds []shellx.Command, partial bool) {
+	total := 0
+	for _, cm := range cmds {
+		total += len(cm.Args)
+	}
+	if total == 0 {
+		return
+	}
+	head, tailFrom := total, total
+	if total > maxArgv {
+		head, tailFrom = maxArgv/2, total-(maxArgv-maxArgv/2)
+		c.markCut("shell.argv")
+	}
+	out := make([]string, 0, min(total, maxArgv))
+	i := 0
+	for _, cm := range cmds {
+		for _, a := range cm.Args {
+			if i < head || i >= tailFrom {
+				out = append(out, a)
+			}
+			i++
+		}
+	}
+	c.f["shell.argv"] = out
+	if partial {
+		c.markCut("shell.argv")
+	}
+}
+
+// cmds stores shell.cmds for the any_command quantifier: the first and last
+// maxCmds/2 commands, each with its first and last maxCmdArg/2 arguments
+// when there are more. Argument slices are shared with the analysis, which
+// is private to this Compute call; rules never modify them.
+func (c *computer) cmds(cmds []shellx.Command, partial bool) {
+	if len(cmds) == 0 {
+		return
+	}
+	kept, cut := headTailCut(cmds, maxCmds)
+	out := make([]map[string]any, 0, len(kept))
+	for _, cm := range kept {
+		args, argsCut := headTailCut(cm.Args, maxCmdArg)
+		cut = cut || argsCut
+		if args == nil {
+			args = []string{}
+		}
+		out = append(out, map[string]any{
+			"name":    cm.Name,
+			"path":    cm.Path,
+			"args":    args,
+			"origin":  cm.Origin,
+			"dynamic": cm.Dynamic,
+		})
+	}
+	c.f["shell.cmds"] = out
+	if cut || partial {
+		c.markCut("shell.cmds")
+	}
+}
+
+func (c *computer) installs(list []shellx.PkgInstall, partial bool) {
 	f := c.f
-	var flat, managers, sources []string
-	entries := make([]map[string]any, 0, min(len(list), maxList))
+	var flat, managers, sources uniqList
+	kept, cut := headTailCut(list, maxList)
+	cut = cut || partial
+	entries := make([]map[string]any, 0, len(kept))
 	exec := false
 	for _, in := range list {
 		exec = exec || in.Exec
-		uniq(&managers, in.Manager)
+		managers.add(in.Manager)
 		if len(in.Packages) == 0 {
-			uniq(&flat, in.Manager+":")
+			flat.add(in.Manager + ":")
 		}
 		for _, p := range in.Packages {
-			uniq(&flat, in.Manager+":"+cutHead(p, maxArgLen))
+			flat.add(in.Manager + ":" + p)
 			if isPackageURL(p) {
-				uniq(&sources, cutHead(p, maxArgLen))
+				sources.add(p)
 			}
 		}
 		for _, fl := range in.Flags {
 			if v := flagSource(fl); v != "" {
-				uniq(&sources, cutHead(v, maxArgLen))
+				sources.add(v)
 			}
 		}
-		if len(entries) < maxList {
-			entries = append(entries, map[string]any{
-				"manager":  in.Manager,
-				"packages": capStrings(in.Packages),
-				"global":   in.Global,
-				"exec":     in.Exec,
-				"flags":    capStrings(in.Flags),
-			})
-		}
+	}
+	for _, in := range kept {
+		pkgs, pc := headTailCut(in.Packages, maxCmdArg)
+		flags, fc := headTailCut(in.Flags, maxCmdArg)
+		cut = cut || pc || fc
+		entries = append(entries, map[string]any{
+			"manager":  in.Manager,
+			"packages": append([]string{}, pkgs...),
+			"global":   in.Global,
+			"exec":     in.Exec,
+			"flags":    append([]string{}, flags...),
+		})
 	}
 	f["shell.install_exec"] = exec
-	c.setList("shell.installs", flat)
-	c.setList("shell.install_managers", managers)
-	c.setList("shell.install_sources", sources)
+	c.setDerived("shell.installs", flat.list, partial)
+	c.setDerived("shell.install_managers", managers.list, partial)
+	c.setDerived("shell.install_sources", sources.list, partial)
 	if len(entries) > 0 {
 		f["shell.install_entries"] = entries
+		if cut {
+			c.markCut("shell.install_entries")
+		}
 	}
-	for _, s := range sources {
+	for _, s := range sources.list {
 		if h := classify.URLHost(s); h != "" && strings.Contains(s, "://") {
 			c.urls = append(c.urls, s)
 		}
 	}
-}
-
-func capStrings(in []string) []string {
-	n := len(in)
-	if n > maxList {
-		n = maxList
-	}
-	out := make([]string, n)
-	for i := 0; i < n; i++ {
-		out[i] = cutHead(in[i], maxArgLen)
-	}
-	return out
+	c.netCut = c.netCut || c.cut["shell.install_sources"]
 }
 
 // isPackageURL reports a package spec that names its own source instead of
@@ -321,25 +370,21 @@ func (c *computer) pathCtx() classify.PathCtx {
 	return classify.PathCtx{CWD: c.ctx.CWD, Home: c.ctx.Home, OS: c.ctx.OS}
 }
 
-// pathClasses is the union of classify.PathClasses over the first maxPaths
-// paths, sorted.
+// pathClasses is the union of classify.PathClasses over paths (callers
+// pass lists already cut to maxList), sorted.
 func pathClasses(paths []string, ctx classify.PathCtx) []string {
 	var all []string
-	for i, p := range paths {
-		if i >= maxPaths {
-			break
-		}
+	for _, p := range paths {
 		all = append(all, classify.PathClasses(p, ctx)...)
 	}
 	return sortedUniq(all)
 }
 
+// hostClasses is the union of classify.HostClasses over hosts (callers pass
+// lists already cut to maxList), sorted.
 func hostClasses(hosts []string) []string {
 	var all []string
-	for i, h := range hosts {
-		if i >= maxList {
-			break
-		}
+	for _, h := range hosts {
 		all = append(all, classify.HostClasses(h)...)
 	}
 	return sortedUniq(all)

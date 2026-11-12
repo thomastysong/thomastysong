@@ -173,12 +173,12 @@ func TestSDDLProblem(t *testing.T) {
 		{"O:SYG:SYD:NO_ACCESS_CONTROL", false},
 		{"O:BAD:PNO_ACCESS_CONTROL", false},
 		{"O:BAD:NO_ACCESS_CONTROLS:AI(AU;SA;FA;;;WD)", false},
-		{"O:BAD:", true},                                   // empty DACL, no flags
-		{"O:BAD:PAIAR(A;;FA;;;SY)", true},                  // every known flag
-		{"O:BAD:QQ(A;;FA;;;SY)", false},                    // unknown flag
-		{"O:BAD:(A;;FA;;;SY)junk(A;;FA;;;BA)", false},      // text between entries
-		{"O:BAD:(A;;FA;;;SY", false},                       // unterminated entry
-		{"O:BAD:(ZA;;FW;;;BU)(A;;FA;;;BA)", false},            // callback object entry
+		{"O:BAD:", true},                              // empty DACL, no flags
+		{"O:BAD:PAIAR(A;;FA;;;SY)", true},             // every known flag
+		{"O:BAD:QQ(A;;FA;;;SY)", false},               // unknown flag
+		{"O:BAD:(A;;FA;;;SY)junk(A;;FA;;;BA)", false}, // text between entries
+		{"O:BAD:(A;;FA;;;SY", false},                  // unterminated entry
+		{"O:BAD:(ZA;;FW;;;BU)(A;;FA;;;BA)", false},    // callback object entry
 	}
 	for _, tc := range cases {
 		if got := sddlProblem(tc.sddl); (got == "") != tc.ok {
@@ -325,7 +325,7 @@ func TestTOMLBounds(t *testing.T) {
 	bad := map[string]string{
 		"inline tables":        "a = " + deep(maxTOMLDepth+1) + "\n",
 		"arrays":               "a = " + strings.Repeat("[", maxTOMLDepth+1) + strings.Repeat("]", maxTOMLDepth+1) + "\n",
-		"dotted key":           "a" + strings.Repeat(".b", maxTOMLDepth) + " = 1\n",
+		"dotted key":           "a" + strings.Repeat(".b", maxTOMLDepth+1) + " = 1\n",
 		"header":               "[a" + strings.Repeat(".b", maxTOMLDepth) + "]\n",
 		"header then value":    "[a" + strings.Repeat(".b", 9) + "]\nc = " + deep(8) + "\n",
 		"dotted key in inline": "a = {b" + strings.Repeat(".c", 10) + " = " + deep(7) + "}\n",

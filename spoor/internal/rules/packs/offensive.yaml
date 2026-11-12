@@ -281,10 +281,10 @@ rules:
             name|in: [mimikatz, mimikatz.exe, pypykatz, lsassy, nanodump, nanodump.exe]
         - any_command:
             name|in: [procdump, procdump.exe, procdump64.exe]
-            args|any_re: "(?i)lsass"
+            args|icontains: [lsass]
         - any_command:
             name|in: [rundll32, rundll32.exe]
-            args|any_re: "(?i)comsvcs(\\.dll)?,?$"
+            args|icontains: [comsvcs]
     allow:
       host.tags: offsec
     evidence: [target.command]

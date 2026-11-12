@@ -33,8 +33,8 @@ var hostKeys = map[string]bool{
 
 type walker struct {
 	strings, bytes int
-	paths, hosts   []string
-	urls           []string
+	paths, hosts   uniqList
+	urls           uniqList
 	secrets        []string
 	truncated      bool
 }
@@ -58,14 +58,27 @@ func (c *computer) mcp() {
 	if w.truncated {
 		c.f["content.truncated_scan"] = true
 	}
+	// A walk that stopped at a cap has not seen every argument: every
+	// list it produced, and the network features fed from it, are
+	// incomplete.
 	pc := c.pathCtx()
-	c.setList("mcp.arg_paths", w.paths)
-	c.setList("mcp.arg_path_classes", pathClasses(w.paths, pc))
-	c.setList("mcp.arg_hosts", w.hosts)
-	c.setList("mcp.arg_host_classes", hostClasses(w.hosts))
-	c.setList("mcp.arg_secret_kinds", sortedUniq(w.secrets))
-	c.urls = append(c.urls, w.urls...)
-	c.hosts = append(c.hosts, w.hosts...)
+	paths := c.setList("mcp.arg_paths", w.paths.list)
+	hosts := c.setList("mcp.arg_hosts", w.hosts.list)
+	pathsCut := w.truncated || c.cut["mcp.arg_paths"]
+	hostsCut := w.truncated || c.cut["mcp.arg_hosts"]
+	c.setDerived("mcp.arg_path_classes", pathClasses(paths, pc), pathsCut)
+	c.setDerived("mcp.arg_host_classes", hostClasses(hosts), hostsCut)
+	c.setDerived("mcp.arg_secret_kinds", sortedUniq(w.secrets), w.truncated)
+	if w.truncated {
+		for _, k := range []string{"mcp.arg_paths", "mcp.arg_hosts"} {
+			if _, ok := c.f[k]; ok {
+				c.markCut(k)
+			}
+		}
+	}
+	c.urls = append(c.urls, w.urls.list...)
+	c.hosts = append(c.hosts, w.hosts.list...)
+	c.netCut = c.netCut || hostsCut
 }
 
 func (w *walker) walkMap(m map[string]any, depth int) {
@@ -129,22 +142,22 @@ func (w *walker) str(key, s string) {
 	}
 	if strings.Contains(s, "://") {
 		if isFileURL(s) {
-			uniq(&w.paths, s)
+			w.paths.add(s)
 			return
 		}
 		if h := classify.URLHost(s); h != "" {
-			uniq(&w.hosts, h)
-			uniq(&w.urls, s)
+			w.hosts.add(h)
+			w.urls.add(s)
 		}
 		return
 	}
 	if looksLikePath(s) || (pathKeys[lk] && !strings.ContainsAny(s, " \t") && strings.ContainsAny(s, `/\.`)) {
-		uniq(&w.paths, s)
+		w.paths.add(s)
 		return
 	}
 	if hostKeys[lk] {
 		if h := classify.URLHost(s); h != "" && strings.Contains(h, ".") {
-			uniq(&w.hosts, h)
+			w.hosts.add(h)
 		}
 	}
 }

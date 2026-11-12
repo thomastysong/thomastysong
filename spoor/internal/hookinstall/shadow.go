@@ -186,4 +186,3 @@ func claudeShadow(r *shadowReport, o Options) {
 		r.checked = append(r.checked, "no MDM source exists on this OS")
 	}
 }
-

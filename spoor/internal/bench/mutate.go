@@ -128,9 +128,19 @@ func mutateSequence(op *Operator, evs []built) ([]built, bool) {
 	return out, applied
 }
 
-// shellCommand returns the command line a shell tool event carries.
+// shellCommand returns the POSIX command line a shell tool event carries.
+// The operators are POSIX shell rewrites: on a PowerShell or cmd.exe
+// command (or any command on a Windows host) they would change what runs,
+// so those commands count as not applicable.
 func shellCommand(ev *event.Event) string {
 	if ev == nil || ev.Tool == nil || ev.Tool.Kind != event.ToolShell || ev.Target == nil {
+		return ""
+	}
+	if ev.Host != nil && strings.EqualFold(ev.Host.OS, "windows") {
+		return ""
+	}
+	switch strings.ToLower(ev.Tool.Name) {
+	case "powershell", "pwsh", "cmd":
 		return ""
 	}
 	return ev.Target.Command

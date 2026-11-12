@@ -118,8 +118,10 @@ func hasTrunc(e *event.Event, name string) bool {
 }
 
 // TestVersionLabelSurvivesEmit: a version string of any realistic pack
-// count leaves intact, in every profile and under the smallest field cap,
-// on findings and on heartbeats; other labels keep the 256-byte cap.
+// count leaves intact, in every profile, on findings and on heartbeats,
+// whenever the operator's field cap allows it (the default 4 KiB always
+// does); under a smaller MaxField it is cut to that cap and named in
+// "truncated". Other labels keep the 256-byte cap.
 func TestVersionLabelSurvivesEmit(t *testing.T) {
 	set, err := rules.LoadEmbedded()
 	if err != nil {
@@ -130,10 +132,11 @@ func TestVersionLabelSurvivesEmit(t *testing.T) {
 	versions := []string{real, packVersions(1), packVersions(12), packVersions(13), packVersions(20), packVersions(40), versionOfLen(maxVersionLabel)}
 	long := strings.Repeat("x", 600)
 	for _, prof := range Profiles {
-		for _, mf := range []int{0, MinMaxField} {
+		for _, mf := range []int{0, MinMaxField, 512, maxVersionLabel} {
 			for _, kind := range []event.Kind{event.KindDetection, event.KindHealth} {
 				for _, v := range versions {
 					p := &Policy{Profile: prof, Key: testKey, KeyID: "k1", PseudonymizeUsers: true, MaxField: mf}
+					fieldCap := p.settings().maxField
 					e := detectionWithLabels(map[string]string{
 						labelRulesVersion: v, labelRulesHash: "0123456789ab", "other": long,
 					})
@@ -142,11 +145,21 @@ func TestVersionLabelSurvivesEmit(t *testing.T) {
 					if !ok {
 						t.Fatalf("%s: dropped", prof)
 					}
-					if got := out.Labels[labelRulesVersion]; got != v {
-						t.Errorf("%s maxField %d %s, %d bytes: rules_version became %q", prof, mf, kind, len(v), short(got))
-					}
-					if hasTrunc(out, "labels."+labelRulesVersion) {
-						t.Errorf("%s: rules_version listed as truncated", prof)
+					got := out.Labels[labelRulesVersion]
+					if len(v) <= fieldCap {
+						if got != v {
+							t.Errorf("%s maxField %d %s, %d bytes: rules_version became %q", prof, mf, kind, len(v), short(got))
+						}
+						if hasTrunc(out, "labels."+labelRulesVersion) {
+							t.Errorf("%s: rules_version listed as truncated", prof)
+						}
+					} else {
+						if len(got) > fieldCap || !hasTrunc(out, "labels."+labelRulesVersion) {
+							t.Errorf("%s maxField %d %s: %d-byte rules_version kept %d bytes, truncated %v", prof, mf, kind, len(v), len(got), out.Truncated)
+						}
+						if head := got[:strings.Index(got, truncOpen)]; len(head) < fieldCap/3 || !strings.HasPrefix(v, head) {
+							t.Errorf("%s maxField %d: cut rules_version lost its head: %q", prof, mf, short(got))
+						}
 					}
 					if out.Labels[labelRulesHash] != "0123456789ab" {
 						t.Errorf("%s: rules_hash became %q", prof, out.Labels[labelRulesHash])
@@ -160,6 +173,33 @@ func TestVersionLabelSurvivesEmit(t *testing.T) {
 	}
 	if len(real) <= maxNameLen {
 		t.Logf("note: embedded rules_version is under the free-text cap today")
+	}
+	if len(real) > DefaultMaxField/4 {
+		t.Errorf("embedded rules_version is %d bytes, close to the default field cap", len(real))
+	}
+}
+
+// TestVersionLabelWithinMaxField: no string of the record, the version
+// labels included, exceeds the operator's MaxField.
+func TestVersionLabelWithinMaxField(t *testing.T) {
+	for _, mf := range []int{MinMaxField, 300, 512, maxVersionLabel - 1} {
+		for _, prof := range Profiles {
+			p := &Policy{Profile: prof, MaxField: mf}
+			out, _, ok := p.Emit(detectionWithLabels(map[string]string{
+				labelRulesVersion: versionOfLen(maxVersionLabel), labelRulesHash: strings.Repeat("f", maxHashLabel),
+			}))
+			if !ok {
+				t.Fatal("dropped")
+			}
+			for _, sl := range collectSlots(out) {
+				if n := len(sl.get()); n > mf {
+					t.Errorf("%s MaxField %d: %s is %d bytes", prof, mf, sl.name, n)
+				}
+			}
+			if !hasTrunc(out, "labels."+labelRulesVersion) {
+				t.Errorf("%s MaxField %d: cut not named in truncated %v", prof, mf, out.Truncated)
+			}
+		}
 	}
 }
 

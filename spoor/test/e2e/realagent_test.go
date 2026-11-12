@@ -17,13 +17,14 @@
 // Needs Linux, root (a private mount and PID namespace), unshare, nsenter,
 // overlayfs, and Claude Code and node (SPOOR_E2E_CLAUDE / SPOOR_E2E_NODE or
 // on PATH or under /opt/node22/bin); skips otherwise. The namespace keeps
-// the run apart from the host: /etc is an overlay so the hook finds this
-// run's /etc/spoor/spoor.yaml exactly as installed (no --config), /root and
-// /home are empty tmpfs mounts so the root daemon reads only the fake HOME,
-// and the PID namespace makes its process monitor see only this run. Claude
-// Code must therefore not live under /root or /home. Nothing is written
-// outside t.TempDir(); every process the test starts dies with the
-// namespace. Runs in about 40 s.
+// the run apart from the host: /etc is an overlay with a tmpfs on
+// /etc/spoor, so the hook finds this run's /etc/spoor/spoor.yaml exactly as
+// installed (no --config) and a host's own spoor.yaml or kill switch cannot
+// leak in; /root and /home are empty tmpfs mounts so the root daemon reads
+// only the fake HOME; the PID namespace makes its process monitor see only
+// this run. Claude Code must therefore not live under /root or /home.
+// Nothing is written outside t.TempDir(); every process the test starts
+// dies with the namespace. Runs in about 30 s.
 package e2e
 
 import (
@@ -52,6 +53,9 @@ import (
 // fallback location.
 func raTool(env, name, fallback string) string {
 	if p := os.Getenv(env); p != "" {
+		if _, err := os.Stat(p); err != nil {
+			return ""
+		}
 		return p
 	}
 	if p, err := exec.LookPath(name); err == nil {
@@ -221,6 +225,7 @@ func raStartNS(t *testing.T, tmp, cfg string) *raNS {
 mount --make-rprivate /
 mount -t overlay overlay -o lowerdir=/etc,upperdir=%[1]s/etc-up,workdir=%[1]s/etc-work /etc
 mkdir -p /etc/spoor
+mount -t tmpfs -o mode=0755 tmpfs /etc/spoor
 cp %[2]s /etc/spoor/spoor.yaml
 mount -t tmpfs -o mode=0700 tmpfs /root
 mount -t tmpfs -o mode=0755 tmpfs /home

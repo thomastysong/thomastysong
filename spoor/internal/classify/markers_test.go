@@ -20,21 +20,29 @@ func randAlnum(r *rand.Rand, n int) string {
 
 func TestMarkerLen(t *testing.T) {
 	for in, want := range map[string]int{
-		"[REDACTED:password:1a2b3c4d]":                        28,
-		"[REDACTED:password:1a2b3c4d] tail":                   28,
-		"[REDACTED:password:hmac=1a2b3c4d]":                   33,
-		"[REDACTED:secret_flow]":                              22,
-		"[REDACTED:error:00000000]":                           25,
-		"[REDACTED:database_url_with_password:x":              0,
-		"[REDACTED:password:1a2b3c4]":                         0, // 7 hex
-		"[REDACTED:password:1a2b3c4d5]":                       0, // 9 hex
-		"[REDACTED:password:1A2B3C4D]":                        0, // upper-case hex
-		"[REDACTED:Password:1a2b3c4d]":                        0, // upper-case kind
-		"[REDACTED::1a2b3c4d]":                                0, // empty kind
-		"[REDACTED:pass word:1a2b3c4d]":                       0,
-		"[REDACTED:password:hmac=1a2b]":                       0,
-		"[REDACTED:" + strings.Repeat("k", 64) + ":1a2b3c4d]": 84,
+		"[REDACTED:password:1a2b3c4d]":           28,
+		"[REDACTED:password:1a2b3c4d] tail":      28,
+		"[REDACTED:password:hmac=1a2b3c4d]":      33,
+		"[REDACTED:secret_flow]":                 22,
+		"[REDACTED:error:00000000]":              25,
+		"[REDACTED:database_url_with_password:x": 0,
+		"[REDACTED:password:1a2b3c4]":            0, // 7 hex
+		"[REDACTED:password:1a2b3c4d5]":          0, // 9 hex
+		"[REDACTED:password:1A2B3C4D]":           0, // upper-case hex
+		"[REDACTED:Password:1a2b3c4d]":           0, // upper-case kind
+		"[REDACTED::1a2b3c4d]":                   0, // empty kind
+		"[REDACTED:pass word:1a2b3c4d]":          0,
+		"[REDACTED:password:hmac=1a2b]":          0,
+		"[REDACTED:url_param:1a2b3c4d]":          29,
+		"[REDACTED:encoded_secret]":              25,
+		// Kinds come from a closed list (markers.go), not a character
+		// class: any other word is text, so a lower-case token cannot pose
+		// as one.
+		"[REDACTED:" + strings.Repeat("k", 64) + ":1a2b3c4d]": 0,
 		"[REDACTED:" + strings.Repeat("k", 65) + ":1a2b3c4d]": 0,
+		"[REDACTED:qz9wertxy]":                                0,
+		"[REDACTED:passwords:1a2b3c4d]":                       0,
+		"[REDACTED:" + strings.Repeat("3f9a1c7e0b", 4) + "]":  0,
 		"[REDACTED:password:[REDACTED:password:1a2b3c4d]":     0,
 		"[TRUNCATED:12B]":                                     0,
 		"x[REDACTED:a:1a2b3c4d]":                              0,
@@ -249,5 +257,179 @@ func TestFindSecretsManyMarkersBounded(t *testing.T) {
 	}
 	if got, _ := Redact(s); got != s {
 		t.Error("Redact changed marker-only text")
+	}
+}
+
+// TestMarkerKindVocabulary: a marker's kind is one spoor writes. With any
+// 1-64 of [a-z0-9_] accepted, "[REDACTED:<lower-case token>]" was a marker:
+// FindSecrets never looked inside it and RedactArgs kept it where a
+// password goes.
+func TestMarkerKindVocabulary(t *testing.T) {
+	for _, k := range append(SecretKinds(), externalMarkerKinds...) {
+		for _, m := range []string{Marker(k, "1a2b3c4d"), "[REDACTED:" + k + ":hmac=1a2b3c4d]", "[REDACTED:" + k + "]"} {
+			if !isMarker(m) {
+				t.Errorf("%q is not a marker", m)
+			}
+		}
+	}
+	r := rand.New(rand.NewPCG(13, 17))
+	hex := strings.Map(func(c rune) rune { return rune("0123456789abcdef"[int(c)%16]) }, randAlnum(r, 40))
+	for _, k := range []string{"qz9wertxy", strings.ToLower(randAlnum(r, 24)), hex, "password1", "kind"} {
+		for _, m := range []string{"[REDACTED:" + k + "]", Marker(k, "1a2b3c4d")} {
+			if isMarker(m) || onlyMarkers(m) {
+				t.Errorf("%q taken for a marker", m)
+			}
+			for _, argv := range [][]string{
+				{"x", "--password", m}, {"x", "--token", m}, {"x", "--api-key=" + m},
+				{"mysql", "-p" + m, "db"}, {"curl", "-H", "Authorization: Bearer " + m},
+			} {
+				if out := strings.Join(RedactArgs(argv), " "); strings.Contains(out, k) {
+					t.Errorf("RedactArgs(%q) = %s: kept the forged marker", argv, out)
+				}
+			}
+		}
+	}
+	// What a forged marker encloses is scanned like any other text.
+	low := "gh" + "p_" + strings.ToLower(randAlnum(r, 36))
+	for _, s := range []string{"[REDACTED:" + low + "]", "[REDACTED:" + low + ":1a2b3c4d]"} {
+		if got, _ := Redact(s); strings.Contains(got, low) {
+			t.Errorf("Redact(%q) = %q: the token inside a forged marker was not scanned", s, got)
+		}
+	}
+}
+
+// TestWrappedMarkers: a value counts as already redacted only when it is
+// nothing but markers. The old prefix test kept anything that started
+// with "[REDACTED:" or "[TRUNCATED:".
+func TestWrappedMarkers(t *testing.T) {
+	m := Marker(KindPassword, "1a2b3c4d")
+	for v, want := range map[string]bool{
+		m: true, m + m: true, "[TRUNCATED:12B]": true, m + "[TRUNCATED:3B]": true,
+		"<token>": true, "[token]": true, "{{ token }}": true, "%TOKEN%": true,
+		m + "x": false, m + "x]": false, "x" + m: false, m + " " + m: false,
+		"[REDACTED:" + "x": false, "[REDACTED:qz9wertxy]": false, "[REDACTED:x]": false,
+		"[TRUNCATED:12B]x": false, "[TRUNCATED:x]": false, "[TRUNCATED:B]": false, "[TRUNCATED:12": false,
+	} {
+		if got := wrapped(v); got != want {
+			t.Errorf("wrapped(%q) = %v, want %v", v, got, want)
+		}
+	}
+}
+
+// TestRedactArgsMarkerPrefixedValues: a value that holds a marker and
+// something else is redacted around the marker, in every structural
+// position. keepAsWritten used to keep such values verbatim, so RedactArgs
+// shipped a token that Redact on the same text removes, and a password
+// that only the position identifies.
+func TestRedactArgsMarkerPrefixedValues(t *testing.T) {
+	r := rand.New(rand.NewPCG(29, 31))
+	tok := "gh" + "p_" + randAlnum(r, 36)
+	weak := "Hunt3r" + randAlnum(r, 4) // no pattern: only the position finds it
+	m := Marker(KindPassword, "1a2b3c4d")
+	if got, _ := Redact("Bearer " + m + tok); strings.Contains(got, tok) {
+		t.Fatalf("precondition: Redact does not find the token next to a marker: %q", got)
+	}
+	for _, secret := range []string{tok, weak} {
+		for _, argv := range [][]string{
+			{"tool", "--token", m + secret},
+			{"tool", "--api-key=" + m + secret},
+			{"tool", "API_KEY=" + m + secret},
+			{"curl", "-H", "Authorization: Bearer " + m + secret},
+			{"curl", "-H", "Cookie: " + m + secret},
+			{"tool", "--token", "[REDACTED:" + secret},
+			{"tool", "--token", m + secret + "]"},
+			{"tool", "--password", m + secret},
+			{"mysql", "-p" + m + secret, "db"},
+			{"curl", "-u", "bob:" + m + secret, "https://h.internal"},
+			{"curl", "-d", "password=" + m + secret, "https://h.internal"},
+			{"curl", "https://h.internal/cb?token=" + m + secret},
+			{"aws", "configure", "set", "aws_secret_access_key", m + secret},
+		} {
+			out := strings.Join(RedactArgs(argv), " ")
+			if strings.Contains(out, secret) {
+				t.Errorf("RedactArgs(%q) = %s: leaks %q", argv, out, secret)
+			}
+			if strings.Contains(strings.Join(argv, " "), m) && !strings.Contains(out, m) {
+				t.Errorf("RedactArgs(%q) = %s: lost the existing marker", argv, out)
+			}
+			if !wellFormedMarkers(out) {
+				t.Errorf("RedactArgs(%q) = %s: marker inside a marker", argv, out)
+			}
+		}
+	}
+	// Markers alone are already redacted and stay as written.
+	for _, argv := range [][]string{
+		{"tool", "--token", m}, {"tool", "--token", m + m}, {"tool", "--password", m},
+		{"curl", "-H", "Authorization: Bearer " + m}, {"tool", "--token", "[TRUNCATED:12B]"},
+		{"curl", "-u", "bob:" + m}, {"sqlplus", "scott/" + m + "@orcl"},
+	} {
+		if out := RedactArgs(argv); strings.Join(out, "\x00") != strings.Join(argv, "\x00") {
+			t.Errorf("RedactArgs(%q) = %q, want it unchanged", argv, out)
+		}
+	}
+	// RedactMap's key-based rule keeps references and templates, but not
+	// what Redact finds in them.
+	out, _ := RedactMap(map[string]any{"api_key": "[" + tok + "]", "password": "$DB_PASS", "token": m + weak}, 0)
+	if s := out["api_key"].(string); strings.Contains(s, tok) {
+		t.Errorf("RedactMap kept %q", s)
+	}
+	if s := out["password"].(string); s != "$DB_PASS" {
+		t.Errorf("RedactMap changed a reference: %q", s)
+	}
+	if s := out["token"].(string); strings.Contains(s, weak) || !strings.HasPrefix(s, m) {
+		t.Errorf("RedactMap(token) = %q", s)
+	}
+}
+
+// TestRedactPrivateKeyAroundMarker: a marker inside a key block (an earlier
+// pass redacted one line of it) does not separate BEGIN from the body. The
+// block is still redacted whole, cut around the marker, which stays as
+// written; before, each piece between markers was scanned alone and the
+// body, with no BEGIN line in its piece, was emitted.
+func TestRedactPrivateKeyAroundMarker(t *testing.T) {
+	r := rand.New(rand.NewPCG(19, 23))
+	var lines []string
+	for i := 0; i < 6; i++ {
+		lines = append(lines, randAlnum(r, 64))
+	}
+	body := strings.Join(lines, "\n")
+	begin := "-----BEGIN RSA " + "PRIV" + "ATE KEY-----\n"
+	end := "\n-----END RSA " + "PRIV" + "ATE KEY-----"
+	m := Marker(KindPassword, "1a2b3c4d")
+	for _, s := range []string{
+		begin + m + "\n" + body + end,
+		begin + lines[0] + "\n" + m + "\n" + strings.Join(lines[1:], "\n") + end,
+		begin + body + "\n" + m + end,
+		begin + m + "\n" + body, // truncated: no END line
+		"key: " + m + " " + begin + m + body + end + " " + m,
+		`{"private_key": "` + strings.ReplaceAll(begin+m+"\n"+body+end, "\n", `\n`) + `"}`,
+	} {
+		got, hits := Redact(s)
+		for _, l := range lines {
+			if strings.Contains(got, l) {
+				t.Errorf("Redact kept key material:\n%s", got)
+				break
+			}
+		}
+		if strings.Count(got, m) != strings.Count(s, m) || !wellFormedMarkers(got) {
+			t.Errorf("Redact lost or broke the existing marker:\n%s", got)
+		}
+		if len(hits) == 0 {
+			t.Errorf("no hit in %q", s)
+		}
+		for _, h := range hits {
+			if h.Kind != KindPrivateKeyBlock || strings.Contains(s[h.Start:h.End], markerOpen) {
+				t.Errorf("hit %+v (%q) is not a key piece outside the markers", h, s[h.Start:h.End])
+			}
+		}
+		if again, _ := Redact(got); again != got {
+			t.Errorf("not idempotent: %q -> %q", got, again)
+		}
+	}
+	// Markers are not key material: a BEGIN/END pair around markers alone
+	// is not a key.
+	s := begin + m + m + "\n" + m + end
+	if got, hits := Redact(s); got != s || len(hits) != 0 {
+		t.Errorf("Redact(%q) = %q, %v", s, got, hits)
 	}
 }

@@ -12,7 +12,10 @@ import "strings"
 // pack and passes 256 bytes at twelve packs; thirteen ship today. A cut
 // version string makes a finding unattributable, which is the reason the
 // label exists. These two keys therefore have their own bound, and only
-// for a value made entirely of the version vocabulary:
+// for a value made entirely of the version vocabulary. The bound raises
+// the short-field cap only up to the operator's field cap: Policy.MaxField
+// caps every string field, these included, so at the smallest MaxField
+// (256 bytes) a longer version string is cut like any other field.
 //
 //	rules_version  pack "@" version, joined by ","; pack names in the
 //	               rules package's alphabet (a-z 0-9 _ - .), versions in
@@ -25,9 +28,9 @@ import "strings"
 // ordinary free-text label with the ordinary cap, so the larger bound
 // cannot carry other content. A vocabulary value still goes through the
 // whole redaction pipeline; the exemption applies only if that leaves it
-// unchanged, and it changes only the cap. The line cap (fitLine) still
-// applies: on an oversized record the label can be cut like any other
-// field, and is then named in "truncated".
+// unchanged, and it changes only the cap. The field cap (MaxField) and the
+// line cap (fitLine) still apply: a label longer than either is cut like
+// any other field, and is then named in "truncated".
 
 const (
 	labelRulesVersion = "rules_version"
@@ -117,13 +120,23 @@ func validHexLabel(s string) bool {
 	return true
 }
 
+// versionCap is the cap for label key holding value: its version bound,
+// never above the operator's field cap; ok is false outside the version
+// vocabulary.
+func (r *run) versionCap(key, value string) (limit int, ok bool) {
+	limit, ok = versionLabelCap(key, value)
+	return min(limit, r.s.maxField), ok
+}
+
 // labelStr redacts one label value: a short free-text value, or a version
 // label at its own bound (see above).
 func (r *run) labelStr(key, value string) string {
 	name := joinName("labels", key)
-	if limit, ok := versionLabelCap(key, value); ok {
-		if out := r.valueStr(value, name, limit); out == value {
-			return out
+	if limit, ok := r.versionCap(key, value); ok {
+		// Redact uncapped first: the exemption applies only to a value that
+		// redaction leaves unchanged, whatever the cap then does to it.
+		if out := r.valueStr(value, name, 0); out == value {
+			return r.finishStr(out, name, limit, false)
 		}
 		// Redaction changed it, so it is not a plain version string any
 		// more: it is capped as free text below.
@@ -134,10 +147,10 @@ func (r *run) labelStr(key, value string) string {
 // slotCap is the per-string cap the safety pass applies to a slot whose
 // redacted value is value. It is decided on the value as it stands, not
 // on what labels() saw, so whatever reaches the larger bound has passed
-// the vocabulary check after every rewrite.
+// the vocabulary check after every rewrite. It is never above MaxField.
 func (r *run) slotCap(name, value string) int {
 	if key, ok := strings.CutPrefix(name, "labels."); ok {
-		if limit, ok := versionLabelCap(key, value); ok {
+		if limit, ok := r.versionCap(key, value); ok {
 			return limit
 		}
 	}

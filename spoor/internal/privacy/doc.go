@@ -76,13 +76,16 @@
 // dialect hint, and the same text recurs (the hook's pre and post records
 // and the transcript twin of one call, detection context, evidence, the
 // same build and test commands all session), so results are remembered in
-// a bounded LRU keyed by SHA-256 of hint and text (memo.go); it holds no
-// raw command text. Within one line, the views hand identical argument
-// vectors to the flag rules once. Features' shellx parse is not reused:
-// Event.Feat lacks the inline and decoded payload texts the redactor
-// re-lexes and does not say which text it was computed from. The canary
-// corpus runs both uncached and from the memo and requires identical
-// output.
+// a bounded LRU keyed by SHA-256 of hint and text (memo.go). An entry
+// keeps neither: it records the result as offsets into the text and stores
+// only the result's bytes it does not find there (markers, rewritten
+// parts), so it never holds a removed value, and a line with nothing to
+// redact leaves none of its text in the memo. Within one line, the views
+// hand identical argument vectors to the flag rules once. Features' shellx
+// parse is not reused: Event.Feat lacks the inline and decoded payload
+// texts the redactor re-lexes and does not say which text it was computed
+// from. The canary corpus runs both uncached and from the memo and
+// requires identical output.
 //
 // # Secret markers and digests
 //
@@ -122,7 +125,10 @@
 // capped at 256 bytes, except rules_version and rules_hash when their
 // value is in the version vocabulary (pack@version list, hex digest):
 // those get their own bound (1 KiB, 128 bytes; versionlabel.go), so a
-// finding stays attributable at any realistic number of rule packs.
+// finding stays attributable at any realistic number of rule packs. No
+// string field, these included, exceeds MaxField: an operator who sets it
+// below the length of the version string gets it cut and named in
+// "truncated".
 //
 // # Known gaps
 //

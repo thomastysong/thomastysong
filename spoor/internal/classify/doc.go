@@ -95,9 +95,12 @@
 // login TOKEN ...), so every caller gets them, not only the privacy tier.
 //
 // Redaction markers already in the input ("[REDACTED:<kind>:<fp>]", and the
-// keyed "hmac=" and fingerprint-free forms) are opaque: no pattern matches
-// inside one or across one, so redacting twice changes nothing and a marker
-// never ends up inside another.
+// keyed "hmac=" and fingerprint-free forms, with a kind spoor writes) are
+// opaque: no pattern matches inside one or across one, so redacting twice
+// changes nothing and a marker never ends up inside another. A private key
+// block around a marker is still redacted, in pieces around it. Text that
+// only resembles a marker (an unknown kind, a value that merely starts with
+// "[REDACTED:") is scanned and redacted like any other text.
 //
 // Two things callers should know. First, free-text detection of passwords
 // is necessarily heuristic: "password=hunter2" is redacted, "the password is

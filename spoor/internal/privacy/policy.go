@@ -62,8 +62,9 @@ type Policy struct {
 	// 16 KiB). Emit leaves LineHeadroom bytes of it for fields the writer
 	// sets afterwards.
 	MaxLine int
-	// MaxField caps any single string field (default 4 KiB); detection
-	// evidence values get half of it (2 KiB by default).
+	// MaxField caps any single string field (default 4 KiB), the version
+	// labels included; detection evidence values get half of it (2 KiB by
+	// default).
 	MaxField int
 	// HomeOf returns the home directory of an OS account. When nil or when
 	// it returns "", the platform convention for the event's OS is used

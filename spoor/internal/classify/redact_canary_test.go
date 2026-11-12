@@ -105,6 +105,8 @@ func TestRedactArgsCanaryCorpus(t *testing.T) {
 		// The privacy tier's table, rule by rule. Password attached or next:
 		{[]string{"sshpass", "-p{pw}", "ssh", "deploy@h"}, []string{"ssh deploy@h"}},
 		{[]string{"sshpass", "-p", "{pw}", "ssh", "-p", "22", "h"}, []string{"ssh -p 22 h"}},
+		{[]string{"sshpass", "-P", "passphrase", "-p", "{pw}", "ssh", "-i", "k", "h"}, []string{"-P passphrase", "ssh -i k h"}},
+		{[]string{"sshpass", "-d", "3", "-p{pw}", "scp", "f", "h:"}, []string{"-d 3", "scp f h:"}},
 		{[]string{"sqlcmd", "-S", "db", "-U", "sa", "-P", "{pw}", "-Q", "select 1"}, []string{"-S db -U sa -P", "-Q"}},
 		{[]string{"sqlcmd", "-S", "db", "-P{pw}"}, []string{"-S db"}},
 		{[]string{"bcp", "t", "out", "f.dat", "-S", "db", "-U", "sa", "-P", "{pw}"}, []string{"f.dat"}},
@@ -148,6 +150,13 @@ func TestRedactArgsCanaryCorpus(t *testing.T) {
 		{[]string{"vault", "login", "{pw}"}, []string{"vault login"}},
 		{[]string{"vault", "login", "-no-print", "{pw}"}, nil},
 		{[]string{"sudo", "vault", "login", "{pw}"}, nil},
+		{[]string{"sudo", "-u", "oracle", "sqlplus", "-S", "scott/{pw}@orcl"}, []string{"-u oracle", "@orcl"}},
+		{[]string{"rlwrap", "sqlplus", `scott/"Pa@{pw}"@orcl`}, []string{"@orcl"}},
+		{[]string{"net", "use", `\\h\share`, "{pw}", "/user:bob"}, []string{`\\h\share`, "/user:bob"}},
+		{[]string{"net.exe", "user", "bob", "{pw}", "/add"}, []string{"user bob", "/add"}},
+		{[]string{"mount", "-t", "cifs", "//h/s", "/mnt", "-o", "rw,username=bob,password={pw},uid=1000"}, []string{"rw,username=bob,password=", ",uid=1000"}},
+		{[]string{"dotnet", "run", "--", "--password", "{pw}"}, []string{"dotnet run -- --password"}},
+		{[]string{"openssl", "pkcs12", "-passin", "{pw}", "-in", "a.p12"}, []string{"-in a.p12"}},
 		// Flags named like a password:
 		{[]string{"deploytool", "--admin-pass", "{pw}", "--target", "prod"}, []string{"--target prod"}},
 		{[]string{"keytool", "-genkeypair", "-storepass", "{pw}", "-keypass", "{pw}", "-alias", "a"}, []string{"-alias a"}},
@@ -240,6 +249,12 @@ func TestRedactArgsCanaryCorpus(t *testing.T) {
 		{[]string{"docker", "run", "-p", "8080:80", "nginx"}, []string{"-p 8080:80 nginx"}},
 		{[]string{"claude", "-p", "fix the failing test"}, []string{"fix the failing test"}},
 		{[]string{"net", "view", `\\fileserver`}, []string{`\\fileserver`}},
+		{[]string{"net", "user", "bob", "/delete"}, []string{"net user bob /delete"}},
+		{[]string{"net", "use", `\\h\s`, "*", "/user:bob"}, []string{`\\h\s * /user:bob`}},
+		{[]string{"mount", "-o", "rw,noatime,vers=3.0", "//h/s", "/mnt"}, []string{"rw,noatime,vers=3.0"}},
+		{[]string{"openvpn", "--config", "c.ovpn", "--auth-user-pass", "/etc/openvpn/creds.txt"}, []string{"/etc/openvpn/creds.txt"}},
+		{[]string{"sshpass", "-P", "passphrase", "-f", "/run/pw", "ssh", "-p", "2222", "h"}, []string{"ssh -p 2222 h", "/run/pw"}},
+		{[]string{"git", "log", "--", "src/main.go"}, []string{"-- src/main.go"}},
 	}
 	over := 0
 	for _, b := range benign {

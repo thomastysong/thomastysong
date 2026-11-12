@@ -2,9 +2,11 @@ package privacy
 
 import (
 	"crypto/sha256"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/thomastysong/spoor/internal/shellx"
 )
@@ -39,35 +41,178 @@ import (
 // leak risk for about a third of one redaction; the memo is exact by
 // construction and also removes the rest of the work for repeats.
 //
-// The memo is keyed by SHA-256 of the hint and the text, so it does not
-// keep raw command lines (which may hold credentials) in memory after
-// their records are gone; it stores only redacted output, copied so that
-// it never pins the buffer a command was sliced from (for a line with
-// nothing to redact the output is the line itself, which is what Emit
-// writes anyway). It is bounded in entries and bytes and evicts the least
-// recently used entry. Failure results (the failure marker) are not
-// stored.
+// What an entry holds. The memo is keyed by SHA-256 of the hint and the
+// text and keeps neither. An entry writes the result as pieces of the text
+// it was computed from (offset and length) and stores only the result's
+// bytes that it does not match in that text: in practice the markers
+// redaction put in and what a rewrite composed (the skeleton, a space for
+// a control character). A line with nothing to redact is one piece and no
+// bytes, and a line cut at maxCommandScan with nothing to redact is one
+// piece and its truncation marker, however long it is; neither leaves any
+// of its text in the memo once its records are gone. Every stored byte is
+// a byte of the redacted result, so a value the redactor removed is never
+// stored. On reuse the caller's own text, which has the same key and is
+// checked to have the same length, supplies the pieces. A form is stored
+// only if it reproduces the result exactly. The memo is bounded in entries
+// and bytes and evicts the least recently used entry. Failure results (the
+// failure marker) are not stored.
 
 const (
 	// memoMaxEntries bounds the number of remembered command lines.
 	memoMaxEntries = 4096
-	// memoMaxBytes bounds the redacted text held (plus a per-entry
-	// overhead estimate). Agent command lines are short; 4 MiB holds
-	// thousands of them and is negligible next to the daemon's rings.
+	// memoMaxBytes bounds what the entries hold (their stored bytes and
+	// pieces, plus a per-entry overhead estimate). Most entries hold a
+	// piece or two and no bytes, so the entry count is the binding bound.
 	memoMaxBytes = 4 << 20
-	// memoMaxValue is the largest result stored: one huge line must not
-	// evict the whole working set of ordinary commands.
-	memoMaxValue = 64 << 10
-	// memoEntryOverhead approximates what one entry costs besides its text
-	// (key, list links, map slot).
+	// memoMaxValue is the most one entry may hold besides its overhead:
+	// one result that is mostly rewritten text must not evict the working
+	// set of ordinary commands. It fits the largest scanned head
+	// (maxCommandScan) rewritten in full, with room for markers longer
+	// than what they replaced, so any line can be remembered.
+	memoMaxValue = maxCommandScan + maxCommandScan/4
+	// memoEntryOverhead approximates what one entry costs besides its
+	// form (key, list links, map slot).
 	memoEntryOverhead = 128
+	// memoPieceSize is the size of one memoPiece.
+	memoPieceSize = 24
+	// memoMaxSearches bounds the failed substring searches made while
+	// writing one result against its text; past it the encoder only
+	// extends matches in place, so encoding stays linear in the result.
+	memoMaxSearches = 64
 )
 
 type memoKey [sha256.Size]byte
 
+// memoPiece is one piece of a remembered result: n bytes of the command
+// text from off, or, when lit, n bytes of the form's own bytes from off.
+type memoPiece struct {
+	off, n int
+	lit    bool
+}
+
+// memoForm is a redaction result written against the text it came from.
+// It is immutable once stored, so readers use it outside the lock.
+type memoForm struct {
+	pieces []memoPiece
+	lit    string // the result's bytes not matched in the text
+	inLen  int    // length of the text
+	outLen int    // length of the result
+}
+
+// size is what the form holds besides the entry overhead.
+func (f memoForm) size() int { return len(f.lit) + len(f.pieces)*memoPieceSize }
+
+// decode rebuilds the result from in, the text the form was computed from.
+func (f memoForm) decode(in string) string {
+	if len(f.pieces) == 1 && !f.pieces[0].lit {
+		p := f.pieces[0]
+		return in[p.off : p.off+p.n]
+	}
+	var b strings.Builder
+	b.Grow(f.outLen)
+	for _, p := range f.pieces {
+		if p.lit {
+			b.WriteString(f.lit[p.off : p.off+p.n])
+		} else {
+			b.WriteString(in[p.off : p.off+p.n])
+		}
+	}
+	return b.String()
+}
+
+// encodeResult writes out, the redaction of in, as pieces of in plus the
+// bytes of out it does not match there. Markers in out are always stored
+// as bytes; the text between them is searched for in in, from where the
+// previous match ended, and where a search fails the longest match in
+// place is taken and one rune of out is stored. ok is false when the form
+// would hold more than memoMaxValue or does not reproduce out.
+func encodeResult(in, out string) (f memoForm, ok bool) {
+	f = memoForm{inLen: len(in), outLen: len(out)}
+	if out == in {
+		f.pieces = []memoPiece{{off: 0, n: len(in)}}
+		return f, true
+	}
+	var lit strings.Builder
+	addCopy := func(off, n int) {
+		if k := len(f.pieces); k > 0 && !f.pieces[k-1].lit && f.pieces[k-1].off+f.pieces[k-1].n == off {
+			f.pieces[k-1].n += n
+			return
+		}
+		f.pieces = append(f.pieces, memoPiece{off: off, n: n})
+	}
+	addLit := func(s string) {
+		if k := len(f.pieces); k > 0 && f.pieces[k-1].lit {
+			f.pieces[k-1].n += len(s)
+		} else {
+			f.pieces = append(f.pieces, memoPiece{off: lit.Len(), n: len(s), lit: true})
+		}
+		lit.WriteString(s)
+	}
+	c, searches := 0, memoMaxSearches
+	match := func(s string) {
+		for s != "" {
+			if c >= len(in) {
+				addLit(s)
+				return
+			}
+			if searches > 0 {
+				if i := strings.Index(in[c:], s); i >= 0 {
+					addCopy(c+i, len(s))
+					c += i + len(s)
+					return
+				}
+				searches--
+			}
+			if n := commonPrefixLen(in[c:], s); n > 0 {
+				addCopy(c, n)
+				c += n
+				s = s[n:]
+				continue
+			}
+			// The result differs here: store one rune and take it as
+			// replacing one rune of the text.
+			_, w := utf8.DecodeRuneInString(s)
+			addLit(s[:w])
+			s = s[w:]
+			_, wi := utf8.DecodeRuneInString(in[c:])
+			c += wi
+		}
+	}
+	spans := protectedSpans(out)
+	sort.Slice(spans, func(i, j int) bool { return spans[i][0] < spans[j][0] })
+	pos := 0
+	for _, sp := range spans {
+		if sp[0] < pos {
+			continue // overlaps the previous marker
+		}
+		match(out[pos:sp[0]])
+		addLit(out[sp[0]:sp[1]])
+		pos = sp[1]
+		if lit.Len()+len(f.pieces)*memoPieceSize > memoMaxValue {
+			return memoForm{}, false
+		}
+	}
+	match(out[pos:])
+	f.lit = lit.String()
+	if f.size() > memoMaxValue || f.decode(in) != out {
+		return memoForm{}, false
+	}
+	return f, true
+}
+
+func commonPrefixLen(a, b string) int {
+	n := min(len(a), len(b))
+	for i := 0; i < n; i++ {
+		if a[i] != b[i] {
+			return i
+		}
+	}
+	return n
+}
+
 type memoEntry struct {
 	key        memoKey
-	out        string
+	form       memoForm
 	precapped  bool
 	prev, next *memoEntry
 }
@@ -100,23 +245,31 @@ func memoKeyOf(cmd string, hint shellx.Dialect) memoKey {
 	return k
 }
 
-func entrySize(out string) int { return len(out) + memoEntryOverhead }
+func entrySize(f memoForm) int { return f.size() + memoEntryOverhead }
 
-func (m *cmdMemo) get(k memoKey) (string, bool, bool) {
+// get returns the remembered redaction of in, whose key is k.
+func (m *cmdMemo) get(k memoKey, in string) (string, bool, bool) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	e := m.entries[k]
-	if e == nil {
+	if e == nil || e.form.inLen != len(in) {
 		m.misses++
+		m.mu.Unlock()
 		return "", false, false
 	}
 	m.hits++
 	m.moveFront(e)
-	return e.out, e.precapped, true
+	f, pre := e.form, e.precapped
+	m.mu.Unlock()
+	return f.decode(in), pre, true
 }
 
-func (m *cmdMemo) put(k memoKey, out string, precapped bool) {
-	if len(out) > memoMaxValue || out == failMarker {
+// put remembers out, the redaction of in, under k.
+func (m *cmdMemo) put(k memoKey, in, out string, precapped bool) {
+	if out == failMarker {
+		return
+	}
+	f, ok := encodeResult(in, out)
+	if !ok {
 		return
 	}
 	m.mu.Lock()
@@ -130,10 +283,10 @@ func (m *cmdMemo) put(k memoKey, out string, precapped bool) {
 		m.moveFront(e)
 		return
 	}
-	e := &memoEntry{key: k, out: strings.Clone(out), precapped: precapped}
+	e := &memoEntry{key: k, form: f, precapped: precapped}
 	m.entries[k] = e
 	m.pushFront(e)
-	m.bytes += entrySize(out)
+	m.bytes += entrySize(f)
 	for (len(m.entries) > memoMaxEntries || m.bytes > memoMaxBytes) && m.tail != nil {
 		m.evict(m.tail)
 	}
@@ -175,7 +328,7 @@ func (m *cmdMemo) moveFront(e *memoEntry) {
 func (m *cmdMemo) evict(e *memoEntry) {
 	m.unlink(e)
 	delete(m.entries, e.key)
-	m.bytes -= entrySize(e.out)
+	m.bytes -= entrySize(e.form)
 }
 
 // reset empties the memo and its counters.
@@ -209,11 +362,11 @@ func redactCommand(cmd string, hint shellx.Dialect) (string, bool) {
 		return cmd, false
 	}
 	k := memoKeyOf(cmd, hint)
-	if out, pre, ok := commandMemo.get(k); ok {
+	if out, pre, ok := commandMemo.get(k, cmd); ok {
 		return out, pre
 	}
 	out, pre := redactCommandUncached(cmd, hint)
-	commandMemo.put(k, out, pre)
+	commandMemo.put(k, cmd, out, pre)
 	return out, pre
 }
 

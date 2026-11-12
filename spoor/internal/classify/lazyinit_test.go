@@ -90,7 +90,8 @@ func builtTables() []string {
 	for name, built := range map[string]bool{
 		"hostSuffix": hostSuffix != nil, "metadataSet": metadataSet != nil,
 		"agentIdx": agentIdx.byFirst != nil, "patIdx": patIdx != nil, "toolIndex": toolIndex != nil,
-		"seqIndex": seqIndex != nil, "lookalikeIdx": lookalikeIdx != nil,
+		"markerKindIdx": markerKindIdx != nil,
+		"seqIndex":      seqIndex != nil, "lookalikeIdx": lookalikeIdx != nil,
 		"jsonPairRe": jsonPairRe != nil, "envNameRe": envNameRe != nil, "urlCredsRe": urlCredsRe != nil,
 		"authHeaderRe": authHeaderRe != nil, "bearerRe": bearerRe != nil, "cookieRe": cookieRe != nil,
 		"assignRe": assignRe != nil, "flagRe": flagRe != nil, "pkBeginRe": pkBeginRe != nil,

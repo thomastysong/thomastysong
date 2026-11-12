@@ -220,9 +220,12 @@ func (w *mapWalker) list(items []any, path string, depth int, force bool) []any 
 func (w *mapWalker) str(s, path string, force bool) string {
 	if force {
 		if keepAsWritten(s) {
-			return w.cut(s, path)
+			// A reference or template is kept, but what Redact finds in it
+			// on its own ("[<token>]") is not.
+			r, _ := Redact(s)
+			return w.cut(r, path)
 		}
-		return markerFor(KindSensitiveKey, s)
+		return markAroundMarkers(KindSensitiveKey, s)
 	}
 	r, _ := Redact(s)
 	return w.cut(r, path)

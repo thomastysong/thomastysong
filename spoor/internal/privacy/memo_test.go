@@ -2,11 +2,13 @@ package privacy
 
 import (
 	"crypto/sha256"
+	"math/rand"
 	"reflect"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/thomastysong/spoor/internal/event"
 	"github.com/thomastysong/spoor/internal/shellx"
@@ -63,7 +65,8 @@ func TestCommandMemoMatchesUncached(t *testing.T) {
 						hint, i, round, short(got), gotPre, short(want), wantPre)
 				}
 				_, _, hits1, _ := commandMemo.stats()
-				stored := cmd != "" && len(want) <= memoMaxValue && want != failMarker
+				_, encodable := encodeResult(cmd, want)
+				stored := cmd != "" && encodable && want != failMarker
 				if round == 1 && stored && hits1 != hits0+1 {
 					t.Errorf("hint %q case %d: second call was not served from the memo", hint, i)
 				}
@@ -114,12 +117,16 @@ func TestCommandMemoBounded(t *testing.T) {
 	resetCommandMemo()
 	defer resetCommandMemo()
 	m := &commandMemo
+	// Synthetic entries are computed from the empty text, so every byte of
+	// the value is stored.
+	put := func(i int, v string, pre bool) { m.put(testMemoKey(i), "", v, pre) }
+	get := func(i int) (string, bool, bool) { return m.get(testMemoKey(i), "") }
 
-	m.put(testMemoKey(-1), "keep", false)
+	put(-1, "keep", false)
 	for i := 0; i < memoMaxEntries+500; i++ {
-		m.put(testMemoKey(i), "v"+strconv.Itoa(i), false)
+		put(i, "v"+strconv.Itoa(i), false)
 		if i%100 == 0 {
-			if _, _, ok := m.get(testMemoKey(-1)); !ok {
+			if _, _, ok := get(-1); !ok {
 				t.Fatalf("recently used entry evicted after %d inserts", i)
 			}
 		}
@@ -128,45 +135,52 @@ func TestCommandMemoBounded(t *testing.T) {
 	if n != memoMaxEntries || b > memoMaxBytes {
 		t.Fatalf("entries %d (max %d), bytes %d (max %d)", n, memoMaxEntries, b, memoMaxBytes)
 	}
-	if _, _, ok := m.get(testMemoKey(0)); ok {
+	if _, _, ok := get(0); ok {
 		t.Error("least recently used entry survived")
 	}
-	if _, _, ok := m.get(testMemoKey(memoMaxEntries + 499)); !ok {
+	if _, _, ok := get(memoMaxEntries + 499); !ok {
 		t.Error("newest entry missing")
 	}
 
 	resetCommandMemo()
-	big := strings.Repeat("a", memoMaxValue)
+	big := strings.Repeat("a", memoMaxValue-memoPieceSize) // one piece of stored bytes
 	for i := 0; i < 200; i++ {
-		m.put(testMemoKey(i), big, true)
+		put(i, big, true)
 	}
 	n, b, _, _ = m.stats()
 	if b > memoMaxBytes || n > memoMaxBytes/memoMaxValue {
 		t.Fatalf("large values: %d entries, %d bytes", n, b)
 	}
-	if out, pre, ok := m.get(testMemoKey(199)); !ok || out != big || !pre {
+	if out, pre, ok := get(199); !ok || out != big || !pre {
 		t.Error("large value not returned intact")
 	}
 
-	m.put(testMemoKey(-2), big+"a", false)
-	m.put(testMemoKey(-3), failMarker, false)
+	put(-2, big+"a", false)
+	put(-3, failMarker, false)
 	for _, k := range []int{-2, -3} {
-		if _, _, ok := m.get(testMemoKey(k)); ok {
+		if _, _, ok := get(k); ok {
 			t.Errorf("entry %d should not be stored", k)
 		}
+	}
+	// A text of another length under the same key is a miss, never a
+	// decode against the wrong text.
+	m.put(testMemoKey(-4), "ls -la", "ls -la", false)
+	if _, _, ok := m.get(testMemoKey(-4), "ls -l"); ok {
+		t.Error("entry served for a text of another length")
 	}
 
 	// Re-putting an existing key keeps one entry and its byte count.
 	resetCommandMemo()
-	m.put(testMemoKey(1), "one", false)
-	m.put(testMemoKey(1), "one", false)
-	if n, b, _, _ := m.stats(); n != 1 || b != entrySize("one") {
+	put(1, "one", false)
+	put(1, "one", false)
+	f, _ := encodeResult("", "one")
+	if n, b, _, _ := m.stats(); n != 1 || b != entrySize(f) {
 		t.Errorf("duplicate put: %d entries, %d bytes", n, b)
 	}
 	// The list stays consistent through moves and evictions of head and tail.
 	for i := 0; i < 50; i++ {
-		m.put(testMemoKey(i%7), "x", false)
-		m.get(testMemoKey((i * 3) % 7))
+		put(i%7, "x", false)
+		get((i * 3) % 7)
 	}
 	seen := 0
 	for e := m.head; e != nil; e = e.next {
@@ -181,7 +195,8 @@ func TestCommandMemoBounded(t *testing.T) {
 }
 
 // TestCommandMemoHoldsNoRawText: the memo keeps digests of command lines
-// and their redacted output, never a credential from the input.
+// and the bytes of their redacted output that are not in the input, never
+// a credential from the input.
 func TestCommandMemoHoldsNoRawText(t *testing.T) {
 	resetCommandMemo()
 	defer resetCommandMemo()
@@ -196,12 +211,158 @@ func TestCommandMemoHoldsNoRawText(t *testing.T) {
 		t.Fatal("nothing remembered")
 	}
 	for _, e := range commandMemo.entries {
-		if strings.Contains(e.out, "Canary") {
-			t.Errorf("memo holds a canary: %q", e.out)
+		if strings.Contains(e.form.lit, "Canary") {
+			t.Errorf("memo holds a canary: %q", e.form.lit)
 		}
 	}
-	if reflect.TypeOf(memoEntry{}).NumField() != 5 {
-		t.Error("memoEntry changed: check that it still holds no input text")
+	if reflect.TypeOf(memoEntry{}).NumField() != 5 || reflect.TypeOf(memoForm{}).NumField() != 4 {
+		t.Error("memoEntry or memoForm changed: check that they still hold no input text")
+	}
+}
+
+// TestCommandMemoStoresNoUnchangedText: an entry stores only what
+// redaction wrote. A long benign line (which Emit writes as a 4 KiB head
+// and tail) leaves none of its text in the memo, and a line with a secret
+// leaves only the marker.
+func TestCommandMemoStoresNoUnchangedText(t *testing.T) {
+	resetCommandMemo()
+	defer resetCommandMemo()
+	var b strings.Builder
+	for i := 0; b.Len() < 20<<10; i++ {
+		b.WriteString("echo step-" + rnd(int64(100+i), 6) + "; ")
+	}
+	benign := b.String()
+	middle := benign[10<<10 : 10<<10+40]
+	out, _, _ := (&Policy{Profile: ProfileStandard}).Emit(shellEvent(benign))
+	if strings.Contains(line(t, out), middle) {
+		t.Fatal("setup: middle was emitted")
+	}
+	secret := "mysql -pMemoStorePw1 db && " + benign
+	(&Policy{Profile: ProfileStandard}).Emit(shellEvent(secret))
+	commandMemo.mu.Lock()
+	defer commandMemo.mu.Unlock()
+	if len(commandMemo.entries) != 2 {
+		t.Fatalf("%d entries, want 2", len(commandMemo.entries))
+	}
+	for _, e := range commandMemo.entries {
+		if strings.Contains(e.form.lit, middle) || strings.Contains(e.form.lit, "echo") {
+			t.Errorf("memo holds %d bytes of command text: %q", len(e.form.lit), short(e.form.lit))
+		}
+		if e.form.lit != "" && !strings.HasPrefix(e.form.lit, markerOpen) {
+			t.Errorf("stored bytes are not a marker: %q", short(e.form.lit))
+		}
+		if entrySize(e.form) > memoEntryOverhead+4*memoPieceSize+64 {
+			t.Errorf("entry costs %d bytes for a %d-byte line", entrySize(e.form), e.form.inLen)
+		}
+	}
+}
+
+// TestCommandMemoKeepsPrecappedLines: a line longer than maxCommandScan
+// (the costliest to redact, at 25-30 ms) is remembered, with and without
+// something redacted in its head.
+func TestCommandMemoKeepsPrecappedLines(t *testing.T) {
+	resetCommandMemo()
+	defer resetCommandMemo()
+	lorem := strings.Repeat("lorem ipsum ", (70<<10)/12)
+	for _, cmd := range []string{
+		"echo '" + lorem + "'",
+		"mysql -pMemoCapPw1 db; echo '" + lorem + "'",
+		"echo \x01'" + strings.Repeat("\x02 lorem ", (70<<10)/9) + "'",
+		strings.Repeat("a", 4*maxCommandScan),
+	} {
+		want, wantPre := redactCommandUncached(cmd, "")
+		_, _, hits0, _ := commandMemo.stats()
+		redactCommand(cmd, "")
+		out, pre := redactCommand(cmd, "")
+		if out != want || pre != wantPre || !pre {
+			t.Fatalf("%d-byte line: memo returned %d bytes (pre %v), redactor %d (pre %v)", len(cmd), len(out), pre, len(want), wantPre)
+		}
+		if _, _, hits1, _ := commandMemo.stats(); hits1 != hits0+1 {
+			t.Errorf("%d-byte line (result %d bytes) not served from the memo", len(cmd), len(want))
+		}
+	}
+	commandMemo.mu.Lock()
+	defer commandMemo.mu.Unlock()
+	for _, e := range commandMemo.entries {
+		if len(e.form.lit) > 1<<10 {
+			t.Errorf("precapped %d-byte line stores %d bytes", e.form.inLen, len(e.form.lit))
+		}
+	}
+}
+
+// TestMemoFormRoundTrip: a form reproduces its result exactly from the
+// text, for redactor output and for arbitrary edits (substitutions,
+// insertions, deletions, markers, invalid UTF-8, empty strings), and it
+// stores no byte that is not in the result.
+func TestMemoFormRoundTrip(t *testing.T) {
+	r := rand.New(rand.NewSource(7))
+	check := func(in, out string) {
+		t.Helper()
+		f, ok := encodeResult(in, out)
+		if !ok {
+			if len(out) <= memoMaxValue/2 {
+				t.Errorf("not encodable: in %q out %q", short(in), short(out))
+			}
+			return
+		}
+		if got := f.decode(in); got != out {
+			t.Fatalf("round trip: in %q out %q got %q", short(in), short(out), short(got))
+		}
+		if len(f.lit) > len(out) || f.inLen != len(in) || f.outLen != len(out) {
+			t.Fatalf("form %+v for in %d out %d", f, len(in), len(out))
+		}
+	}
+	for _, hint := range memoHints {
+		for _, cmd := range memoCorpus() {
+			out, _ := redactCommandUncached(cmd, hint)
+			check(cmd, out)
+		}
+	}
+	alpha := "ab \t\n'\"$=-[]:\x00\xff\xc3\xa9"
+	pieces := []string{markerOpen + "password:hmac=0123]", truncOpen + "12B]", markerOpen, "]", "é", "\xff"}
+	for i := 0; i < 3000; i++ {
+		n := r.Intn(200)
+		in := make([]byte, n)
+		for j := range in {
+			in[j] = alpha[r.Intn(len(alpha))]
+		}
+		out := append([]byte(nil), in...)
+		for k := r.Intn(8); k > 0; k-- {
+			pos := 0
+			if len(out) > 0 {
+				pos = r.Intn(len(out) + 1)
+			}
+			switch r.Intn(4) {
+			case 0: // insert a marker or a fragment
+				p := pieces[r.Intn(len(pieces))]
+				out = append(out[:pos], append([]byte(p), out[pos:]...)...)
+			case 1: // delete
+				if pos < len(out) {
+					end := min(len(out), pos+1+r.Intn(10))
+					out = append(out[:pos], out[end:]...)
+				}
+			case 2: // substitute
+				if pos < len(out) {
+					out[pos] = ' '
+				}
+			case 3: // replace a span with a marker
+				end := min(len(out), pos+r.Intn(20))
+				out = append(out[:pos], append([]byte(pieces[0]), out[end:]...)...)
+			}
+		}
+		check(string(in), string(out))
+	}
+	for _, c := range [][2]string{{"", ""}, {"a", ""}, {"", "a"}, {"abc", "abc"}, {"abc", "xyz"}, {"abcabc", "abc"}} {
+		check(c[0], c[1])
+	}
+	// Encoding stays linear: a result that differs from its text in every
+	// other byte is written without a search per difference.
+	in := strings.Repeat("ab", maxCommandScan/2)
+	out := strings.Repeat("a ", maxCommandScan/2)
+	start := time.Now()
+	check(in, out)
+	if d := time.Since(start); d > 2*time.Second {
+		t.Errorf("encoding a fully rewritten 64 KiB result took %v", d)
 	}
 }
 

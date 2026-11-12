@@ -854,8 +854,11 @@ func redactData(d string) string {
 	}
 	trimmed := strings.TrimLeft(d, " \t\r\n")
 	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
-		return redactLoose(redactJSONText(d))
+		r, _ := Redact(redactJSONText(d))
+		return r
 	}
+	// Each pair on its own: read as one NAME=value, the body would make
+	// everything after the first "=" the first field's value.
 	var b strings.Builder
 	rest := d
 	for {
@@ -866,9 +869,14 @@ func redactData(d string) string {
 		}
 		if eq := strings.IndexByte(pair, '='); eq > 0 && eq < len(pair)-1 {
 			name := percentDecode(pair[:eq])
-			if (secretName(name) != nameNone || formSecretNames.has(asciiLower(name))) && !keepAsWritten(pair[eq+1:]) {
+			switch {
+			case secretName(name) == nameNone && !formSecretNames.has(asciiLower(name)):
+				pair = pair[:eq+1] + redactLoose(pair[eq+1:])
+			case !keepAsWritten(pair[eq+1:]):
 				pair = pair[:eq+1] + markAroundMarkers(kindForName(name), pair[eq+1:])
 			}
+		} else {
+			pair = redactLoose(pair)
 		}
 		b.WriteString(pair)
 		if i < 0 {
@@ -877,7 +885,8 @@ func redactData(d string) string {
 		b.WriteByte('&')
 		rest = rest[i+1:]
 	}
-	return redactLoose(b.String())
+	r, _ := Redact(b.String())
+	return r
 }
 
 // redactJSONText redacts string members with secret names in JSON text
@@ -931,7 +940,8 @@ func redactWindowsFlag(a string) (string, bool) {
 }
 
 // redactLoose is the catch-all for an argument with no structural role:
-// NAME=value with a secret name, a URL with userinfo, then pattern redaction.
+// an option list, NAME=value with a secret name, a URL with userinfo, then
+// pattern redaction.
 func redactLoose(a string) string { return redactLooseDepth(a, 0) }
 
 func redactLooseDepth(a string, depth int) string {
@@ -943,6 +953,25 @@ func redactLooseDepth(a string, depth int) string {
 		r, _ := Redact(a)
 		return r
 	}
+	if items := optionList(a); items != nil {
+		var b strings.Builder
+		b.Grow(len(a) + 32)
+		for k, it := range items {
+			if k > 0 {
+				b.WriteByte(a[it[0]-1])
+			}
+			item := a[it[0]:it[1]]
+			if eq := optionPairName(item); eq > 0 {
+				item = item[:eq+1] + redactLooseDepth(item[eq+1:], depth+1)
+				if secretName(item[:eq]) != nameNone && !keepAsWritten(a[it[0]+eq+1:it[1]]) {
+					item = a[it[0]:it[0]+eq+1] + markAroundMarkers(kindForName(item[:eq]), a[it[0]+eq+1:it[1]])
+				}
+			}
+			b.WriteString(item)
+		}
+		r, _ := Redact(b.String())
+		return r
+	}
 	_, envName := argRegexes()
 	if eq := strings.IndexByte(a, '='); eq > 0 && eq <= 128 && envName.MatchString(a[:eq]) {
 		name, value := a[:eq], a[eq+1:]
@@ -950,7 +979,7 @@ func redactLooseDepth(a string, depth int) string {
 			if keepAsWritten(value) {
 				return a
 			}
-			return a[:eq+1] + markerFor(kindForName(name), value)
+			return a[:eq+1] + markAroundMarkers(kindForName(name), value)
 		}
 		// KEY=VALUE where VALUE is itself structured (--from-literal style,
 		// DATABASE_URL=postgres://...).
@@ -964,7 +993,7 @@ func redactLooseDepth(a string, depth int) string {
 			if dbSchemes.has(p.scheme) {
 				kind = KindDatabaseURL
 			}
-			b.WriteString(markerFor(kind, p.userinfo))
+			b.WriteString(markAroundMarkers(kind, p.userinfo))
 			b.WriteByte('@')
 		} else if p.hasUser {
 			b.WriteString(p.userinfo)
@@ -988,4 +1017,86 @@ func redactLooseDepth(a string, depth int) string {
 	}
 	r, _ := Redact(a)
 	return r
+}
+
+// maxOptionList bounds the arguments read as option lists.
+const maxOptionList = 64 << 10
+
+// optionList splits an option list ("rw,username=bob,password=PW" for mount
+// -o, "user=bob;pass=PW") at the commas and semicolons between its items and
+// returns the item spans, or nil when a is not one. A list has two or more
+// items, at least one of them a NAME=value pair, and every item is a pair or
+// a bare option word ("rw", "noatime", "_netdev"). Unpacking only the first
+// NAME= of such a list left "password=PW" to the free-text gate, which drops
+// short letters-only passwords, and swallowed the pairs after a secret one
+// into its marker.
+//
+// The value of a pair with a secret NAME runs on to the next separator that
+// starts another pair, so "password=a,b" keeps its comma in the password and
+// a stray option after a password is redacted with it rather than leaking a
+// part of it.
+func optionList(a string) [][2]int {
+	if len(a) > maxOptionList || !strings.ContainsAny(a, ",;") || strings.IndexByte(a, '=') <= 0 {
+		return nil
+	}
+	var items [][2]int
+	pairs := false
+	for pos := 0; ; {
+		end := optionSep(a, pos)
+		if eq := optionPairName(a[pos:end]); eq > 0 {
+			pairs = true
+			if secretName(a[pos:pos+eq]) != nameNone {
+				for end < len(a) && optionPairName(a[end+1:optionSep(a, end+1)]) == 0 {
+					end = optionSep(a, end+1)
+				}
+			}
+		} else if !optionWord(a[pos:end]) {
+			return nil
+		}
+		items = append(items, [2]int{pos, end})
+		if end >= len(a) {
+			break
+		}
+		pos = end + 1
+	}
+	if len(items) < 2 || !pairs {
+		return nil
+	}
+	return items
+}
+
+// optionSep returns the index of the next ',' or ';' at or after from, or
+// len(a).
+func optionSep(a string, from int) int {
+	if i := strings.IndexAny(a[from:], ",;"); i >= 0 {
+		return from + i
+	}
+	return len(a)
+}
+
+// optionPairName returns the length of NAME in an option "NAME=value", or 0.
+func optionPairName(item string) int {
+	eq := strings.IndexByte(item, '=')
+	if eq <= 0 || eq > 128 {
+		return 0
+	}
+	_, envName := argRegexes()
+	if !envName.MatchString(item[:eq]) {
+		return 0
+	}
+	return eq
+}
+
+// optionWord reports a bare option of an option list: "rw", "noatime",
+// "x-systemd.automount".
+func optionWord(item string) bool {
+	if item == "" || len(item) > 64 {
+		return false
+	}
+	for i := 0; i < len(item); i++ {
+		if c := item[i]; !isAlnum(c) && c != '_' && c != '-' && c != '.' {
+			return false
+		}
+	}
+	return true
 }

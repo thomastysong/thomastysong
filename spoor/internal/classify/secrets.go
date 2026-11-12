@@ -44,7 +44,9 @@ type rawHit struct {
 //
 // Hits are sorted by Start and never overlap. Existing redaction markers
 // ("[REDACTED:<kind>:<fp>]") are opaque: no hit lies inside one or spans
-// one. Only the first 16 MiB of s are scanned. FindSecrets never panics.
+// one, and a private key block with a marker in it is reported as the
+// pieces around the marker. Only the first 16 MiB of s are scanned.
+// FindSecrets never panics.
 func FindSecrets(s string) (hits []SecretHit) {
 	defer func() {
 		if recover() != nil {

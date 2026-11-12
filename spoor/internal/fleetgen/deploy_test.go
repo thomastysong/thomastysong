@@ -148,8 +148,9 @@ func TestEmbeddedServiceDefinitions(t *testing.T) {
 	}
 }
 
-// TestInstallScriptKeepsOutboxGroup: the data directory is root:spoor so
-// that members of the spoor group (a log shipper) can read the outbox, but
+// TestInstallScriptKeepsOutboxGroup: the data directory is root:spoor 0711
+// (traversable, so hooks reach their own spool directory and the bundle;
+// the outbox inside is root:spoor 0750 for the log shipper), but
 // the unit's StateDirectory= makes systemd re-own it, recursively, to the
 // service's user and group at every start: root:root for a root service.
 // The script therefore runs the service with Group=spoor through a drop-in
@@ -158,7 +159,7 @@ func TestInstallScriptKeepsOutboxGroup(t *testing.T) {
 	sh := stripComments(readDeploy(t, "scripts/install-spoor.sh"))
 	for _, w := range []string{
 		"getent group spoor >/dev/null 2>&1 || groupadd --system spoor",
-		`install -d -m 0750 -o 0 -g spoor "$DATA"`,
+		`install -d -m 0711 -o 0 -g spoor "$DATA"`,
 		`printf '[Service]\nGroup=spoor\n' >"$tmp/group.conf"`,
 		`put "$tmp/group.conf" "$UNIT.d/10-outbox-group.conf" 0644`,
 	} {

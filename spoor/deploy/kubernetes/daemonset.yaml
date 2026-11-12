@@ -100,6 +100,11 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+            # host.name is otherwise the pod's hostname, not the node's.
+            - name: SPOOR_HOST_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
           securityContext:
             privileged: false
             # Must stay true: the two capabilities come from FILE

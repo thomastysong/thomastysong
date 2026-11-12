@@ -46,10 +46,18 @@ func ATCQuery(t TableDef) string {
 	return q
 }
 
-// DefaultHeartbeatMaxAge is how old health.heartbeat may be before a policy
-// treats the sensor as not reporting: three missed beats at the default
-// five-minute interval.
-const DefaultHeartbeatMaxAge = 15 * time.Minute
+// Heartbeat windows. Policies use two on purpose:
+//
+//   - DefaultAlertMaxAge (30 min) is for the one policy to alert on, "sensor
+//     reporting": six missed beats at the default five-minute interval.
+//   - DefaultHeartbeatMaxAge (24 h) is the guard every "no X" policy embeds,
+//     so that a removed sensor or a deleted database fails within a day
+//     (a missing database reads as zero rows, which would otherwise pass)
+//     without turning every policy red each time a laptop wakes from sleep.
+const (
+	DefaultAlertMaxAge     = 30 * time.Minute
+	DefaultHeartbeatMaxAge = 24 * time.Hour
+)
 
 // SQLTimeAgo returns a SQL expression for the timestamp d before now, in the
 // same fixed-width form the tables store, so that it can be compared with a
@@ -121,7 +129,7 @@ func buildPolicies() []Policy {
 		{
 			Name:        "sensor_reporting",
 			Title:       "spoor sensor is reporting",
-			Description: "The sensor wrote a heartbeat in the last 15 minutes.",
+			Description: "The sensor wrote a heartbeat in the last 30 minutes.",
 			Resolution:  "Check that the spoor service is installed and running and that its state database path matches the osquery configuration.",
 		},
 		{
@@ -163,6 +171,10 @@ func buildPolicies() []Policy {
 		},
 	}
 	for i := range list {
+		if list[i].Name == "sensor_reporting" {
+			list[i].Query = PolicySQLWithin("", DefaultAlertMaxAge)
+			continue
+		}
 		list[i].Query = PolicySQL(list[i].Violation)
 	}
 	return list

@@ -446,20 +446,41 @@ func TestPolicySQLFailsClosed(t *testing.T) {
 		t.Error("a 25-hour-old detection failed the 24-hour policy")
 	}
 
-	// 4. The sensor stops: the heartbeat goes stale and everything fails,
-	// including policies whose violation is absent.
+	// 4. The sensor stops. Two windows: the sensor-reporting policy (the one
+	// to alert on) fails after 30 minutes; every "no X" policy embeds a 24 h
+	// guard, so a laptop that slept for an hour does not turn them all red,
+	// but a removed sensor fails them within a day.
 	s.SetCoverage(nil)
-	stale := heartbeat("hb-stale", 0, "w2", nil)
-	stale.TS = event.At(now.Add(-16 * time.Minute))
-	if _, err := rawDB(t, s.Path()).Exec("DELETE FROM health"); err != nil {
-		t.Fatal(err)
+	setHeartbeatAge := func(age time.Duration) {
+		t.Helper()
+		if _, err := rawDB(t, s.Path()).Exec("DELETE FROM health"); err != nil {
+			t.Fatal(err)
+		}
+		hb := heartbeat("hb-"+age.String(), 0, "w2", nil)
+		hb.TS = event.At(now.Add(-age))
+		mustApply(t, s, hb)
 	}
-	mustApply(t, s, stale)
-	if passes(PolicySQL("")) || passes(PolicySQL("SELECT 1 FROM spoor_coverage WHERE state = 'blind'")) {
-		t.Error("policies pass with a 16-minute-old heartbeat")
+	reporting, _ := PolicyByName("sensor_reporting")
+	noBlind, _ := PolicyByName("no_blind_agents")
+
+	setHeartbeatAge(31 * time.Minute)
+	if passes(reporting.Query) {
+		t.Error("sensor_reporting passes with a 31-minute-old heartbeat")
 	}
-	if !passes(PolicySQLWithin("", time.Hour)) {
-		t.Error("PolicySQLWithin(1h) must accept a 16-minute-old heartbeat")
+	if !passes(noBlind.Query) || !passes(PolicySQL("SELECT 1 FROM spoor_coverage WHERE state = 'blind'")) {
+		t.Error("a guarded policy fails with a 31-minute-old heartbeat; its guard is 24 h")
+	}
+	setHeartbeatAge(25 * time.Hour)
+	for _, p := range Policies {
+		if passes(p.Query) {
+			t.Errorf("policy %s passes with a 25-hour-old heartbeat", p.Name)
+		}
+	}
+	if passes(PolicySQL("")) {
+		t.Error("PolicySQL passes with a 25-hour-old heartbeat")
+	}
+	if !passes(PolicySQLWithin("", 48*time.Hour)) {
+		t.Error("PolicySQLWithin(48h) must accept a 25-hour-old heartbeat")
 	}
 	if PolicySQLWithin("", 0) != PolicySQL("") {
 		t.Error("a non-positive max age must mean the default")

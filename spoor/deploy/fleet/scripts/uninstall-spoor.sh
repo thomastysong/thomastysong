@@ -28,8 +28,9 @@ if [ $os = linux ]; then
 	if command -v systemctl >/dev/null 2>&1; then
 		systemctl disable --now spoor >/dev/null 2>&1 || true
 	fi
-	if [ -f "$UNIT" ]; then
-		rm -f "$UNIT"
+	if [ -f "$UNIT" ] || [ -d "$UNIT.d" ]; then
+		rm -f "$UNIT" "$UNIT.d/10-outbox-group.conf"
+		rmdir "$UNIT.d" 2>/dev/null || true
 		systemctl daemon-reload 2>/dev/null || true
 	fi
 else

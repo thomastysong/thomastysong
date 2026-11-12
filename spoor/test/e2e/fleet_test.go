@@ -526,10 +526,13 @@ const fleetScriptImage = "mirror.gcr.io/library/redis:7"
 // post-install scripts in a throwaway Debian container with fake
 // systemctl and spoor binaries, under SPOOR_ROOT so nothing outside the
 // mounted directory changes. It checks: a wrong SHA-256 installs nothing;
+// the extension tier refuses a host where orbit's extensions.load is in use
+// (orbit then overrides osquery's autoload file) and installs nothing;
 // install writes the binary, extension, unit and osquery's default
-// extensions.load (other lines kept) and schedules a detached osquery
-// restart; a second run changes nothing; orbit's extensions.load is never
-// touched; the atc tier unregisters; uninstall is idempotent and keeps data.
+// extensions.load (other lines kept, also a last line without a newline)
+// and schedules a detached osquery restart; a second run changes nothing;
+// orbit's extensions.load is never written; the atc tier unregisters and
+// works with orbit's file in use; uninstall is idempotent and keeps data.
 func TestFleetInstallScripts(t *testing.T) {
 	if os.Getenv("SPOOR_E2E_FLEET") == "" {
 		t.Skip("set SPOOR_E2E_FLEET=1 (needs docker and " + fleetScriptImage + ")")
@@ -552,9 +555,11 @@ func TestFleetInstallScripts(t *testing.T) {
 	}
 	root := filepath.Join(work, "root")
 	orbitLoad := filepath.Join(root, "opt", "orbit", "extensions.load")
-	writeFile(t, orbitLoad, []byte("/opt/orbit/bin/extensions/fleet.ext\n"))
+	const orbitManaged = "/opt/orbit/bin/extensions/fleet.ext\n"
+	writeFile(t, orbitLoad, nil)
 	load := filepath.Join(root, "etc", "osquery", "extensions.load")
-	writeFile(t, load, []byte("/usr/lib/other/other.ext\n"))
+	// No final newline: registration must not glue spoor's line to it.
+	writeFile(t, load, []byte("/usr/lib/other/other.ext"))
 
 	name := fmt.Sprintf("spoor-c5-scripts-%d", os.Getpid())
 	out, err := exec.Command("docker", "run", "-d", "--rm", "--name", name, "--network", "none",
@@ -607,7 +612,31 @@ func TestFleetInstallScripts(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "usr", "bin", "spoor")); !os.IsNotExist(err) {
 		t.Fatal("binary installed despite a hash mismatch")
 	}
-	// 2. Install.
+	// 2. orbit manages extensions on this host: osquery would never read
+	// its default autoload file, so the extension tier refuses, and so
+	// does the packages' post-install script.
+	writeFile(t, orbitLoad, []byte(orbitManaged))
+	o, code = run("install-spoor.sh")
+	if code == 0 || !strings.Contains(o, "osquery ignores /work/root/etc/osquery/extensions.load") {
+		t.Fatalf("extension tier with orbit's extensions.load in use: exit %d\n%s", code, o)
+	}
+	if _, err := os.Stat(filepath.Join(root, "usr", "bin", "spoor")); !os.IsNotExist(err) {
+		t.Fatal("binary installed although the extension tier was refused")
+	}
+	writeFile(t, filepath.Join(root, "usr", "bin", "spoor"), []byte(spoorBin))
+	os.Chmod(filepath.Join(root, "usr", "bin", "spoor"), 0o755)
+	if o, code = run("register-extension.sh"); code == 0 || !strings.Contains(o, "osquery ignores") {
+		t.Errorf("register-extension with orbit's extensions.load in use: exit %d\n%s", code, o)
+	}
+	os.Remove(filepath.Join(root, "usr", "bin", "spoor"))
+	if b, _ := os.ReadFile(load); string(b) != "/usr/lib/other/other.ext" {
+		t.Fatalf("refused runs changed extensions.load: %q", b)
+	}
+	readLog()
+	// orbit installed, but no extension managed by Fleet: its file is empty
+	// and osquery reads the default one.
+	writeFile(t, orbitLoad, nil)
+	// 3. Install.
 	o, code = run("install-spoor.sh")
 	t.Logf("install:\n%s", o)
 	if code != 0 || !strings.Contains(o, "osquery (osqueryd) restarts in 10 s") {
@@ -619,14 +648,15 @@ func TestFleetInstallScripts(t *testing.T) {
 			t.Errorf("install did not run %q:\n%s", w, log)
 		}
 	}
-	if got := lines(load); strings.Join(got, ",") != "/usr/lib/other/other.ext,"+ext {
-		t.Errorf("extensions.load = %v", got)
+	if b, _ := os.ReadFile(load); string(b) != "/usr/lib/other/other.ext\n"+ext+"\n" {
+		t.Errorf("extensions.load = %q", b)
 	}
 	for p, mode := range map[string]os.FileMode{
-		filepath.Join(root, "usr", "bin", "spoor"):                       0o755,
-		filepath.Join(root, "usr", "lib", "spoor", "spoor.ext"):          0o755,
-		filepath.Join(root, "etc", "systemd", "system", "spoor.service"): 0o644,
-		filepath.Join(root, "var", "lib", "spoor"):                       0o750 | os.ModeDir,
+		filepath.Join(root, "usr", "bin", "spoor"):                                                 0o755,
+		filepath.Join(root, "usr", "lib", "spoor", "spoor.ext"):                                    0o755,
+		filepath.Join(root, "etc", "systemd", "system", "spoor.service"):                           0o644,
+		filepath.Join(root, "etc", "systemd", "system", "spoor.service.d", "10-outbox-group.conf"): 0o644,
+		filepath.Join(root, "var", "lib", "spoor"):                                                 0o750 | os.ModeDir,
 		load: 0o644,
 	} {
 		fi, err := os.Stat(p)
@@ -641,7 +671,12 @@ func TestFleetInstallScripts(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(root, "etc", "spoor", "spoor.yaml")); !strings.Contains(string(b), "data_dir") {
 		t.Error("config not written with `spoor export config`")
 	}
-	// 3. Again: nothing changes, the service is only started.
+	// StateDirectory= re-owns the data directory to the service's group at
+	// each start, so the service runs with the outbox readers' group.
+	if b, _ := os.ReadFile(filepath.Join(root, "etc", "systemd", "system", "spoor.service.d", "10-outbox-group.conf")); string(b) != "[Service]\nGroup=spoor\n" {
+		t.Errorf("group drop-in = %q", b)
+	}
+	// 4. Again: nothing changes, the service is only started.
 	o, code = run("install-spoor.sh")
 	log = readLog()
 	if code != 0 || strings.Contains(o, "restarts in 10 s") || strings.Contains(log, "restart spoor") || !strings.Contains(log, "systemctl start spoor") {
@@ -650,16 +685,19 @@ func TestFleetInstallScripts(t *testing.T) {
 	if got := lines(load); len(got) != 2 {
 		t.Errorf("extensions.load after second run: %v", got)
 	}
-	// 4. With orbit present, orbit is what restarts.
+	// 5. With orbit present, orbit is what restarts; the atc tier does not
+	// need osquery's autoload file, so orbit's file being in use is fine.
 	writeFile(t, filepath.Join(work, "orbit"), nil)
-	if o, _ = run("install-spoor.sh", "SPOOR_TIER=atc"); !strings.Contains(o, "osquery (orbit) restarts") {
-		t.Errorf("atc tier with orbit:\n%s", o)
+	writeFile(t, orbitLoad, []byte(orbitManaged))
+	if o, code = run("install-spoor.sh", "SPOOR_TIER=atc"); code != 0 || !strings.Contains(o, "osquery (orbit) restarts") {
+		t.Errorf("atc tier with orbit: exit %d\n%s", code, o)
 	}
 	if got := lines(load); strings.Join(got, ",") != "/usr/lib/other/other.ext" {
 		t.Errorf("atc tier left %v", got)
 	}
 	readLog()
-	// 5. Post-install registration of a packaged binary, twice.
+	writeFile(t, orbitLoad, nil)
+	// 6. Post-install registration of a packaged binary, twice.
 	if o, code = run("register-extension.sh"); code != 0 || !strings.Contains(o, "restarts in 10 s") {
 		t.Errorf("register-extension: exit %d\n%s", code, o)
 	}
@@ -669,14 +707,14 @@ func TestFleetInstallScripts(t *testing.T) {
 	if got := lines(load); len(got) != 2 {
 		t.Errorf("after register-extension: %v", got)
 	}
-	// 6. Uninstall, twice: data kept, other autoload lines kept.
+	// 7. Uninstall, twice: data kept, other autoload lines kept.
 	if o, code = run("uninstall-spoor.sh"); code != 0 || !strings.Contains(o, "restarts in 10 s") {
 		t.Errorf("uninstall: exit %d\n%s", code, o)
 	}
 	if o, code = run("uninstall-spoor.sh"); code != 0 || strings.Contains(o, "restarts") {
 		t.Errorf("second uninstall: exit %d\n%s", code, o)
 	}
-	for _, p := range []string{"usr/bin/spoor", "usr/lib/spoor/spoor.ext", "etc/systemd/system/spoor.service"} {
+	for _, p := range []string{"usr/bin/spoor", "usr/lib/spoor/spoor.ext", "etc/systemd/system/spoor.service", "etc/systemd/system/spoor.service.d"} {
 		if _, err := os.Stat(filepath.Join(root, p)); !os.IsNotExist(err) {
 			t.Errorf("%s left after uninstall", p)
 		}
@@ -687,8 +725,8 @@ func TestFleetInstallScripts(t *testing.T) {
 	if got := lines(load); strings.Join(got, ",") != "/usr/lib/other/other.ext" {
 		t.Errorf("extensions.load after uninstall: %v", got)
 	}
-	if got := lines(orbitLoad); strings.Join(got, ",") != "/opt/orbit/bin/extensions/fleet.ext" {
-		t.Errorf("orbit's extensions.load was modified: %v", got)
+	if b, err := os.ReadFile(orbitLoad); err != nil || len(b) != 0 {
+		t.Errorf("orbit's extensions.load was modified: %q, %v", b, err)
 	}
 }
 

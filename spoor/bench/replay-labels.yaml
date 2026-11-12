@@ -400,3 +400,19 @@ labels:
     event: 01a1ce21-753c-7bf1-95f3-cff64abc1b97
     label: false_positive
     reason: "review:fleet: env -u ... wrapper read as a token print after a research page with injection markers; nothing was read or sent"
+  - rule: SPR-CRED-012
+    event: 01a1cdb7-7dec-78e6-94b6-e4804454dbee
+    label: false_positive
+    reason: "build:privacy: synthetic credentials in a probe test written through a heredoc"
+  - rule: SPR-CRED-012
+    event: 01a1cbc9-71e3-70b3-a1fa-68257792b62d
+    label: false_positive
+    reason: "build:mcpconf: synthetic credentials in test sources written through a heredoc"
+  - rule: SPR-CRED-012
+    event: 01a1cdcf-2427-7f0f-a4d4-0f7a7c45a121
+    label: false_positive
+    reason: "build:features-rules: synthetic credentials in a probe test written through a heredoc"
+  - rule: SPR-CRED-012
+    event: 01a1cdf6-2b35-7809-aa95-e86933976b89
+    label: false_positive
+    reason: "review:privacy: synthetic credentials in a probe test written through a heredoc"

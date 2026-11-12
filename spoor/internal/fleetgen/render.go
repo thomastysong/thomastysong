@@ -19,11 +19,11 @@ const (
 	// the agent options of tier 3 (the spoor extension), which must not
 	// carry them.
 	FileBaseExample = "agent-options.base.example.yml"
-	FileContent    = "CONTENT.md"
-	FileOptIn      = "opt-in/exec-events.reports.yml"
-	fileLabels     = "labels.yml"
-	filePolicies   = "policies.yml"
-	fileReports    = "reports.yml"
+	FileContent     = "CONTENT.md"
+	FileOptIn       = "opt-in/exec-events.reports.yml"
+	fileLabels      = "labels.yml"
+	filePolicies    = "policies.yml"
+	fileReports     = "reports.yml"
 )
 
 // ProfileFile returns the path of one of a profile's files ("labels",

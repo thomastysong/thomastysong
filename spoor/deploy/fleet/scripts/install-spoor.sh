@@ -3,12 +3,10 @@
 # Fleet script for macOS and Linux (runs as root); safe to run again.
 # Set the URL and SHA-256 of each build below. A value may name a Fleet
 # custom variable (FLEET_SECRET_* with a leading dollar sign): Fleet fills it
-# in before the script runs, and fleetctl gitops then requires it to be set,
-# even in a comment. TIER must match the agent options: extension (tier 3,
-# agent options without spoor's ATC tables) or atc (tier 2, ATC agent
-# options; the extension is not registered). Fleet runs scripts without
-# environment variables, so edit the defaults here; the SPOOR_* variables
-# are for running the script by hand.
+# in, and fleetctl gitops then requires it to be set, even in a comment.
+# TIER must match the agent options: extension (tier 3, no spoor ATC tables)
+# or atc (tier 2, ATC agent options; no extension). Fleet scripts get no
+# environment variables: edit the defaults here (SPOOR_* is for manual runs).
 set -eu
 umask 022
 
@@ -49,13 +47,12 @@ esac
 EXT=$EXTDIR/spoor.ext
 # orbit rewrites its own autoload file; osquery's default one is ours to use.
 case $LOAD in */orbit/*) die "refusing to write orbit's extensions.load" ;; esac
-# But when orbit's file is not empty (Fleet manages extensions here, the
-# `extensions` agent option), orbit starts osquery with --extensions_autoload
-# pointing at it, osquery ignores $LOAD, and spoor would never load.
+# But when orbit's file is not empty (Fleet manages extensions here), orbit
+# points osquery's --extensions_autoload at it and $LOAD is ignored.
 if [ "$TIER" = extension ]; then
 	for f in "$ROOT/opt/orbit/extensions.load" "$ROOT/var/lib/orbit/extensions.load"; do
 		if [ -s "$f" ]; then
-			die "orbit loads osquery extensions from $f (Fleet's extensions agent option), so osquery ignores $LOAD. Deliver spoor through that agent option, or use TIER=atc with the ATC agent options."
+			die "orbit loads osquery extensions from $f (Fleet's extensions agent option), so osquery ignores $LOAD. Deliver spoor through that agent option, or use TIER=atc and ATC."
 		fi
 	done
 fi
@@ -166,8 +163,14 @@ MemoryMax=512M
 [Install]
 WantedBy=multi-user.target
 EOF
+	# StateDirectory= re-owns /var/lib/spoor (recursively) to the service's
+	# group at start: root without Group=. The state DB is 0600 and spools
+	# 0700, so the group reads only the 0640 outbox.
+	printf '[Service]\nGroup=spoor\n' >"$tmp/group.conf"
 	changed=0
 	put "$tmp/unit" "$UNIT" 0644
+	mkdir -p "$UNIT.d"
+	put "$tmp/group.conf" "$UNIT.d/10-outbox-group.conf" 0644
 	[ $changed = 1 ] && systemctl daemon-reload
 	systemctl enable spoor >/dev/null 2>&1 || true
 	if [ $changed = 1 ] || [ $bin_changed = 1 ]; then systemctl restart spoor; else systemctl start spoor; fi

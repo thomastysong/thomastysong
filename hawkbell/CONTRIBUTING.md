@@ -18,10 +18,10 @@ CGO_ENABLED=0 go build -o hawkbell ./cmd/hawkbell     # or: make build  (writes 
 To install from source without a checkout:
 
 ```
-go install github.com/thomastysong/thomastysong/hawkbell/cmd/hawkbell@main   # or @<commit>
+go install github.com/thomastysong/thomastysong/hawkbell/cmd/hawkbell@<commit>   # or @<branch>
 ```
 
-The module is `github.com/thomastysong/thomastysong/hawkbell`: the code lives in the `hawkbell/` directory of the `thomastysong/thomastysong` repository. For a module in a subdirectory the go command resolves a version such as `@v1.2.3` only from a tag named `hawkbell/v1.2.3`, so version tags of hawkbell take that form until it moves to its own repository (the module path changes then). No version is tagged yet; `@main` and `@<commit>` resolve to pseudo-versions.
+The module is `github.com/thomastysong/thomastysong/hawkbell`: the code lives in the `hawkbell/` directory of the `thomastysong/thomastysong` repository. For a module in a subdirectory the go command resolves a version such as `@v1.2.3` only from a tag named `hawkbell/v1.2.3`, so version tags of hawkbell take that form until it moves to its own repository (the module path changes then). No version is tagged yet. The repository's `main` branch does not contain `hawkbell/` yet (on 2026-11-12 it held only `README.md`), so name a commit or a branch that does; the go command resolves either to a pseudo-version. `@main` works once hawkbell is merged there.
 
 `make build` stamps the version from the latest `hawkbell/v*` tag (`0.0.0-dev` without one) and builds reproducibly (`-trimpath`, no VCS stamp, empty build id). `make help` lists every target:
 
@@ -65,8 +65,10 @@ Windows and macOS builds are cross-compiled and the unit tests run on Linux; beh
 go vet ./...
 go test ./...          # or: make test
 make fmt-check         # gofmt
-make lint              # fmt-check, vet, staticcheck when installed, then `make rules`
+make lint              # fmt-check, vet and `make rules`, then staticcheck when installed
 ```
+
+`.github/workflows/ci.yml` runs `go vet`, `go test`, `make fmt-check` and `make rules`, plus cross builds, `make licenses-check`, `make bench`, the package build and the CLI, container, package, Fluent Bit and Fleet-script end-to-end suites; it does not run `make lint` or staticcheck. It has not run on GitHub yet: it sits under `hawkbell/`, where GitHub does not look for workflows (see the note at its top). Run the targets locally.
 
 Unit tests must not use the network or Docker, must write nothing outside `t.TempDir()`, and skip (rather than fail) what needs root. They are table-driven and include hostile input (huge, deeply nested, invalid UTF-8, path traversal, symbolic links, FIFOs where relevant): every input hawkbell reads (hook stdin, transcripts, configuration, command lines, rule packs) is attacker-controlled somewhere. A new parser or reader comes with tests of that kind.
 
@@ -78,7 +80,7 @@ Some files are generated, and their tests fail until they are regenerated:
 | record shapes the binary writes | `sudo env "PATH=$PATH" docs/schema/examples/regen.sh`, then update the examples quoted in `docs/EVENTS.md` | same |
 | `internal/rules/packs/*.yaml`, `internal/rules/lists.yaml` | `go generate ./internal/rules` (writes `packs/embedded.cache`) | `go test ./internal/rules` |
 | the shipped packs | the catalogue in `docs/RULES.md` (jq program shown there) | review |
-| `go.mod` (a dependency added, removed or bumped) | `go run ./tools/licensegen -repo . -out THIRD_PARTY_LICENSES`; it stops on a license text it has not seen, so read the new text and extend its reviewed table, and `moduleLicenses` in `cmd/hawkbell/version.go` | `make licenses-check` (CI) and `go test ./cmd/hawkbell` |
+| `go.mod` (a dependency added, removed or bumped) | `go run ./tools/licensegen -repo . -out THIRD_PARTY_LICENSES`; it stops on a license text it has not seen, so read the new text and extend its reviewed table, and `moduleLicenses` in `cmd/hawkbell/version.go` | `make licenses-check` and `go test ./cmd/hawkbell` |
 
 ## Detection rules
 
@@ -90,9 +92,9 @@ Rules are the most useful contribution and the easiest to get wrong. The languag
    ```
    $ make rules
    ...
-   138 rules: 0 error(s), 53 warning(s)
+   138 rules: 0 error(s), 54 warning(s)
    dist/hawkbell rules test
-   579 tests over 138 rules, 0 failed
+   655 tests over 138 rules, 0 failed
    ```
 
 3. Measure it, do not assert it. Add attack scenarios and benign look-alikes under `bench/scenarios/` and run the scenario benchmark (`make bench`, or `go run ./internal/bench/cmd/benchrun -scenarios bench/scenarios -out <dir>`); if you can, replay real agent sessions you are allowed to use (the command is at the end of `bench/results/benign-replay.md`). Report false positives with the rule id and a synthetic reproduction.
@@ -107,16 +109,24 @@ Never commit a credential in a provider's real format, not even a fake one: test
 - Check before you push:
 
   ```
-  grep -rnE 'AKIA[0-9A-Z]{16}|aws_secret_access_key *[=:] *[A-Za-z0-9/+]{40}|sk-ant-api0[3]-|ghp_[A-Za-z0-9]{36}|-----BEGIN [A-Z ]*PRIVATE KEY' <changed paths>
+  grep -rnE \
+    -e 'A(KIA|SIA)[0-9A-Z]{16}' \
+    -e 'aws_secret_access_key *[=:] *[A-Za-z0-9/+]{40}' \
+    -e 'gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{60,}' \
+    -e 'sk-ant-[a-z]+0[0-9]-[A-Za-z0-9_-]{40,}|sk-(proj|svcacct|admin)-[A-Za-z0-9_-]{40,}|sk-[A-Za-z0-9]{20}T3BlbkFJ' \
+    -e 'xox[abposr]-[0-9A-Za-z-]{20,}|xapp-[0-9]-[0-9A-Za-z-]{20,}' \
+    -e 'eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{20,}' \
+    -e '-----BEGIN [A-Z ]*PRIVATE KEY' \
+    <changed paths>
   ```
 
-  It must print nothing.
+  It must print nothing. One pattern per format above: AWS key ids and `aws_secret_access_key` assignments (a 40-character secret under another name is not caught), GitHub tokens, Anthropic and OpenAI keys, Slack tokens, JWTs and PEM private key headers. Except for the PEM header, they match full-length values only, so a prefix with a short or run-time tail (`"sk-ant-api03-" + rnd(...)`) passes. Over the whole tree it printed nothing on 2026-11-12.
 
 The same goes for real data: no real prompts, transcripts, hostnames or user names in fixtures or bug reports.
 
 ## End-to-end tests
 
-The end-to-end suites live in `test/e2e`, behind the `e2e` build tag, and run real processes. Each gated suite skips (with the reason) unless its environment variable is set and what it needs is present. All of them run on Linux and write nothing outside `t.TempDir()`, Docker and the Go caches.
+The end-to-end suites live in `test/e2e`, behind the `e2e` build tag, and run real processes. Each gated suite skips (with the reason) unless its environment variable is set and what it needs is present. The `go test` suites run on Linux and, run on their own, write nothing outside `t.TempDir()`, Docker and the Go caches. Two exceptions: `deploy/fleet/verify.sh` is not a `go test` suite and changes a live Fleet server for the length of the run (it applies content and deletes it again, and writes its work files under `$WORK`); and when `verify.sh` runs the Fleet harness, the harness writes to the paths `verify.sh` gives it (`HAWKBELL_FLEET_OUT`, `HAWKBELL_FLEET_DB`; see the header of `test/e2e/fleet_test.go`).
 
 | Suite | Command | Needs |
 |---|---|---|
@@ -124,10 +134,10 @@ The end-to-end suites live in `test/e2e`, behind the `e2e` build tag, and run re
 | Fluent Bit: tags and event time per stream, the kill test (output down, restart, 5,000 of 5,000 delivered), head-of-line blocking, rejected chunks kept, an oversized record | `HAWKBELL_E2E_FLUENTBIT=1 go test -tags e2e ./test/e2e -run FluentBit -v` | Docker and the `fluent/fluent-bit:latest` image present locally (the tests never pull). |
 | Containers and packages: the Kubernetes node sensor in Docker (`--pid=host`, two capabilities, planted symlinks refused), in-image hook mode, deb and rpm install, upgrade, remove and purge | `HAWKBELL_E2E_CONTAINER=1 go test -tags e2e ./test/e2e -run 'Container\|Package' -v` | Docker with `mirror.gcr.io/library/redis:7` (and `mirror.gcr.io/library/rockylinux:9` for rpm) present locally, the Dockerfile's base images; nfpm (`HAWKBELL_NFPM` or on `PATH`) for the package tests, which skip without it; root for the ptrace probe. |
 | Fleet harness: generated Fleet content, state databases written through the daemon's writer, the Fleet install scripts in a container | `HAWKBELL_E2E_FLEET=1 go test -tags e2e ./test/e2e -run Fleet -v` | Docker with `mirror.gcr.io/library/redis:7` for the install scripts. |
-| Fleet, live: applies the content to a running Fleet server, runs every `hawkbell_*` table and policy as a live query on an enrolled osquery host, restores the server's agent options | `deploy/fleet/verify.sh` (read its header first; the output of a run is `deploy/fleet/VERIFIED.md`) <!-- VERIFY: not re-run while this page was written, because it changes a shared Fleet server while it runs --> | A Fleet server you may change temporarily, `fleetctl` logged in, one enrolled osquery host. It never runs `fleetctl gitops` for real and deletes what it applied. |
-| Real agent: a real Claude Code process (`claude -p`) against a local stand-in for the model API, with the hooks `hawkbell hooks install` registered, the daemon, Fluent Bit when available, then guard mode | `HAWKBELL_E2E_AGENT=1 go test -tags e2e ./test/e2e -run RealAgent -v` | Linux, root (private mount and PID namespaces), `unshare`, `nsenter`, overlayfs, Claude Code and node (`HAWKBELL_E2E_CLAUDE`, `HAWKBELL_E2E_NODE`, `PATH` or `/opt/node22/bin`) not installed under `/root` or `/home`. No model API key: the model is a local stand-in. |
+| Fleet, live: applies the content to a running Fleet server, runs every `hawkbell_*` table and policy as a live query on an enrolled osquery host, restores the server's agent options | `deploy/fleet/verify.sh` (read its header first: it lists the environment variables, such as `FLEET_HOST` and `HAWKBELL_BIN`). The output of a run is `deploy/fleet/VERIFIED.md`; its last run, after the rename, passed 240 of 240 checks. | A Fleet server you may change temporarily, `fleetctl` logged in, one enrolled osquery host; Go and `jq` on the machine that runs it (it builds its state databases with the Fleet harness above). It never runs `fleetctl gitops` for real and deletes what it applied. |
+| Real agent: a real Claude Code process (`claude -p`) against a local stand-in for the model API, with the hooks `hawkbell hooks install` registered, the daemon, Fluent Bit when available, then guard mode | `HAWKBELL_E2E_AGENT=1 go test -tags e2e ./test/e2e -run RealAgent -v` | Linux, root (private mount and PID namespaces), `unshare`, `nsenter`, `curl`, overlayfs, Claude Code and node (`HAWKBELL_E2E_CLAUDE`, `HAWKBELL_E2E_NODE`, `PATH` or `/opt/node22/bin`) not installed under `/root` or `/home`; Docker and the `fluent/fluent-bit:latest` image present locally for the optional Fluent Bit step. No model API key: the model is a local stand-in. |
 
-`make e2e-container` runs the container, package, Fluent Bit and Fleet-script suites together. Results of these suites on real software are committed as `deploy/fluent-bit/VERIFIED.md`, `deploy/fleet/VERIFIED.md`, `deploy/kubernetes/VERIFIED.md` and `test/e2e/REAL-AGENT.md`; regenerate the one your change affects.
+`make e2e-container` runs the container, package, Fluent Bit and Fleet-script suites together. Results of these suites on real software are kept as hand-written run records: `deploy/fluent-bit/VERIFIED.md`, `deploy/fleet/VERIFIED.md`, `deploy/kubernetes/VERIFIED.md`, `test/e2e/REAL-AGENT.md`, and the run-log sections of `packaging/README.md` for the deb and rpm package suites. No command regenerates them. When your change affects one, rerun the suite and append a dated rerun section with the commands and results (as the "Rerun after the rename (2026-11-12)" sections do); do not rewrite earlier sections.
 
 ## Code and documentation conventions
 

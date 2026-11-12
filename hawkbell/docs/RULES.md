@@ -13,7 +13,7 @@ The authoritative reference for the language is the package comment of `internal
 | `hawkbell hook` with `sources.hooks.detect_in_hook: true` | every rule | For daemonless use (containers, CI, evaluation); records are user-integrity. |
 | `hawkbell detect` | every rule | Central re-evaluation of shipped records (with rules you do not publish), CI, benchmarks. |
 
-Rule content is loaded in this order, and a later rule with the same id replaces an earlier one: the packs embedded in the binary (`internal/rules/packs/*.yaml` and `internal/rules/lists.yaml`), the installed signed bundle (`<data_dir>/bundle`, see [Signed bundles](#signed-bundles)), the directories in `rules.dirs` (root-owned and not group- or world-writable), and, for the CLI, `--dir`/`--rules` directories. `rules.disable` switches rule ids off. `--no-embedded` drops the embedded packs and `--no-host-rules` ignores the host's bundle and `rules.dirs`, so a command shows exactly the content you point it at.
+Rule content is loaded in this order, and a later rule with the same id replaces an earlier one: the packs embedded in the binary (`internal/rules/packs/*.yaml` and `internal/rules/lists.yaml`), the installed signed bundle (`<data_dir>/bundle`, see [Signed bundles](#signed-bundles)), the directories in `rules.dirs` (each directory and file owned by root or by the account running the command, not writable by group or others, symbolic links not followed: `LoadDir` in `internal/rules/load.go`), and, for the CLI, `--dir`/`--rules` directories. `rules.disable` switches rule ids off. `--no-embedded` drops the embedded packs and `--no-host-rules` ignores the host's bundle and `rules.dirs`, so a command shows exactly the content you point it at.
 
 Every finding is stamped with the content it came from (labels `rule_pack`, `rule_pack_version`, `rules_hash`, `rules_version`, `bundle_version`), and the heartbeat reports the rule count and hash, so a rule change is visible in every record it affects.
 
@@ -39,8 +39,9 @@ A pack is one YAML document with `pack` (name), `version`, `description` and `ru
 
 | Key | Required | Values (default) | Meaning |
 |---|---|---|---|
-| `id` | yes | letters, digits, `.`, `_`, `-`; at most 64 | Shipped rules use `HB-<AREA>-<NNN>`. Use your own prefix. `HB-COV-9xx` and `HB-SCAN-*` are taken by ids hawkbell's code writes ([below](#detections-that-are-not-in-a-pack)); the loader does not stop a rule from using them, so do not. |
-| `title`, `description` | | text | `title` becomes `detection.title`. |
+| `id` | yes | letters, digits, `.`, `_`, `-`, starting with a letter or digit; at most 64 | Shipped rules use `HB-<AREA>-<NNN>`: an area code and three digits. Most packs have one area code (`credential` uses `CRED`, `defense-evasion` `EVADE`); the `sequence` pack has two, `FLOW` for its flag-only rules and `SEQ`. Lint warns (`id_format`) about an id that is not `PREFIX-AREA-NNN` in capitals. Use your own prefix. `HB-COV-9xx` and `HB-SCAN-*` are taken by ids hawkbell's code writes ([below](#detections-that-are-not-in-a-pack)); the loader does not stop a rule from using them, so do not. |
+| `title` | yes (lint error when empty) | text | Becomes `detection.title`. A rule with an empty title loads, but `rules lint` reports an error. |
+| `description` | | text | Lint warns when it is empty. |
 | `kind` | | `activity` (default), `inventory` | Activity rules see activity records; inventory rules see `inventory.asset` records and produce `posture.check` records. |
 | `class` | | `signal`, `finding` (default), `alert` | See [Classes](#classes). |
 | `severity` | yes | `info`, `low`, `medium`, `high`, `critical` | |
@@ -138,7 +139,7 @@ Suppressions are operator exceptions, in the configuration (`rules.suppressions`
 ```yaml
 rules:
   suppressions:
-    - rule: HB-EXEC-001             # a rule id or a glob ("HB-NET-*", "*")
+    - rule: HB-EXEC-001             # a rule id or a glob ("HB-EXFIL-*", "*")
       match:
         shell.hosts: "get.example.net"   # field -> glob; every entry must match
       tags: [platform-eng]           # optional: only on hosts with one of these tags
@@ -148,9 +149,11 @@ rules:
 
 On a list field every element must match the glob, so an exception written for a trusted destination does not silence the same rule when an untrusted destination rides along; write the key as `field|any` to accept a list when any one element matches. A list named in `content.truncated_fields` never matches. Suppressed matches are counted (heartbeat `rules.suppressed_operator`).
 
+`rule` is required in both places; a bundle's `suppressions.yaml` also requires `reason`. The two read a bare date differently: in the configuration `2027-01-31` lasts through the end of that day (UTC; `parseExpiry` in `internal/engine/options.go`), while in a bundle's `suppressions.yaml` it ends at 00:00 UTC on that date (`internal/rules/set.go`). Write an RFC 3339 time in a bundle to be exact.
+
 ### Tests
 
-Every rule carries at least one inline test (at most 64). A test has a `name`, either one `event` or a list of `events` (up to 64, evaluated in order on one session, one second apart), and `expect: match` or `expect: no_match` for the last event. Optional: `content` (local-only material for the last event, such as tool input or file content being written), `feat` (feature values forced on the last event) and `flags` (session flags preset for the last event's thread). Events use the record's own field names in YAML flow style:
+Every rule carries at least one inline test (at most 64). A test has a `name`, either one `event` or a list of `events` (up to 64, evaluated in order on one session, one second apart), and `expect: match` or `expect: no_match` for the last event. Optional: `content` (local-only material for the last event: `prompt_text`, `tool_input`, `tool_output` or `file_content`), `feat` (feature values forced on the last event) and `flags` (session flags preset for the last event's thread). `content` and `feat` can also be written inside any event, as the HB-AGENT-001 tests do. Events use the record's own field names (an unknown key is an error), in flow or block style:
 
 ```yaml
     tests:
@@ -237,9 +240,9 @@ $ hawkbell rules lint --no-host-rules --no-embedded --dir myrules
 warning ACME-KUBE-001 [missing_field]: no framework tags
 2 rules: 0 error(s), 1 warning(s)
 $ hawkbell rules list --no-host-rules --dir myrules | grep -E '^(ID|ACME)'
-ID              CLASS    SEVERITY  RESPONSE  PACK             ON   TITLE
-ACME-KUBE-001   signal   info      none      acme             yes  Agent reads the production kubeconfig
-ACME-KUBE-002   finding  high      none      acme             yes  kubectl delete after the production kubeconfig was read
+ID             CLASS    SEVERITY  RESPONSE  PACK             ON   TITLE
+ACME-KUBE-001  signal   info      none      acme             yes  Agent reads the production kubeconfig
+ACME-KUBE-002  finding  high      none      acme             yes  kubectl delete after the production kubeconfig was read
 ```
 
 Drop `--no-embedded` to test your rules together with the shipped ones (their flags interact). A rule that matches command text fails lint, and a test that does not hold fails the run; both exit 4:
@@ -257,7 +260,7 @@ FAIL ACME-BAD-001 echo: got match, want no_match: when=true; match=true
 2 tests over 1 rules, 1 failed
 ```
 
-(`badrules/bad.yaml` matched `target.command|contains: terraform destroy`, so `echo terraform destroy` matched too.) Lint also reports unknown fields, literals outside a closed vocabulary, type mismatches, unknown lists, alert rules with fewer than two negative tests, responses on types that cannot be answered, `response: block` in an embedded pack, duplicate ids and rules with no effect; `--strict` fails on warnings too. All three commands take `--json`.
+(`badrules/bad.yaml` matched `target.command|contains: terraform destroy`, so `echo terraform destroy` matched too.) Lint also reports, as errors, an empty title, unknown fields, literals outside a closed vocabulary, type mismatches, unknown lists, invalid regular expressions, alert rules with fewer than two negative tests, responses on types that cannot be answered, `response: block` in an embedded pack, flags on inventory rules, duplicate ids and rules with no effect; and, as warnings, a rule with no positive or no negative test, an id not in `PREFIX-AREA-NNN` form, a required flag that no rule sets, and a regular expression with no literal prefix (`internal/rules/lint.go`). `--strict` fails on warnings too. The shipped packs lint with 0 errors and 54 warnings, all `regex_no_prefix` (run 2026-11-12). All three commands take `--json`.
 
 To try a rule on recorded activity, run `hawkbell detect --rules myrules <files>` over NDJSON (outbox or local-ring segments, hook spool files, numbat output). It exits 3 when a detection at or above `--fail-on` (default `high`) is found.
 
@@ -284,7 +287,7 @@ go test ./internal/rules
 
 ## Signed bundles
 
-Rules, lists, suppressions and catalog overlays reach hosts as an Ed25519-signed archive that each host verifies before installing it. There is no hawkbell server: the bundle and its detached signature are two static files at a URL you choose (`bundle.url`), or a file dropped on the host (air-gapped hosts, MDM). Versions only ever increase; hosts refuse a downgrade. The commands below were run as shown, with `hawkbell.yaml` holding `data_dir` and the printed `bundle.public_keys` entry; the key is the one that run made.
+Rules, lists, suppressions and catalog overlays reach hosts as an Ed25519-signed archive that each host verifies before installing it. There is no hawkbell server: the bundle and its detached signature are two static files at a URL you choose (`bundle.url`), or a file dropped on the host (air-gapped hosts, MDM). Versions only ever increase; hosts refuse a downgrade. The commands below were run as shown on 2026-11-12 with the shipped packs of that day (hash `82523dea0cec`), with `hawkbell.yaml` holding `data_dir` and the printed `bundle.public_keys` entry; the key is the one that run made. The archive's size and digest were the same as in an earlier run of these commands with another key, since the signature is a separate file.
 
 1. Make a signing key pair once, and keep the private key offline:
 
@@ -292,11 +295,11 @@ Rules, lists, suppressions and catalog overlays reach hosts as an Ed25519-signed
    $ hawkbell bundle keygen --out keys/acme-rules
    private key: keys/acme-rules.key (keep it offline)
    public key:  keys/acme-rules.pub
-   key id:      f36c832922f644be
+   key id:      7f1742d4d4b3d017
 
    bundle:
      public_keys:
-       - 8kIRgxdY6cRWuk3ErQ+otIyhE4BrFN1tBcVFW/sFuDk=
+       - R0uOh9tqcc+dEPv04nyjQUC7jwfeaY4yakcorOcU24o=
    ```
 
    The private key file is written mode 0600; existing files are never replaced. Put the printed `bundle.public_keys` entry in every host's configuration.
@@ -328,7 +331,7 @@ Rules, lists, suppressions and catalog overlays reach hosts as an Ed25519-signed
    $ hawkbell bundle pull --config hawkbell.yaml --file out/acme-rules-1.tar.gz
    bundle version 1 is current
    $ hawkbell rules list --config hawkbell.yaml | tail -1
-   140 rules (140 enabled), content acme@2026.11.1,agent-integrity@2026.11.0,coverage@2026.11.0,credential@2026.11.0,defense-evasion@2026.11.0,destructive@…, hash 1be3db6b5bc2
+   140 rules (140 enabled), content acme@2026.11.1,agent-integrity@2026.11.0,coverage@2026.11.0,credential@2026.11.0,defense-evasion@2026.11.0,destructive@…, hash fd0d3a024ceb
    ```
 
    The running daemon picks the new content up without a restart, and the bundle version appears on every finding (`labels.bundle_version`) and in the heartbeat.
@@ -584,8 +587,11 @@ Findings relayed from another sensor are not rules either: numbat findings read 
 
 Inline tests prove a rule does what it says. How well the packs detect real attack mechanics, and how often they fire on ordinary work, is measured separately and committed under [`bench/results/`](../bench/results/). Per-rule figures are in those files; read them with their limits, which each file states.
 
-- [`scenarios.md`](../bench/results/scenarios.md) ("Per rule", "Per technique"): a synthetic corpus written from the incident mechanics in the project's threat research, 100 attack scenarios covering 48 incident rows and 84 benign look-alikes, with mutations of every shell command (quoting, `$IFS`, `sh -c`, variable assembly, an interpreter one-liner, write-then-run). It reports plain recall 95/100 = 95.0% [88.8, 97.8], robust recall (detected under every applicable mutation) 94/100 = 94.0% [87.5, 97.2], benign look-alikes with an alert-class hit 0/84 = 0.0% [0.0, 4.4] and with a finding-class hit 5/84 = 6.0% [2.6, 13.2], each with a Wilson 95% interval. The corpus was written by the same project that wrote the rules (not blind), so its recall is an upper bound, and cells with fewer than 30 trials are marked insufficient.
-- [`benign-replay.md`](../bench/results/benign-replay.md) ("Per rule", "Sampled hits", "Review of the numbers"): the rules replayed over real Claude Code sessions on one machine (94 transcript files of one root session, 5,337 tool calls, the agents that built and red-teamed this project), every sampled hit labelled false positive, red-team experiment or rule bug, with the before/after table of the tuning. After tuning, no false-positive alert in 5,337 tool calls (Wilson 95% upper bound 0.72 per 1,000) and every finding-class rule under 5 hits per 1,000 tool calls. One workload, one machine: it bounds benign rates for this workload only and says nothing about prevalence.
-- [`live-benign-replay.md`](../bench/results/live-benign-replay.md): the same rules over a later snapshot (106 threads, 6,522 tool calls). It was not regenerated after the rename: it and `live-benign-replay.json` keep the old name and rule ids.
+- [`scenarios.md`](../bench/results/scenarios.md) ("Per rule", "Per technique"): a synthetic corpus written from the incident mechanics in the project's threat research, 100 attack scenarios covering 48 incident rows and 87 benign look-alikes, with mutations of every shell command (quoting, `$IFS`, `sh -c`, variable assembly, an interpreter one-liner, write-then-run) and hand-written variants: 315 mutation and variant runs in all. It reports plain recall 95/100 = 95.0% [88.8, 97.8], robust recall (detected as written and under every applicable mutation and variant) 94/100 = 94.0% [87.5, 97.2], benign look-alikes with an alert-class hit 0/87 = 0.0% [0.0, 4.2], with a finding-class hit 5/87 = 5.7% [2.5, 12.8] and with a signal-class hit 14/87 = 16.1% [9.8, 25.2], each with a Wilson 95% interval; the 16 path-spelling variants added with path canonicalisation are all detected ("After path canonicalisation"). The corpus was written by the same project that wrote the rules (not blind), so its recall is an upper bound, and cells with fewer than 30 trials are marked insufficient.
+- [`benign-replay.md`](../bench/results/benign-replay.md) ("Per rule", "Sampled hits", "Review of the numbers"): the rules replayed over real Claude Code sessions on one machine (94 files of one root session, of which 70 are agent threads and 24 workflow journals; 5,337 tool calls; the agents that built and red-teamed this project), every sampled hit labelled false positive, red-team experiment or rule bug, with the before/after table of the tuning. The 3 alerts are 1 red-team experiment and 2 rule bugs (HB-EVADE-003 on staging copies of managed settings in a scratch directory), so 2 false alerts in 5,337 tool calls: 0.37 per 1,000, Wilson 95% [0.10, 1.37]. The highest finding-class rate is 1.31 per 1,000 tool calls (HB-CRED-007 and HB-EVADE-001). The first table of its review still shows 0 false alerts, the labelling at that time; the dated paragraphs at its end give the current labels.
+- [`release-benign-replay.md`](../bench/results/release-benign-replay.md): a later snapshot of the same machine (172 files holding 136 agent threads, 13,864 tool calls). 17 alerts: 4 red-team experiments, 11 false positives and 2 rule bugs. The 11 false positives are this project installing, configuring, upgrading and cleaning up the sensor and its test agent policies, work that HB-EVADE-002 and HB-EVADE-003 list under `falsepositives` ("Review of the numbers (release rerun)", "Alerts, one by one"). That is 13 false alerts in 13,864 tool calls: 0.94 per 1,000, Wilson 95% [0.55, 1.60]. 72 finding-class hits; the highest finding-class rate is 1.08 per 1,000 (HB-EVADE-001).
+- [`live-benign-replay.md`](../bench/results/live-benign-replay.md): the same rules over an intermediate snapshot (106 files, 6,522 tool calls). It was not regenerated after the rename: it and `live-benign-replay.json` keep the old name and rule ids, and its labels are from before the release review (`benign-replay.md`, "Rerun with the release code", gives 3 false alerts for it under the current labels).
+
+Each replay is one workload on one machine: it bounds benign rates for that workload only and says nothing about prevalence.
 
 Reproduce the scenario numbers with `go run ./internal/bench/cmd/benchrun -scenarios bench/scenarios -out <dir>` (or `make bench`, which also runs the benchmark's gate test); the replay command is at the end of `benign-replay.md`. The committed replays read session logs recorded before the rename from the working name spoor to hawkbell and add `-old-name` to that command; the committed reports were also checked against the reports made before the rename with `-renamed-from` (see the package comment of `internal/bench/cmd/benchrun`).

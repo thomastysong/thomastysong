@@ -4,8 +4,11 @@ Fleet content for hawkbell: labels, policies and reports over hawkbell's state
 database, agent options that expose it to osquery, install scripts, and
 package examples. Written for Fleet 4.94 (its vocabulary: *fleets*, not
 teams; *reports*, not queries) and osquery 5. What was checked against a
-live Fleet 4.94.1 server and osquery 5.19 host, and what was not, is in
-[VERIFIED.md](VERIFIED.md).
+live Fleet 4.94.1 (Free) server and one plain osquery 5.19.0 host on Ubuntu,
+and what was not, is in [VERIFIED.md](VERIFIED.md) (in the source tree;
+`hawkbell export fleet` does not write it). The last run there, after the
+rename: 240 checks, 0 failed, ATC and extension tiers. Only Linux was run:
+the macOS and Windows parts are untested.
 
 ```
 deploy/fleet/
@@ -27,8 +30,13 @@ deploy/fleet/
 Regenerate `lib/` after changing the state tables, the catalog or the
 generator: `go test ./internal/fleetgen -run TestGolden -update`. The golden
 test fails when the committed files differ from the generator's output.
-`hawkbell export fleet` (cmd/hawkbell) is meant to write the same files with a
-host's own paths through `fleetgen.Generate`.
+`hawkbell export fleet --out DIR` writes this tree from the binary: `lib/`
+generated through `fleetgen.Generate` with the state database path from the
+host's configuration (`--bin-path` sets the binary path,
+`--min-bundle-version` the "rules bundle is current" threshold), and the
+other files as they were embedded at build time (cmd/hawkbell/export.go,
+deploy/embed.go). With the default paths its output equals this directory
+except VERIFIED.md and verify.sh, which are not embedded.
 
 ## Three tiers
 
@@ -42,16 +50,19 @@ host's own paths through `fleetgen.Generate`.
 
 Tiers 2 and 3 are alternatives: ATC and the extension both provide the
 `hawkbell_*` table names. With the ATC agent options in place, osquery 5.19
-refuses the extension ("Registry item hawkbell_agent_processes conflicts with
-another item of the same name") and the extension restarts every few
-seconds (VERIFIED.md). So the agent options and the install method must be
-the same tier, host by host:
+refuses the extension ("Registry item ..._agent_processes conflicts with
+another item of the same name") and osquery respawns the extension every
+few seconds (VERIFIED.md section 3, recorded under the old name spoor). So
+the agent options and the install method must be the same tier, host by
+host:
 
 - **Tier 3** (the examples in `gitops/`): agent options without hawkbell's ATC
-  tables (`lib/agent-options.base.example.yml` shows a base;
-  `fleetgen.StripAgentOptions` removes them from yours), install scripts at
-  their default `TIER=extension`, packages with the `register-extension`
-  post-install script.
+  tables (`lib/agent-options.base.example.yml` shows a base; to remove them
+  from your own, delete the `hawkbell_*` entries under
+  `auto_table_construction` in `config` and in every override:
+  `fleetgen.StripAgentOptions` does this in Go, but no hawkbell command
+  runs it), install scripts at their default `TIER=extension`, packages
+  with the `register-extension` post-install script.
 - **Tier 2**: `lib/agent-options.example.yml` (your options with the ATC
   fragment merged in), `TIER=atc` in both install scripts (it skips, and
   unregisters, the extension), and no `post_install_script` in the package
@@ -60,22 +71,26 @@ the same tier, host by host:
 Fleet runs scripts without environment variables, so the tier is set in the
 script file itself, next to the download URLs and hashes (`TIER=` in
 `install-hawkbell.sh`, `$Tier` in `install-hawkbell.ps1`); `HAWKBELL_TIER` only
-overrides it when you run a script by hand. A test in `internal/fleetgen`
-holds every example file to one tier.
+overrides it when you run a script by hand. `TestGitOpsExamplesUseOneTier`
+in `internal/fleetgen` holds every example file to one tier.
 
 **fleetd hosts where Fleet manages osquery extensions.** When Fleet's
 `extensions` agent option (Premium, your own TUF server) puts anything in
 orbit's own `extensions.load` (`/opt/orbit/extensions.load`,
 `C:\Program Files\Orbit\extensions.load`), orbit starts osquery with
-`--extensions_autoload` pointing at that file, after the flagfile, and
-osquery ignores its default `extensions.load` (orbit/cmd/orbit/orbit.go).
-An extension registered there never loads. The extension tier therefore
-refuses such hosts: the install scripts and the post-install script exit
-with that reason (for a package, Fleet then marks the install failed and
-rolls it back). On those hosts publish hawkbell through the `extensions` agent
-option, or use tier 2. If Fleet starts managing an extension on a host
-after hawkbell was registered, hawkbell's extension stops loading; the **"hawkbell
-tables unavailable"** label lists such hosts.
+`--extensions_autoload` pointing at that file, and
+osquery ignores its default `extensions.load` (Fleet's
+`orbit/cmd/orbit/orbit.go`, read in Fleet's source, not run: VERIFIED.md,
+"Not verified here"). An extension registered there never loads. The
+extension tier therefore refuses such hosts: the install scripts and the
+post-install scripts exit with that reason when orbit's file is not empty
+(the shell scripts also check `/var/lib/orbit/extensions.load`). For a
+package, Fleet's documentation says it then marks the install failed and
+rolls it back; that was not run (no Premium server). On those hosts
+publish hawkbell through the `extensions` agent option, or use tier 2. If
+Fleet starts managing an extension on a host after hawkbell was registered,
+hawkbell's extension stops loading; the **"hawkbell tables unavailable"**
+label lists such hosts.
 
 Pick the profile by agent: `fleetd` for hosts running Fleet's
 agent (its policies also read `ai_tools`, which plain osquery does not have),
@@ -83,8 +98,9 @@ agent (its policies also read `ai_tools`, which plain osquery does not have),
 
 ## Fleet Free and Fleet Premium
 
-From research/fleet.md and the fleet-operator red team (Fleet documentation,
-4.94.1):
+From Fleet's documentation for 4.94, not from a test: the verification
+server runs Fleet Free, and its dry run skips the Premium fleet file and
+refuses the `software` packages (VERIFIED.md section 2).
 
 | Feature used here | Free | Premium |
 |---|---|---|
@@ -99,15 +115,26 @@ From research/fleet.md and the fleet-operator red team (Fleet documentation,
 
 So on Free: apply the global GitOps entries, run `scripts/install-hawkbell.sh`
 or `.ps1` per host or as a batch run (fleetd with scripts enabled), or
-install the deb/rpm/pkg with your existing tooling; on Premium, use
-`software/*.package.yml` and the install-on-failure policies in
-`gitops/fleets/workstations.yml`. Those policies check the binary only (the
-state database survives an uninstall, so it must not count as installed)
-and are scoped by two labels the file defines, "Debian-family Linux" and
-"Red Hat-family Linux" (from `os_version`: Fleet's built-in "Ubuntu Linux"
-misses Debian, "Red Hat Linux" misses Rocky and Alma). Because they
-reinstall hawkbell wherever the binary is missing, move a host out of the
-fleet before uninstalling hawkbell from it.
+install the deb or rpm with your existing tooling (no macOS pkg is built
+yet, see below); on Premium, use `software/*.package.yml` and the
+install-on-failure policies in `gitops/fleets/workstations.yml`. Those
+policies check the binary only (the state database survives an uninstall,
+so it must not count as installed). The two Linux policies are scoped by
+two labels the file defines from `os_version`'s `platform` and
+`platform_like`, "Debian-family Linux" and "Red Hat-family Linux", instead
+of Fleet's per-distribution built-in labels ("Ubuntu Linux", "Red Hat
+Linux", "CentOS Linux", "Fedora Linux" on the verification server,
+VERIFIED.md; their queries were not read here). The macOS policy is scoped
+by `platform: darwin` only, and there is no install policy for the msi.
+Because the policies reinstall hawkbell wherever the binary is missing,
+move a host out of the fleet before uninstalling hawkbell from it.
+
+The package files point at example URLs. The release build
+(`.goreleaser.yaml`) makes the deb and rpm; it does not make the macOS pkg
+(`packaging/macos/build-pkg.sh`, needs macOS, never run) or the msi
+(`packaging/windows/hawkbell.wxs` is a sketch that was never compiled), so
+`hawkbell-pkg.package.yml` and `hawkbell-msi.package.yml` have no package
+to point at yet.
 
 ## Fail-closed policies and the two heartbeat windows
 
@@ -129,8 +156,9 @@ The trade-off, stated plainly: for up to 24 hours after a sensor stops, the
 "no X" policies keep reporting the last state the sensor saw, and only the
 sensor policy tells you the data is stale. If you act on the "no X"
 policies, gate on the sensor policy too. Fleet evaluates policies about
-once an hour, so detection and bypass policies look back 24 hours rather
-than at "now".
+once an hour by default (Fleet's documentation; not observed here: the
+verification forced results with a refetch), so detection and bypass
+policies look back 24 hours rather than at "now".
 
 Under the hood a policy is
 
@@ -162,42 +190,77 @@ would hide `config` from them). To merge:
    first and then add the entries;
 3. validate with `fleetctl gitops -f default.yml --dry-run`.
 
-`lib/agent-options.example.yml` shows the result on a typical base, and
-`fleetgen.MergeAgentOptions` does the same merge in code (verify.sh uses it).
+`lib/agent-options.example.yml` shows the result on a typical base.
+`MergeAgentOptions` in internal/fleetgen/agentopts.go does the same merge
+in Go; verify.sh uses it through the harness in `test/e2e/fleet_test.go`.
+No hawkbell command merges agent options: `hawkbell export atc` writes only
+the fragment.
+
 State database paths default to `/var/lib/hawkbell/state.db`,
 `/Library/Application Support/hawkbell/state.db` and
-`C:\ProgramData\hawkbell\state.db`. Custom paths must be absolute and clean
-(no `//`, `.` or `..` element, no trailing separator, backslashes only on
-Windows) and free of `%`, `*`, `?`, `[`, `]`, `{` and `}`: ATC expands
-osquery's `%` wildcard and glob patterns (osquery 5.19 read two databases
-for `hawkbell?`, `hawkbell[AB]` and `hawkbell{A,B}`) and reports canonical paths,
-while the "hawkbell installed" label compares paths exactly. ATC needs the database in WAL mode, which hawkbell always uses
-(rollback-journal files were read torn by ATC in the red team's tests).
+`C:\ProgramData\hawkbell\state.db`. `hawkbell export fleet` refuses any
+path that contains `%`, `*`, `?`, `[`, `]`, `{` or `}`, and a `--bin-path`
+that is not absolute and clean (no `//`, `.` or `..` element, no trailing
+separator, backslashes only on Windows) (internal/fleetgen/options.go,
+`checkHostPath`). The state database path comes from `data_dir`: a
+relative `data_dir` in the configuration file is refused, while
+`--data-dir` is made absolute against the current directory
+(cmd/hawkbell/config.go, `loadConfig`), and the joined path is cleaned
+(`Config.StateDB` in internal/config/config.go), so `/var/lib//hawkbell/`
+becomes `/var/lib/hawkbell/state.db`. Pass the absolute directory the hosts
+use. ATC resolves its `path` as a glob and reports canonical paths: with
+three databases in directories A, B and C, osquery 5.19 read all three for
+`?`, and two each for `[AB]` and `{A,B}` (VERIFIED.md section 6). `%` is
+refused because osquery's documentation describes it as osquery's own path
+wildcard; that was not tested here. The "hawkbell installed" label
+compares paths exactly, so a pattern or an unclean path would make the two
+disagree. ATC needs the database in WAL mode, which hawkbell always uses
+(`state.Open` refuses to run without it, internal/state/doc.go): in
+rollback-journal mode, reads through Fleet returned torn snapshots with no
+error in 4 of 10 tries (docs/ASSUMPTIONS.md).
 
 ## Install scripts
 
 `scripts/install-hawkbell.sh` (macOS, Linux) and `scripts/install-hawkbell.ps1`
-(Windows) are Fleet scripts, each under Fleet's 10,000-character limit for
-script contents. Edit the URL and SHA-256 of each build and the tier at the
-top (a value may be a Fleet custom variable). They:
+(Windows) are Fleet scripts. Fleet refuses ad hoc script contents of 10,000
+characters or more; `TestScriptsUnderFleetLimit` in internal/fleetgen fails
+at that size. As shipped, `install-hawkbell.sh` is 9,992 characters and
+`install-hawkbell.ps1` 8,478. Edit the URL and SHA-256 of each build and the
+tier at the top (a value may be a Fleet custom variable). A real SHA-256 is
+45 characters longer than the `REPLACE_WITH_SHA256` placeholder, so with all
+four hashes filled in `install-hawkbell.sh` grows to 10,172 characters:
+delete the builds you do not deploy to bring it back under 10,000. Whether
+Fleet applies the same limit to saved scripts uploaded by GitOps was not
+checked. The scripts:
 
 - download over HTTPS and refuse to install unless the SHA-256 matches;
-- create the `hawkbell` group (outbox readers), the configuration and data
-  directories with explicit owners and modes, and the configuration via
+- create directories and the configuration: the shell script creates the
+  `hawkbell` group (outbox readers), the configuration directory (0755) and
+  the data directory (Linux: `root:hawkbell` 0711; on macOS the data
+  directory is the configuration directory); the PowerShell script gives
+  the program and data directories SYSTEM and Administrators full control
+  with inheritance removed, Users read and execute on the program
+  directory, Users list and read on the data directory itself (not
+  inherited), and Users read on `hawkbell.yaml`. Both write the configuration with
   `hawkbell export config` when none exists;
 - install the service (the same systemd unit and launchd plist as
-  `packaging/`; a test keeps them identical) and restart it only when the
-  binary or the definition changed. On Linux a drop-in
-  (`hawkbell.service.d/10-outbox-group.conf`, `Group=hawkbell`) runs the service
-  with the outbox readers' group: the unit's `StateDirectory=` makes
-  systemd re-own `/var/lib/hawkbell`, recursively, to the service's user and
-  group at every start, which is `root:root` without it. The state database
-  is `0600` and the spools `0700`, so the group can read only the `0640`
-  outbox. Services installed from the deb or rpm do not have the drop-in
-  until `packaging/systemd/hawkbell.service` sets `Group=hawkbell`;
+  `packaging/`; `TestEmbeddedServiceDefinitions` keeps them identical) and
+  restart it only when the binary or the definition changed. The unit runs
+  the service with `Group=hawkbell`, the outbox readers' group: the unit's
+  `StateDirectory=` makes systemd re-own `/var/lib/hawkbell`, recursively,
+  to the service's user and group at every start, which would be
+  `root:root` without it. On Linux the script also writes a drop-in
+  (`hawkbell.service.d/10-outbox-group.conf`) that repeats `Group=hawkbell`.
+  The state database is `0600` and the spools `0700`, so the group can read
+  only the `0640` outbox files (internal/daemon/dirs.go, sinks.go);
+- rewrite hawkbell's hook entries for the managed scope and Codex's system
+  scope, only where a file already holds them, keeping the options each
+  file was installed with (`hawkbell hooks install --only-installed`);
 - with the extension tier, refuse a host where orbit's own
   `extensions.load` is in use (see "Three tiers"), copy the binary to
-  `hawkbell.ext` and register it in **osquery's default `extensions.load`**
+  `hawkbell.ext` (`/usr/lib/hawkbell/`, `/usr/local/lib/hawkbell/`;
+  `hawkbell.ext.exe` in `C:\Program Files\hawkbell\` on Windows) and
+  register it in **osquery's default `extensions.load`**
   (`/etc/osquery/extensions.load`, `/var/osquery/extensions.load`,
   `C:\Program Files\osquery\extensions.load`), never orbit's, which orbit
   itself truncates and rewrites; other lines in the file are kept, also a
@@ -207,17 +270,26 @@ top (a value may be a Fleet custom variable). They:
   synchronous restart would kill it before Fleet gets its result.
 
 Running a script twice changes nothing the second time. The `atc` tier
-installs without the extension (and unregisters it). `uninstall-hawkbell.*`
-removes the service, binary and registration and keeps configuration and
-data unless `HAWKBELL_PURGE=1`. `register-extension.*` is the post-install
-script for the Premium packages. The Windows script creates the service with
+installs without the extension: it removes hawkbell's line from
+`extensions.load` and leaves the `hawkbell.ext` copy in place.
+`uninstall-hawkbell.*` removes hawkbell's managed and system hook entries
+while the binary still exists (the shell script stops and removes the
+service before that, the PowerShell script after), then the extension
+registration, the binary and the extension copy, and keeps configuration
+and data. `HAWKBELL_PURGE=1` also
+removes them, but only when you run the script by hand: Fleet passes no
+environment. `register-extension.*` is the post-install script for the
+Premium packages. The Windows script creates the service with
 `New-Service` and updates its command line through `Win32_Service.Change`,
 not `sc.exe ... binPath=`: Fleet runs scripts with Windows PowerShell 5.1,
 which does not escape the quotes embedded in that command line, so sc.exe
 would receive `C:\Program` as the program. Every native call checks its
 exit code. The shell scripts run in a Debian container in `test/e2e`
-(`TestFleetInstallScripts`); the PowerShell scripts and the macOS branch
-have not been run (no Windows or macOS host); a unit test models PowerShell
+(`TestFleetInstallScripts`, with a fake `systemctl` and a fake hawkbell
+binary: VERIFIED.md section 4 and its rerun after the rename), so systemd
+itself, `hawkbell export config` and `hawkbell version` were not exercised
+there. The PowerShell scripts and the macOS branch have not been run (no
+Windows or macOS host); `TestPowerShellNativeArguments` models PowerShell
 5.1's argument passing for every `sc.exe` and `icacls.exe` call.
 
 ## Reports
@@ -225,7 +297,7 @@ have not been run (no Windows or macOS host); a unit test models PowerShell
 | report | logging | why |
 |---|---|---|
 | hawkbell - detections | `differential_ignore_removals`, every 15 min, to the log destination | rows appear once; rows evicted by the table cap are not news |
-| hawkbell - AI inventory (packed) | snapshot, every 4 h | one row per host; every list capped at 100 entries and each field clipped, with the true totals alongside, so the result stays under Fleet's 512 KiB per-host limit (tested with maximum-length values) |
+| hawkbell - AI inventory (packed); in the fleetd profile "(packed, with ai_tools)" | snapshot, every 4 h | one row per host; every list capped at 100 entries and each field clipped, with the true totals alongside, so the result stays under Fleet's 512 KiB per-host limit (worst case with maximum-length values: 369,492 bytes stock, 223,264 fleetd; `TestPackedReportBounded`, VERIFIED.md section 5) |
 | hawkbell - telemetry coverage | snapshot, hourly | not collected must never read as clean |
 | hawkbell - sensor health | snapshot, hourly | version, profile, rule and bundle versions, counters |
 
@@ -260,12 +332,27 @@ depth-1 rows on `pid` at the destination to recover it.
 `verify.sh` checks this content against a live Fleet server with one
 enrolled osquery host: GitOps dry run, ATC applied (and the original agent
 options restored), every `hawkbell_*` table queried live, every policy shown to
-pass on a healthy database and fail with a planted finding, a 25-hour-old
-heartbeat and the database removed, Fleet's own policy results and label
-membership after a refetch, and the same with the hawkbell extension instead of
-ATC. Objects are applied one by one under a unique prefix and deleted
+pass on a healthy database and to fail with the database removed; every
+policy except the sensor policy shown to fail with planted findings; in the
+ATC tier only, the sensor policy alone shown to fail with a 2-hour-old
+heartbeat and every policy with a 25-hour-old one; Fleet's own policy
+results and label membership after a refetch; and the healthy, planted and
+removed scenarios (plus "hook" with `HAWKBELL_BIN`) with the hawkbell
+extension instead of ATC (`expectations` in test/e2e/fleet_test.go, the
+scenario lists in verify.sh). Objects are applied one by one under a unique prefix and deleted
 afterwards; it never runs `fleetctl gitops` without `--dry-run`. The state
 database comes from the harness in `test/e2e/fleet_test.go` unless
-`HAWKBELL_BIN` points at a hawkbell binary. A poll the host does not answer counts
-as an error result and is retried, not a reason to stop the run. See
-[VERIFIED.md](VERIFIED.md).
+`HAWKBELL_BIN` points at a hawkbell binary; then the "healthy" and "hook"
+scenarios come from the binary (the "hook" scenario, added with
+`HAWKBELL_BIN`, expects only the detections policy to fail). A live query
+the host does not answer is recorded as an error, and for a policy that
+counts as a failed check. The waits for the tables and for a refetch
+treat an unanswered or failed poll as "not ready yet" and poll again (up
+to 40 and 60 polls, 3 seconds apart by default) before they stop the run.
+Read the last line, `done: N failed checks`: the exit status does not
+reflect failed checks. See [VERIFIED.md](VERIFIED.md): the run after the rename, with
+`HAWKBELL_BIN` set, ended with 240 checks and 0 failed (10 scenarios of 24
+checks: 10 policies as live queries, 10 Fleet policy results, 4 labels).
+Not covered there: the fleetd and builtin profiles (dry run and unit tests
+only; the host runs plain osquery), macOS and Windows hosts, Fleet
+Premium, orbit, and a running systemd.

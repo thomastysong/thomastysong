@@ -12,25 +12,28 @@ are fixed, because the systemd unit, the launchd plist, the Fleet scripts
 
 | path | what | tested here |
 |---|---|---|
-| `systemd/hawkbell.service` | the Linux unit (hardening, `Group=hawkbell`, capability bounding set) | `systemd-analyze verify` (by the lead); installed by the packages below |
+| `systemd/hawkbell.service` | the Linux unit (hardening, `Group=hawkbell`, capability bounding set) | `systemd-analyze verify` (systemd 255): as shipped, on a host without the binary, its only message is `Command /usr/bin/hawkbell is not executable`; with `ExecStart` naming an existing binary it reports nothing (not in a run record below: rerun the command to check). Installed by the packages below, never started under systemd ([docs/LIMITATIONS.md](../docs/LIMITATIONS.md)) |
 | `launchd/com.github.thomastysong.hawkbell.plist` | the macOS LaunchDaemon | no (no macOS host) |
 | `windows/install-service.ps1` | Windows service install/update/uninstall | no (no Windows host, no pwsh) |
 | `windows/hawkbell.wxs` | WiX v4 installer **sketch** | no: never compiled |
 | `linux/nfpm.yaml`, `linux/*.sh` | deb/rpm configuration and maintainer scripts | yes: built and installed, see below |
-| `macos/postinstall`, `macos/build-pkg.sh` | pkg post-install script, pkgbuild wrapper | `sh -n` only |
+| `macos/postinstall`, `macos/build-pkg.sh` | pkg post-install script, pkgbuild wrapper | syntax only (`-n` under sh, dash and bash); the hook step of `postinstall` runs on Linux in `TestUpgradeKeepsHookOptions` |
 | `container/filecap` | sets file capabilities in the Dockerfile's build stage | unit tests against bytes setcap(8) wrote; used by every image build |
 
 `packaging_test.go` keeps these consistent with each other, with
 `.goreleaser.yaml`, the Dockerfile and `deploy/kubernetes` (paths, group,
 data directory mode, extension paths, script syntax under sh/dash/bash,
 the hook selection, the DaemonSet's security context, and the ConfigMap
-loaded with the daemon's own configuration loader).
+loaded with the daemon's own configuration loader). Some of its tests
+build hawkbell or need root and are skipped otherwise.
 
 ## Linux packages
 
 Built by goreleaser for releases (`nfpms` in `.goreleaser.yaml`) or by
-`make package` (nfpm and `linux/nfpm.yaml`, the same contents and scripts).
-Contents: the binary, `/usr/lib/systemd/system/hawkbell.service`, the license.
+`make package` (nfpm and `linux/nfpm.yaml`, the same contents and scripts;
+it needs `nfpm` on the PATH). Contents: `/usr/bin/hawkbell`,
+`/usr/lib/systemd/system/hawkbell.service`, and `LICENSE`, `NOTICE` and
+`THIRD_PARTY_LICENSES` in `/usr/share/doc/hawkbell`.
 
 Maintainer scripts (POSIX sh; deb and rpm call conventions both handled):
 
@@ -44,27 +47,28 @@ Maintainer scripts (POSIX sh; deb and rpm call conventions both handled):
   `/etc/osquery/extensions.load`) it refreshes the copy osquery runs and
   schedules a detached osquery restart; systemd: daemon-reload, enable and
   start on first install, `try-restart` on upgrade (a service the
-  administrator disabled stays disabled); then it rewrites hawkbell's managed
-  hook entries only where they are exactly what an earlier release wrote
-  with install's default options (`hawkbell hooks status --scope managed
-  --json` says "written by an earlier hawkbell release" in their detail; they
-  report "modified" until `hawkbell hooks install` runs again). The rewrite
-  uses the default options, so entries installed with `--guard
-  --fail-closed`, a `--timeout` or edited by hand are left as they are and
-  listed (`managed hooks of <agents> left as they are`): rewriting them
-  would turn a fail-closed guard into a fail-open one. Agents never hooked
-  are left alone. `abort-deconfigure` starts the daemon again when it is
-  enabled; `abort-remove` enables and starts it and puts back the osquery
-  extension line prerm noted.
+  administrator disabled stays disabled); then `hawkbell hooks install
+  --only-installed` for the managed scope and for Codex's system scope. It
+  rewrites hawkbell's hook entries only in files that already hold them
+  (entries an earlier release wrote report "modified" until install runs
+  again), and keeps the options each file was installed with: `--guard
+  --fail-closed` and `--timeout` are read back from the entries
+  (cmd/hawkbell/hooks_reinstall.go), so an upgrade does not turn a
+  fail-closed guard into a fail-open one. Entries that no install option
+  reproduces (edited by hand) are left as they are and listed (`managed
+  hooks of <agent> left as they are: ...`). Agents never hooked are left
+  alone. `abort-deconfigure` starts the daemon again when it is enabled;
+  `abort-remove` enables and starts it and puts back the osquery extension
+  line prerm noted.
 - **preremove** (removal only; nothing on upgrade): stops and disables the
   service; removes hawkbell's line from `/etc/osquery/extensions.load` (other
   lines kept; written to a copy with the file's owner and mode and renamed
   over it, so a failure never truncates it), notes it in
   `/var/lib/hawkbell/.osquery-extension` for `abort-remove`, removes the
   extension copy and schedules an osquery restart; last, `hawkbell hooks
-  uninstall --scope managed` while the binary still exists, so no agent
-  keeps calling a missing binary (fail-closed guard entries would block the
-  agent). Every step only warns, so dpkg never has to undo a half-done
+  uninstall` for the managed and system scopes while the binary still
+  exists, so no agent keeps calling a missing binary (fail-closed guard
+  entries would block the agent). Every step only warns, so dpkg never has to undo a half-done
   removal. On `deconfigure` (deb) it only stops the daemon: the files stay,
   and hooks and the extension keep pointing at them.
 - **postremove**: daemon-reload; drops prerm's note. On deb purge also removes `/etc/hawkbell` and
@@ -182,23 +186,31 @@ here).
 ## macOS and Windows
 
 Written to match the Fleet scripts, not run: `macos/build-pkg.sh` needs
-pkgbuild, and an unsigned, unnotarized package is blocked by Gatekeeper and
-most MDM pipelines. Full Disk Access for `/usr/local/bin/hawkbell` must come
-from an MDM PPPC profile. `windows/install-service.ps1` registers the
+pkgbuild (macOS only). It signs the package only when `HAWKBELL_PKG_SIGN`
+names a "Developer ID Installer" identity, does not sign the binary and
+does not notarize; Gatekeeper and MDM deployment expect all three. Full
+Disk Access for `/usr/local/bin/hawkbell` must come from an MDM PPPC
+profile. `windows/install-service.ps1` registers the
 service through `New-Service`/CIM because Windows PowerShell 5.1 does not
-escape the quotes embedded in `sc.exe binPath=` arguments (found by the Fleet
-script builder); `windows/hawkbell.wxs` is a sketch for an MSI (well-formed XML,
-checked by `packaging_test.go`; never compiled).
+escape the quotes embedded in `sc.exe binPath=` arguments
+(`TestPowerShellNativeArguments` in internal/fleetgen models that argument
+passing and reproduces the failure); `windows/hawkbell.wxs` is a sketch for
+an MSI (well-formed XML, checked by `packaging_test.go`; never compiled).
 
 On Windows the configuration directory is the data directory
-(`C:\ProgramData\hawkbell`). Both installers give SYSTEM and Administrators
+(`C:\ProgramData\hawkbell`). Both installers (`install-service.ps1` and the
+`hawkbell.wxs` sketch) give SYSTEM and Administrators
 full control of everything in it and give Users list and read on the
 directory itself only (not inherited) plus read on `hawkbell.yaml`:
 `hawkbell hook` runs as the developer, reads `hawkbell.yaml` (an unreadable file
 silently means built-in defaults: no central guard mode, privacy profile or
-exclusions) and checks the kill switch file, while `state.db` and what the
-daemon writes later inherit SYSTEM and Administrators only. A tool that
-replaces `hawkbell.yaml` with a new file instead of writing it in place drops
-the Users grant; run the script again. The hook selection on update and the
+exclusions) and checks the kill switch file, while `state.db` inherits
+SYSTEM and Administrators only. The daemon gives each directory it creates
+(outbox, spools, rule bundle and the rest) a protected ACL of its own,
+which the files in it inherit: SYSTEM and Administrators full control, plus
+Users read on the rule bundle and modify for each account on its own spool
+directory (internal/daemon/dirs_windows.go; compiled, not run on Windows).
+A tool that replaces `hawkbell.yaml` with a new file instead of writing it
+in place drops the Users grant; run the script again. The hook selection on update and the
 osquery extension copy (refreshed on update, unregistered on `-Uninstall`)
 follow the Linux scripts and the Fleet scripts.

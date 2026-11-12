@@ -1,0 +1,13 @@
+# Grafana Loki. Labels are low-cardinality fields only; ids stay in the line.
+pipeline:
+  outputs:
+    - name: loki
+      alias: spoor_loki
+      match: 'spoor.*'
+      host: ${LOKI_HOST}
+      port: ${LOKI_PORT:-3100}
+      tls: on
+      labels: job=spoor, stream=$kind, severity=$detection['severity']
+      line_format: json
+      retry_limit: no_limits
+      storage.total_limit_size: 512M

@@ -1,0 +1,16 @@
+pipeline:
+  outputs:
+    - name: opensearch
+      alias: spoor_opensearch
+      match: 'spoor.*'
+      host: ${OPENSEARCH_HOST}
+      port: ${OPENSEARCH_PORT:-9200}
+      tls: on
+      http_user: ${OPENSEARCH_USER}
+      http_passwd: ${OPENSEARCH_PASSWORD}
+      index: spoor
+      suppress_type_name: on
+      id_key: id
+      replace_dots: on
+      retry_limit: no_limits
+      storage.total_limit_size: 512M

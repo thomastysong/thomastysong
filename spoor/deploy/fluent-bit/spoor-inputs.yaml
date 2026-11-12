@@ -1,0 +1,90 @@
+# spoor -> Fluent Bit: inputs and parsers (an includable fragment).
+#
+# Requires Fluent Bit 5.0.6 or later (the ${VAR:-default} syntax in
+# properties). SPOOR_OUTBOX (default /var/lib/spoor/outbox) and SPOOR_FLB_DB
+# (default /var/lib/fluent-bit) are read from the environment. Include it
+# from your own configuration with:
+#
+#   includes:
+#     - /etc/fluent-bit/spoor-inputs.yaml
+#
+# and set service.storage.path (see spoor.yaml). Every choice below comes
+# from a failure reproduced against the real Fluent Bit 5.2.0 image; see
+# docs/ASSUMPTIONS.md, "Transport".
+#
+#  * storage.type filesystem: with the default memory buffering, tail
+#    commits its file offset when it READS a line, so a restart while the
+#    destination is down lost 5,000 of 5,000 records in testing.
+#  * two tail inputs: with one input for every stream and the activity
+#    destination down, findings to a healthy SIEM were blocked behind it.
+#  * db.compare_filename: after a segment was pruned and its inode reused,
+#    the default settings skipped the head of the new segment.
+#  * db.locking false: lets `spoor doctor` and the daemon read the offsets
+#    to measure shipper lag and to prune only segments that were read.
+#  * skip_long_lines and a 1 MiB buffer: one long line otherwise stops the
+#    whole file. spoor caps a record at 16 KiB, so nothing is skipped.
+
+parsers:
+  - name: spoor_ndjson
+    format: json
+    # spoor always writes a six-digit fraction and "Z": a timestamp without
+    # a fraction fails this format and Fluent Bit silently uses ingestion
+    # time instead.
+    time_key: ts
+    time_format: '%Y-%m-%dT%H:%M:%S.%L%z'
+    time_keep: on
+
+pipeline:
+  inputs:
+    # Findings, inventory, posture, health and per-session summaries: small,
+    # and what the SIEM needs. Kept apart from activity so a slow or broken
+    # activity destination can never hold them up.
+    - name: tail
+      alias: spoor_findings
+      path: ${SPOOR_OUTBOX:-/var/lib/spoor/outbox}/detection-*.ndjson,${SPOOR_OUTBOX:-/var/lib/spoor/outbox}/summary-*.ndjson,${SPOOR_OUTBOX:-/var/lib/spoor/outbox}/health-*.ndjson,${SPOOR_OUTBOX:-/var/lib/spoor/outbox}/posture-*.ndjson,${SPOOR_OUTBOX:-/var/lib/spoor/outbox}/inventory-*.ndjson
+      tag: spoor.<stream>
+      tag_regex: '(?<stream>[a-z]+)-[0-9]{8}-[0-9]{2}-[0-9]+\.ndjson$'
+      parser: spoor_ndjson
+      db: ${SPOOR_FLB_DB:-/var/lib/fluent-bit}/spoor-findings.db
+      db.sync: normal
+      db.locking: false
+      db.compare_filename: true
+      read_from_head: true
+      refresh_interval: 5
+      rotate_wait: 15
+      buffer_chunk_size: 64k
+      buffer_max_size: 1M
+      skip_long_lines: on
+      skip_empty_lines: on
+      storage.type: filesystem
+      storage.pause_on_chunks_overlimit: off
+
+    # Activity: one record per agent action, only shipped in the standard
+    # and full privacy profiles.
+    - name: tail
+      alias: spoor_activity
+      path: ${SPOOR_OUTBOX:-/var/lib/spoor/outbox}/activity-*.ndjson
+      tag: spoor.<stream>
+      tag_regex: '(?<stream>[a-z]+)-[0-9]{8}-[0-9]{2}-[0-9]+\.ndjson$'
+      parser: spoor_ndjson
+      db: ${SPOOR_FLB_DB:-/var/lib/fluent-bit}/spoor-activity.db
+      db.sync: normal
+      db.locking: false
+      db.compare_filename: true
+      read_from_head: true
+      refresh_interval: 5
+      rotate_wait: 15
+      buffer_chunk_size: 64k
+      buffer_max_size: 1M
+      skip_long_lines: on
+      skip_empty_lines: on
+      storage.type: filesystem
+      storage.pause_on_chunks_overlimit: off
+
+  filters:
+    # A line the parser could not read arrives as {"log": "..."}; spoor
+    # records never have a top-level "log" key. Make such lines visible on
+    # their own tag instead of letting them mix into the SIEM.
+    - name: rewrite_tag
+      match: 'spoor.*'
+      rule: '$log ^.*$ spoor.parse_error false'

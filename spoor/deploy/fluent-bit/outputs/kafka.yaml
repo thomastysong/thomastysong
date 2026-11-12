@@ -1,0 +1,14 @@
+# Kafka: one topic, message key = record id so compaction and consumers can
+# deduplicate at-least-once deliveries.
+pipeline:
+  outputs:
+    - name: kafka
+      alias: spoor_kafka
+      match: 'spoor.*'
+      brokers: ${KAFKA_BROKERS}
+      topics: ${KAFKA_TOPIC:-spoor}
+      message_key_field: id
+      format: json
+      timestamp_key: '@timestamp'
+      retry_limit: no_limits
+      storage.total_limit_size: 512M

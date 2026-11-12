@@ -1,0 +1,18 @@
+# Microsoft Sentinel / Log Analytics through the Logs Ingestion API (a DCR
+# with a custom table, for example Spoor_CL). Deduplicate on id in KQL:
+#   Spoor_CL | summarize arg_max(TimeGenerated, *) by id
+pipeline:
+  outputs:
+    - name: azure_logs_ingestion
+      alias: spoor_sentinel
+      match_regex: '^spoor\.(detection|summary|health|posture|inventory|parse_error)$'
+      tenant_id: ${AZURE_TENANT_ID}
+      client_id: ${AZURE_CLIENT_ID}
+      client_secret: ${AZURE_CLIENT_SECRET}
+      dce_url: ${AZURE_DCE_URL}
+      dcr_id: ${AZURE_DCR_ID}
+      table_name: ${AZURE_TABLE:-Spoor_CL}
+      time_generated: true
+      compress: true
+      retry_limit: no_limits
+      storage.total_limit_size: 512M

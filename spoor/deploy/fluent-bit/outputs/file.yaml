@@ -1,0 +1,11 @@
+# Local files, for trying spoor out and for tests.
+pipeline:
+  outputs:
+    - name: file
+      alias: spoor_local
+      match: 'spoor.*'
+      path: ${SPOOR_FILE_OUT:-/var/log/spoor-shipped}
+      format: plain
+      mkdir: true
+      retry_limit: no_limits
+      storage.total_limit_size: 256M

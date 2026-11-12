@@ -41,8 +41,9 @@
 //     the same processing round); a twin that arrives after the record was
 //     written (the usual hook-first case: the transcript tailer polls) is
 //     counted instead: correlate.corroborated_after_write, and per session
-//     the summary labels corroborated and corroborated_after_write.
-//     correlate.corroborated counts every corroborated record.
+//     the summary labels corroborated and corroborated_after_write, once
+//     per record however many surfaces come late, so it is a subset of
+//     correlate.corroborated, which counts every corroborated record.
 //  4. Coverage per (agent, account) and per session, and the hook-bypass
 //     finding (coverage.go). The finding needs the process monitor
 //     (root-observed) to see the agent for the same account; with only

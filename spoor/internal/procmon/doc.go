@@ -139,13 +139,18 @@
 // never splits a "[REDACTED:...]" marker), dropped arguments are replaced
 // by one final "[TRUNCATED:<n>B]" placeholder counting their bytes, and an
 // argument cut by the 256 KiB command-line read limit is never emitted;
-// every cut is listed in Truncated. The process.exec id covers the emitted
-// arguments through an HMAC under a key drawn at random once per process
-// (32 bytes, crypto/rand), with the redaction fingerprints left out: the
+// every cut is listed in Truncated. The process.exec id covers pid, start
+// time, executable and the emitted arguments, the arguments through a
+// domain-separated HMAC with the redaction fingerprints left out: the
 // privacy stage may redact more than the monitor does, and an unkeyed
 // digest of the monitor's form would let a reader of the shipped record
-// test guesses for what privacy removed. The id is therefore stable within
-// one run of the sensor and not across restarts. Process names get the same redaction (split on
+// test guesses for what privacy removed. The key is Options.IDKey (the
+// daemon passes its persisted identity key, so the id of a live process a
+// restarted sensor reports again is the id it had, and downstream
+// deduplication collapses the two) or, without one, 32 random bytes drawn
+// once per process (ids then hold for one run). The id's time is the
+// process's start, so the connector's record of an exec and a rescan's
+// record of the process agree. Process names get the same redaction (split on
 // white space) wherever they are kept or emitted (Process.Name, Ancestors,
 // AgentProc.Name): a Node process title or setproctitle(3) writes the
 // whole command line over argv[0], and the name refined from it, or the
@@ -195,14 +200,33 @@
 //     session ids and config homes. Stats.ProcsTotal and
 //     Stats.ProcsUnreadable (the daemon's heartbeat counters procs_total
 //     and procs_unreadable) count, at every full scan, the live user-space
-//     processes (kernel threads left out) and those whose environment read
-//     was refused with EACCES or EPERM, so a sensor that is missing the
-//     privilege shows it. On Windows protected processes always count as
-//     unreadable; macOS and Windows counts are UNVERIFIED (not executed).
+//     processes (kernel threads left out) and those that refused the
+//     monitor with EACCES or EPERM, so a sensor that is missing the
+//     privilege shows it. A process refuses either its environment (the
+//     common case) or, with /proc mounted hidepid=1 (noaccess), every file
+//     under /proc/<pid> including stat: such a pid is still counted, in
+//     both and in Stats.ProcsHidden (procs_hidden), kernel threads
+//     included because nothing tells them apart there. With hidepid=2
+//     (invisible) other accounts' pids are not even listed and cannot be
+//     counted. Stats.ProcsProtected (procs_protected) is the part of
+//     ProcsUnreadable that refused a monitor holding the read privilege
+//     and runs as the system account (uid 0; on Windows LocalSystem, LOCAL
+//     SERVICE, NETWORK SERVICE or an unreadable owner): Windows protected
+//     processes, a sandbox's init (the build environment's pid 1 refuses
+//     root). No privilege the sensor can be given opens those, so the
+//     daemon does not degrade the processes surface for them alone.
+//     macOS and Windows counts are UNVERIFIED (not executed).
 //   - spoor's own hook processes (`spoor hook`, `spoor hook --worker`,
-//     recognised by argv[1] and the file identity of the executable, see
-//     self.go) are kept in the table but never reported; other spoor
-//     commands an agent runs are reported like any program.
+//     recognised by argv[1] and the running image, see self.go: on Linux
+//     the file identity of /proc/<pid>/exe, on macOS and Windows the
+//     kernel's name of the image, which must be one of spoor's trusted
+//     paths, and the identity of the file there) are kept in the table but
+//     never reported; other spoor commands an agent runs are reported like
+//     any program. A spoor binary path is trusted only when only root (or
+//     the sensor's account) can change what it names
+//     (platform.TrustedPath), so hooks are reported where spoor is
+//     installed in a directory another account can write to (on Intel
+//     Macs with Homebrew, /usr/local/bin belongs to the Homebrew user).
 //   - cn_proc reports exec after it happened; a process that exits within
 //     microseconds can be gone before /proc is read (Stats.ReadMisses).
 //   - HookFree cannot see Gemini CLI's hooksConfig.enabled=false: it is a

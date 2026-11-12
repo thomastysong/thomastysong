@@ -228,6 +228,18 @@ func newDaemon(cfg *config.Config, log *slog.Logger, env runEnv) (_ *daemon, err
 		d.store = st
 	}
 
+	// The identity key keys every content-derived id (engine identity.go)
+	// and the argument digest of process.exec ids, so that a restarted
+	// sensor gives the live processes it reports again the ids they had.
+	// It is loaded once here for both; when it cannot be used, procmon
+	// runs with its own per-process key and the pipeline tries again and
+	// reports the failure (identity.key_errors).
+	idKey, keyErr := engine.LoadOrCreateIdentityKey(engine.IdentityKeyPath(cfg))
+	if keyErr != nil {
+		log.Warn("identity key unavailable; ids hold for this run only", "error", keyErr)
+		idKey = nil
+	}
+
 	if config.On(cfg.Sources.Processes.Enabled, true) {
 		d.mon = procmon.New(procmon.Options{
 			Catalog:         d.cat,
@@ -240,6 +252,7 @@ func newDaemon(cfg *config.Config, log *slog.Logger, env runEnv) (_ *daemon, err
 			OsqueryInterval: cfg.Sources.OsqueryExec.Interval.D(),
 			NoOsquery:       !config.On(cfg.Sources.OsqueryExec.Enabled, true),
 			SelfExes:        selfExePaths(cfg.HostRoot, runtime.GOOS),
+			IDKey:           idKey,
 		})
 	}
 	if cfg.Sources.OTLP.Enabled {
@@ -268,6 +281,7 @@ func newDaemon(cfg *config.Config, log *slog.Logger, env runEnv) (_ *daemon, err
 		Surfaces:      d.board.surfaces,
 		Gauges:        d.board.counters,
 		HomeOf:        d.users.homeOf,
+		IdentityKey:   idKey,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("daemon: pipeline: %w", err)
@@ -634,10 +648,15 @@ func (d *daemon) refreshProcs() {
 	d.board.set("procmon.overflows", st.Overflows)
 	d.board.set("procmon.read_misses", st.ReadMisses)
 	d.board.set("procmon.self_excluded", st.SelfExcluded)
+	d.board.set("procmon.stable_ids", boolGauge(st.StableIDs))
 	// A sensor missing the privilege to look into other accounts'
 	// processes (no root, no CAP_SYS_PTRACE) shows it here.
 	d.board.set("procs_total", st.ProcsTotal)
 	d.board.set("procs_unreadable", st.ProcsUnreadable)
+	// Of those: pids it may not even identify (/proc mounted hidepid=1),
+	// and protected processes no privilege opens (procmon Stats).
+	d.board.set("procs_hidden", st.ProcsHidden)
+	d.board.set("procs_protected", st.ProcsProtected)
 	if d.otel != nil {
 		d.board.surface(d.otel.Surface())
 	}
@@ -649,10 +668,13 @@ func (d *daemon) refreshProcs() {
 // selfExePaths are the installed locations of the spoor binary the
 // agents' hooks run (packaging: deb/rpm /usr/bin/spoor, macOS pkg
 // /usr/local/bin/spoor, the Windows installer %ProgramFiles%\spoor), for
-// the process monitor to recognise spoor's own hook processes. They are
-// compared by file identity (procmon self.go), so listing a path that does
-// not exist, or holds something else, hides nothing. With a host root the
-// host's copies are looked at under it.
+// the process monitor to recognise spoor's own hook processes. The monitor
+// uses a path only when only root can change what it names
+// (platform.TrustedPath), and compares the running image with it by file
+// identity (procmon self.go), so listing a path that does not exist, holds
+// something else or sits in a directory another account can write to
+// (/usr/local/bin on Intel Macs with Homebrew) hides nothing. With a host
+// root the host's copies are looked at under it.
 func selfExePaths(hostRoot, goos string) []string {
 	var paths []string
 	switch goos {
@@ -707,8 +729,12 @@ func monitorSurface(st procmon.Stats) event.SurfaceStatus {
 		s.Status, s.Reason = "degraded", "exec_source_poll"
 	case !st.ExecHealthy && !st.LastCanary.IsZero():
 		s.Status, s.Reason = "degraded", "exec_selftest_failed"
-	case st.ProcsUnreadable > 0:
-		// Processes it may not look into: their agents are invisible.
+	case st.ProcsUnreadable > st.ProcsProtected:
+		// Processes it may not look into for want of a privilege: their
+		// agents are invisible. Protected processes (Windows protected
+		// processes, a sandbox's init) refuse a fully privileged sensor
+		// too and would keep the surface degraded forever; they are only
+		// counted (procs_protected).
 		s.Status, s.Reason = "degraded", "procs_unreadable"
 	}
 	if !st.LastCanary.IsZero() {

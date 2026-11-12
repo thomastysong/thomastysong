@@ -125,15 +125,37 @@ karmine05/agentic-detector, as vendored in Fleet as the ai_tools table
   - The extension classification table (orbit/pkg/table/ai_tools/internal/
     classify/kb.json) as a cross-check for
     internal/catalog/data/extensions.yaml.
+  - The Chrome Web Store ids of two browser extensions in
+    internal/catalog/data/browsers.yaml (chatgpt-for-google and monica),
+    taken from the browser_extension_ids table of the same kb.json (ids
+    mapped to a category, without names) and from classify_test.go.
 
 Fleet (fleetdm/fleet)
-  https://github.com/fleetdm/fleet, commit 27178c8 (2026-11-11)
+  https://github.com/fleetdm/fleet, commit 27178c8 (2026-11-11); the
+  maintained-apps list from the main branch, read for the catalog of
+  2026-11-11 and re-checked 2026-11-12
   Copyright (c) 2020-present Fleet Device Management Inc; Copyright (c) 2017
-  Kolide. The code used here (orbit) is licensed under the MIT License.
-  - Claude Code session-log record shapes as parsed by the ai_agent_sessions
-    table, cross-checked in internal/transcript/claude.go; Copilot CLI and
-    Cursor tool names (orbit/pkg/table/ai_agent_sessions/target.go) in
-    internal/toolmap.
+  Kolide. Fleet's LICENSE puts the repository under the MIT License, except
+  docs/ (CC BY-SA 4.0) and ee/, which is under the Fleet Enterprise Edition
+  license in ee/LICENSE. Material from two parts was used:
+  - orbit (MIT License): Claude Code session-log record shapes as parsed by
+    the ai_agent_sessions table, cross-checked in
+    internal/transcript/claude.go; Copilot CLI and Cursor tool names
+    (orbit/pkg/table/ai_agent_sessions/target.go) in internal/toolmap.
+  - ee/ (Fleet Enterprise Edition license): Fleet's maintained-apps list,
+    ee/maintained-apps/outputs/apps.json, is named as a source by 13
+    entries in internal/catalog/data: browsers.yaml (comet, arc, sigmaos),
+    desktop.yaml (claude-desktop, chatbox, boltai, granola, highlight-ai),
+    ides.yaml (cursor, devin-desktop, kiro, antigravity-ide) and
+    runtimes.yaml (ollama). The only facts used from it are the identifiers
+    in its unique_identifier field (macOS bundle ids and Windows display
+    names), for the bundle_ids and win_display fields of those entries; the
+    Windows display names in ides.yaml come from it. Eleven of the 13
+    entries also name the application's Homebrew cask as a source, and
+    five of them a Scoop manifest; for sigmaos and highlight-ai the
+    maintained-apps list is the only source named. Nothing
+    else from that file (its descriptions, slugs and other fields) and no
+    code from ee/ is included in spoor.
 
 osquery
   https://github.com/osquery/osquery. Licensed under the Apache License,
@@ -144,10 +166,22 @@ osquery
     internal/platform/hostid.go, so that spoor refuses the same values.
 
 aquasecurity/tracee
-  https://github.com/aquasecurity/tracee. Licensed under the Apache
-  License, Version 2.0.
+  https://github.com/aquasecurity/tracee, main branch (its NOTICE file read
+  2026-11-12). Copyright 2019 Aqua Security Software Ltd. Licensed under the
+  Apache License, Version 2.0.
   - Container cgroup scope-name prefixes (pkg/datastores/container/
     containers.go) in internal/platform/container.go.
+  tracee ships a NOTICE file. Section 4(d) of the Apache License asks for
+  it to be carried with derivative works, so it is repeated here verbatim:
+
+--- aquasecurity/tracee, NOTICE ---
+
+tracee
+Copyright 2019 Aqua Security Software Ltd. 
+
+This product includes software developed by Aqua Security (https://aquasec.com).
+
+--- end of aquasecurity/tracee NOTICE ---
 
 moby/profiles
   https://github.com/moby/profiles, tag seccomp/v0.1.0. Licensed under the

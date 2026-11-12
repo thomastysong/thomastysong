@@ -133,7 +133,7 @@ func (s *scanner) queueProject(probe *event.Event, pid int) {
 		return
 	}
 	s.mu.Unlock()
-	if pid > 0 && !s.mnt.same(pid) {
+	if pid > 0 && !s.mnt.same(pid, cwd) {
 		s.d.board.add("scan.project_foreign_ns", 1)
 		s.mark(foreignKey, now)
 		return

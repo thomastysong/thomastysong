@@ -180,8 +180,9 @@ type Stats struct {
 	OsqueryEvts uint64
 	Errors      uint64
 	// ProcsTotal is the number of live user-space processes in the table
-	// (kernel threads left out) at the last full scan; ProcsUnreadable how
-	// many of them refused the monitor with EACCES or EPERM. A sensor
+	// (kernel threads left out), plus the hidden ones (ProcsHidden), at
+	// the last full scan; ProcsUnreadable how many of them refused the
+	// monitor with EACCES or EPERM. A sensor
 	// without the privilege to read other accounts' processes (no root, no
 	// CAP_SYS_PTRACE) sees their names but not their environment, and
 	// attributes none of them: this pair makes that visible in the
@@ -205,6 +206,9 @@ type Stats struct {
 	// SelfExcluded counts spoor's own hook processes that were not
 	// reported (self.go).
 	SelfExcluded uint64
+	// StableIDs: process.exec ids are keyed with Options.IDKey and hold
+	// across restarts; false with the per-process key.
+	StableIDs bool
 }
 
 // Internal limits.
@@ -457,6 +461,7 @@ func (m *Monitor) Stats() Stats {
 		ProcsHidden:     m.st.procsHidden.Load(),
 		ProcsProtected:  m.st.procsProtected.Load(),
 		SelfExcluded:    m.st.selfExcluded.Load(),
+		StableIDs:       len(m.o.IDKey) >= minIDKey,
 	}
 	if ns := m.st.lastCanary.Load(); ns != 0 {
 		s.LastCanary = time.Unix(0, ns)

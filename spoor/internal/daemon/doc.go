@@ -36,12 +36,22 @@
 //     tables through internal/osqexec when sources.osquery_exec is enabled,
 //     then polling). The monitor's agent table answers the pipeline's RootSaw
 //     and supplies configuration-home overrides and project directories.
-//     spoor's own hook processes are recognised by the file identity of the
-//     running binary and of the installed copies (/usr/bin/spoor,
-//     /usr/local/bin/spoor, %ProgramFiles%\spoor\spoor.exe) and not
-//     reported. The heartbeat counts procs_total and procs_unreadable (live
+//     spoor's own hook processes are recognised by the running image
+//     (procmon self.go) against the running binary and the installed
+//     copies (/usr/bin/spoor, /usr/local/bin/spoor,
+//     %ProgramFiles%\spoor\spoor.exe), each used only when only root can
+//     change what its path names (platform.TrustedPath), and not reported.
+//     The daemon's identity key (engine.IdentityKeyPath) also keys the
+//     monitor's process.exec ids, so a restarted sensor gives the live
+//     processes it reports again the ids they had (procmon.stable_ids).
+//     The heartbeat counts procs_total and procs_unreadable (live
 //     user-space processes, and those that refused the monitor with EACCES
-//     or EPERM): a sensor short of privilege shows it there.
+//     or EPERM), procs_hidden (of those, pids /proc mounted hidepid=1 lets
+//     it list but not read) and procs_protected (of those, system-account
+//     processes that refuse a fully privileged sensor: Windows protected
+//     processes, a sandbox's init). A sensor short of privilege shows it
+//     there, and the processes surface is degraded (procs_unreadable)
+//     whenever an unreadable process is not a protected one.
 //   - OTel: the loopback otelrecv receiver when sources.otlp.enabled.
 //   - Adapters: numbat NDJSON files from sources.adapters, with the file
 //     owner as the user. As for transcripts, files that exist when their
@@ -58,9 +68,12 @@
 //     hours and 60 per account per hour; privacy exclusions honoured; only a
 //     real directory owned by the session's account, whose files discovery
 //     again refuses when another account owns them). The working directory
-//     of an agent process is scanned only when the process shares the
-//     sensor's file system view: the same mount namespace, or the same root
-//     directory (systemd's private namespace over the host's root). In node
+//     of an agent process is scanned only when the path means the same in
+//     the sensor's file system view: the same mount namespace, or else the
+//     path, resolved here, is the directory the process is in (device and
+//     inode of /proc/<pid>/cwd). A shared root is not enough: systemd's
+//     private namespace over the host's root keeps home directories but
+//     gives the daemon its own /tmp under PrivateTmp=. In node
 //     mode (the host's pid namespace, host_root empty) an agent in another
 //     container names a path in its own namespace, which in the sensor's
 //     names one of the sensor's directories; it is skipped and counted

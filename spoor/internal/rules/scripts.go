@@ -154,7 +154,7 @@ func execTargets(ev *event.Event) (named, run []string) {
 			run = append(run, p)
 		}
 	}
-	if readsProgram(cmds) {
+	if readsProgram(ev, cmds) {
 		reads, _ := f["shell.reads"].([]string)
 		for _, r := range reads {
 			if fedToInterpreter(r, cmds) {
@@ -176,16 +176,43 @@ func execTargets(ev *event.Event) (named, run []string) {
 // a file a redirect or a plain reader hands to the line can be its
 // program. An interpreter given program text (sh -c, node -e) or a script
 // file reads its program from there, so a one-liner elsewhere on the line
-// does not make a redirect a run, and does not hide one either.
-func readsProgram(cmds []map[string]any) bool {
+// does not make a redirect a run, and does not hide one either. Nor does
+// an interpreter whose language has inline code on the line: that is its
+// standard input already (python3 - <<'EOF' ... open('x.ps1') ... EOF reads
+// x.ps1 as data).
+func readsProgram(ev *event.Event, cmds []map[string]any) bool {
+	langs, _ := ev.Feat["shell.inline_langs"].([]string)
 	for _, c := range cmds {
 		name, _ := c["name"].(string)
 		args, _ := c["args"].([]string)
-		if k, _ := launchOf(name, args); k == launchStdin {
+		if k, _ := launchOf(name, args); k == launchStdin && !contains(langs, inlineLang(name)) {
 			return true
 		}
 	}
 	return false
+}
+
+// inlineLang is the shell.inline_langs value of code an interpreter runs.
+func inlineLang(name string) string {
+	switch name {
+	case "pwsh", "powershell", "powershell_ise", "pwsh-preview":
+		return "powershell"
+	case "node", "nodejs", "deno", "bun", "tsx", "ts-node":
+		return "javascript"
+	case "luajit":
+		return "lua"
+	case "py":
+		return "python"
+	}
+	if spec, ok := interpSpecs(name); ok && spec.shell {
+		return "sh"
+	}
+	for _, x := range [][2]string{{"python", "python"}, {"pypy", "python"}, {"perl", "perl"}, {"ruby", "ruby"}, {"php", "php"}, {"lua", "lua"}} {
+		if rest, ok := strings.CutPrefix(name, x[0]); ok && versionTail(rest) {
+			return x[1]
+		}
+	}
+	return ""
 }
 
 // runsPath reports whether a parsed command runs p: p is the command word

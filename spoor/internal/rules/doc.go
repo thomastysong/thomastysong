@@ -177,27 +177,44 @@
 // apply_patch) and run in a later event is analysed when it is written:
 // features.WrittenScripts gives the shell.* and net.* facts a shell event
 // carrying the script's content would get (shell, PowerShell and cmd
-// scripts in their dialect; Python, JavaScript, Ruby, Perl, PHP and Lua as
-// interpreter one-liners), and the session keeps them per normalized path
-// (16 scripts, 3 KiB of facts each, least recently written evicted; a
-// write that replaces the file with non-script content or a patch that
-// deletes it forgets it, an edit adds to it, a patch move carries it).
+// scripts in their dialect, csh and fish as POSIX shell; Python,
+// JavaScript, Ruby, Perl, PHP and Lua as the program of an interpreter
+// fed by a heredoc), inside the half of the event's deadline the session
+// work may use, and the session keeps them per normalized path: 16
+// scripts, 3 KiB of facts each, with the text of a script of at most 8 KiB
+// that holds no credential (32 KiB of texts in all). When the memory is
+// full the least valuable record goes first, oldest first among equals:
+// facts no rule can match, then facts without a notable fact or a command
+// a rule matches, then the rest, then scripts that send a remembered
+// credential value. A write that replaces the file with non-script
+// content or a patch that deletes it forgets it, a patch move carries it,
+// and an edit is applied to the held text and the whole result analysed;
+// without a held text the edit's new text adds to what is known
+// (shell.inherited_kinds = edit_fragment on the run). The bounds of the
+// facts shed what no rule of the engine matches first (scriptKeep: a
+// command no any_command predicate of any rule holds for, a list value no
+// leaf on its feature holds for), so a script padded with ordinary lines
+// keeps the line a rule needs. Credentials in the facts are redacted.
 // When a later shell command or process.exec runs that path (./x.sh, sh
-// x.sh, bash < x.sh, cat x.sh | sh, source x.sh, python3 x.py, node x.js,
-// pwsh -File x.ps1, through sudo, env, timeout and cd), the facts are
-// merged into the executing event before matching (features.Inherit), so
-// the parsed-fact rules fire on "sh /tmp/x.sh" as they would on its
-// content, scripts run by the script included. Detections on such an event
-// carry shell.inherited_kinds = written_script and
-// session.written_exec_path in their evidence, and a guard reason names
-// the script. A path counts as run only when it is the command word or the
-// script argument of an interpreter: chmod targets, syntax checks (sh -n,
-// node --check, perl -c, php -l) and a file handed to a program as data
-// (python3 -c code x.py, python3 - x.py) do not inherit, although they
-// still set session.runs_written_file as before. A script that sends a
-// credential value remembered from an earlier read is scanned when it is
-// written; running it sets session.secret_flow. Nothing is read from disk:
-// what is known about a file is what the agent's file tools wrote into it.
+// x.sh, bash +x x.sh, bash < x.sh, cat x.sh | sh, source x.sh, python3
+// x.py, node x.js, pwsh -File x.ps1, powershell -w hidden -ep bypass -File
+// x.ps1, through sudo, env, timeout and cd), the facts are merged into the
+// executing event before matching (features.Inherit), so the parsed-fact
+// rules fire on "sh /tmp/x.sh" as they would on its content, scripts run
+// by the script included. Detections on such an event carry
+// shell.inherited_kinds = written_script and session.written_exec_path in
+// their evidence, and a guard reason names the script. A path counts as
+// run only when it is the command word or the script argument of an
+// interpreter, or a file a redirect or a plain reader (cat) hands to a
+// line where an interpreter reads its program from standard input (sh,
+// bash -s, python3 -, pwsh -Command -): chmod targets, syntax checks (sh
+// -n, node --check, perl -c, php -l) and a file handed to a program as
+// data (python3 -c code x.py, python3 - x.py) do not inherit, although
+// they still set session.runs_written_file as before. A script that sends
+// a credential value remembered from an earlier read is scanned when it is
+// written; running it sets session.secret_flow, also when the same event
+// is evaluated again on newer state. Nothing is read from disk: what is
+// known about a file is what the agent's file tools wrote into it.
 //
 // # Operator suppressions
 //
@@ -233,12 +250,26 @@
 //     outside the agent, or written in another session is known only as a
 //     written path (session.runs_written_file) or not at all. A document,
 //     data or source extension (.md, .json, .go ...) without a #! line is
-//     not analysed, so "sh notes.md" inherits nothing. Writing more than 16
-//     other scripts between the write and the run evicts the first, and a
-//     one-shot hook process's 64 KiB state sheds the oldest scripts first
-//     when it is full. A relative path run after a cd that cannot be
-//     resolved statically (cd "$dir") is resolved against the session's
-//     working directory only.
+//     not analysed, so "sh notes.md" inherits nothing. The facts of one
+//     script are bounded: when the commands a rule matches alone exceed
+//     3 KiB, or a list holds more than 64 values a rule matches, the
+//     middle of them is cut (recorded in content.truncated_fields); the
+//     order is decided by the rules loaded when the script was written. A
+//     script over 128 KiB is analysed on its first and last 64 KiB, and
+//     once the event's budget is spent (a large write whose content scan
+//     is slow) only its first piece and last 8 KiB are; the rest is
+//     recorded as incomplete (shell.truncated), not seen. An edit of a file
+//     whose text is not held (longer than 8 KiB, holding a credential,
+//     written in another session or before the memory evicted it) is
+//     analysed apart from the line it lands in: the run carries
+//     shell.inherited_kinds = edit_fragment. More than 16 scripts of equal
+//     value between the write and the run evict the first, and a one-shot
+//     hook process's 64 KiB state sheds held texts, then the oldest
+//     scripts, when it is full. A relative path run after a cd that cannot
+//     be resolved statically (cd "$dir") is resolved against the session's
+//     working directory only. A file handed to a line on standard input
+//     counts as run when any interpreter on the line reads its program
+//     from there (wc -l < x.sh; bash counts).
 //   - Novelty baselines are in memory unless Options.Baseline is set, so in
 //     a one-shot hook process every sighting is a first sighting.
 //

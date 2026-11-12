@@ -526,3 +526,63 @@ func TestClockFollowsWallClockSteps(t *testing.T) {
 		t.Errorf("Start moved without a measurement: %v", got)
 	}
 }
+
+// TestProcImagePath: the kernel's name of the running image, checked
+// against the process's start time, and refused once the file is gone.
+func TestProcImagePath(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	self, err := ProcessByPID(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, start := range []time.Time{{}, self.Start} {
+		p, err := ProcImagePath(os.Getpid(), start)
+		if err != nil || p != exe {
+			t.Errorf("ProcImagePath(self, %v) = %q %v, want %q", start, p, err, exe)
+		}
+	}
+	if _, err := ProcImagePath(os.Getpid(), self.Start.Add(time.Second)); err == nil {
+		t.Error("a start time of another process was accepted")
+	}
+	for _, pid := range []int{0, -1, 1 << 30} {
+		if _, err := ProcImagePath(pid, time.Time{}); err == nil {
+			t.Errorf("pid %d: no error", pid)
+		}
+	}
+	sleep, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skip("no sleep")
+	}
+	b, err := os.ReadFile(sleep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(t.TempDir(), "sleeper")
+	if err := os.WriteFile(bin, b, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(bin, "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if p, err := ProcImagePath(cmd.Process.Pid, time.Time{}); err == nil && p == bin {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the child never showed its image")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := os.Remove(bin); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := ProcImagePath(cmd.Process.Pid, time.Time{}); err == nil {
+		t.Errorf("deleted image still named %q", p)
+	}
+}

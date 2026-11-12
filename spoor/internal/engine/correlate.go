@@ -45,6 +45,9 @@ import (
 // one batch). A record that has already been handed to its sink cannot
 // change, so a twin that arrives after that is counted instead: heartbeat
 // correlate.corroborated_after_write and, per session, the summary label
+// corroborated_after_write, once per record however many surfaces arrive
+// late (Claude Code with OTel on reports one tool call on three), so
+// either is a subset of correlate.corroborated and of the label
 // corroborated. In the daemon the hook record is written within
 // milliseconds and the transcript tailer delivers its copy a poll later, so
 // hook-first corroboration is usually the counted kind; the session
@@ -72,6 +75,9 @@ type corrEntry struct {
 	out *event.Event
 	// corroborated: another surface confirmed the action (counted once).
 	corroborated bool
+	// late: a surface confirmed the action after its record was written
+	// (counted once, however many such surfaces come).
+	late bool
 	// synthetic: the entry of a session start the pipeline synthesized.
 	synthetic bool
 }
@@ -303,6 +309,10 @@ func (p *Pipeline) corroborate(ent *corrEntry, src event.Source, s *session) {
 		out.Sources = orig
 	}
 	p.markCorroborated(ent, s)
+	if ent.late {
+		return
+	}
+	ent.late = true
 	p.ctr.corroboratedLate++
 	if s != nil {
 		s.corroboratedLate++

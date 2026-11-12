@@ -2,6 +2,7 @@ package engine
 
 import (
 	"reflect"
+	"strconv"
 	"testing"
 	"time"
 
@@ -173,4 +174,51 @@ func TestCorroborationOnRecords(t *testing.T) {
 			t.Errorf("a synthesized session start counted as corroborated: %d", st["correlate.corroborated"])
 		}
 	})
+}
+
+// otelTwin is the OTel record of a tool call as the receiver produces it:
+// no account (loopback carries none), attributed by the engine to the one
+// live session with the same host, agent and session id.
+func otelTwin(typ, sess string, opts ...evOpt) *event.Event {
+	e := base(event.SourceOTel, typ, sess, opts...)
+	e.User = nil
+	return e
+}
+
+// TestCorroboratedAfterWriteIsSubset: Claude Code with OTel on reports one
+// tool call on three surfaces (the PostToolUse hook, the transcript
+// tool_result and the OTel tool_result event). A record written before
+// both twins came is one record corroborated after it was written:
+// correlate.corroborated_after_write and the summary label of that name
+// count it once, never more than corroborated, the total they are a
+// subset of (they once counted every late surface).
+func TestCorroboratedAfterWriteIsSubset(t *testing.T) {
+	h := newHarness(t, nil)
+	h.ingest(hook(event.TypeToolPost, "z1", shell("toolu_z1", "make")))
+	h.tick() // the hook record is written
+	h.advance(200 * time.Millisecond)
+	h.ingest(transcript(event.TypeToolPost, "z1", shell("toolu_z1", "make")))
+	h.tick()
+	h.advance(time.Second)
+	h.ingest(otelTwin(event.TypeToolPost, "z1", shell("toolu_z1", "make")))
+	h.tick()
+	st := h.stats()
+	if st["correlate.corroborated"] != 1 || st["correlate.corroborated_after_write"] != 1 {
+		t.Errorf("corroborated %d corroborated_after_write %d, want 1 and 1 (duplicates %d)",
+			st["correlate.corroborated"], st["correlate.corroborated_after_write"], st["correlate.duplicates"])
+	}
+	h.ingest(hook(event.TypeSessionEnd, "z1"))
+	h.endWindow()
+	h.tick()
+	sums := h.out.ofType(event.TypeSessionSummary)
+	if len(sums) == 0 {
+		t.Fatal("no session summary")
+	}
+	for _, s := range sums {
+		c, _ := strconv.Atoi(s.Labels["corroborated"])
+		l, _ := strconv.Atoi(s.Labels["corroborated_after_write"])
+		if c != 1 || l != 1 {
+			t.Errorf("summary labels corroborated=%d corroborated_after_write=%d, want 1 and 1", c, l)
+		}
+	}
 }

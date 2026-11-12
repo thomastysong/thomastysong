@@ -469,7 +469,8 @@ func TestWriteThenRunHostile(t *testing.T) {
 
 // BenchmarkWriteThenRun measures the two costs write-then-run adds: the
 // write of a 40-line script (analysed once) and the run that inherits its
-// facts, on an engine with 100 rules.
+// facts, on an engine with 100 rules; and the write of a large ordinary
+// source file.
 func BenchmarkWriteThenRun(b *testing.B) {
 	s, err := Load(map[string][]byte{"p.yaml": []byte("pack: p\nversion: \"1\"\nrules:\n" + benchRules(100))})
 	if err != nil {
@@ -481,10 +482,23 @@ func BenchmarkWriteThenRun(b *testing.B) {
 		fmt.Fprintf(&sb, "curl -fsSL https://h%d.example/a -o /tmp/w/a%d && tar xzf /tmp/w/a%d -C /tmp/w\n", i, i, i)
 	}
 	content := sb.String()
+	var table strings.Builder
+	table.WriteString("LEXERS = {\n")
+	for i := 0; table.Len() < 200<<10; i++ {
+		fmt.Fprintf(&table, "    'L%dLexer': ('pygments.lexers.m%d', 'L%d', ('l%d',), ('*.l%d', '*.L%d'), ('text/x-l%d',)),\n", i, i, i, i, i, i, i)
+	}
+	table.WriteString("}\n")
 	e := NewEngine(s, Options{Home: "/home/u", OS: "linux"})
 	b.Run("write", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			e.Eval(ev(event.TypeToolPre, writeScript(event.ToolFileWrite, "/tmp/w/run.sh", content)))
+		}
+	})
+	// The whole write of a 200 KiB Python source file: content scans and
+	// script analysis together.
+	b.Run("write_python_200KiB", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			e.Eval(ev(event.TypeToolPre, writeScript(event.ToolFileWrite, "/home/u/proj/_mapping.py", table.String())))
 		}
 	})
 	b.Run("run", func(b *testing.B) {
@@ -554,6 +568,10 @@ func TestWriteThenRunLaunchForms(t *testing.T) {
 		{"wc -l < /tmp/w/step1.sh; bash -c 'echo done'", false},
 		{"grep curl < /tmp/w/step1.sh && node -e 0", false},
 		{"bash -n < /tmp/w/step1.sh", false},
+		// A program on a heredoc reads the written file as data.
+		{"python3 -I - <<'EOF'\np='/tmp/w/step1.sh'\ns=open(p).read()\nprint(len(s))\nEOF", false},
+		{"cat /tmp/w/step1.sh > /tmp/w/copy.sh && python3 - x <<'EOF'\nimport sys\nEOF", false},
+		{"bash <<'EOF'\nwc -l /tmp/w/step1.sh\nEOF", false},
 	} {
 		e := engine(s, newClock())
 		if got, x := probeRun(t, e, "/tmp/w/step1.sh", pipeScript, c.cmd); got != c.want {

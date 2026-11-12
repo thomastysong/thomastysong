@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -8,9 +9,11 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 	"time"
 
+	"github.com/thomastysong/spoor/internal/engine"
 	"github.com/thomastysong/spoor/internal/event"
 	"github.com/thomastysong/spoor/internal/platform"
 	"github.com/thomastysong/spoor/internal/procmon"
@@ -80,6 +83,60 @@ func TestHostNameFromEnvironment(t *testing.T) {
 	}
 }
 
+// TestIdentityKeySharedWithMonitor: the daemon loads its persisted
+// identity key once and gives it to the process monitor as well as the
+// pipeline, so process.exec ids of live processes a restarted sensor
+// reports again are the ids they had (and collapse downstream). A key
+// file that cannot be used leaves the monitor on its per-process key and
+// is reported by the pipeline.
+func TestIdentityKeySharedWithMonitor(t *testing.T) {
+	f := newFixture(t)
+	on := true
+	f.cfg.Sources.Processes.Enabled = &on // built, never run
+	start := func() *daemon {
+		t.Helper()
+		d, err := newDaemon(f.cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), f.env())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			_ = d.pipe.Close()
+			_ = d.closeStores()
+		})
+		if d.mon == nil {
+			t.Fatal("no process monitor")
+		}
+		return d
+	}
+	d := start()
+	if !d.mon.Stats().StableIDs {
+		t.Error("the monitor did not get the stored identity key")
+	}
+	d.refreshProcs()
+	if d.board.get("procmon.stable_ids") != 1 {
+		t.Error("procmon.stable_ids is not 1")
+	}
+	k1, err := engine.ReadIdentityKey(engine.IdentityKeyPath(f.cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	start()
+	if k2, err := engine.ReadIdentityKey(engine.IdentityKeyPath(f.cfg)); err != nil || !bytes.Equal(k1, k2) {
+		t.Errorf("the key changed across a restart: %v", err)
+	}
+	if runtime.GOOS == "windows" {
+		return
+	}
+	// A key file anyone may read is never used.
+	if err := os.Chmod(engine.IdentityKeyPath(f.cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d = start()
+	if d.mon.Stats().StableIDs {
+		t.Error("an unusable key file was given to the monitor")
+	}
+}
+
 func TestSelfExePaths(t *testing.T) {
 	if got := selfExePaths("", "linux"); !reflect.DeepEqual(got, []string{"/usr/bin/spoor", "/usr/local/bin/spoor"}) {
 		t.Errorf("linux: %v", got)
@@ -117,6 +174,22 @@ func TestMonitorSurfaceUnreadable(t *testing.T) {
 	if s.Status != "ok" {
 		t.Errorf("all readable: %+v", s)
 	}
+	// A privileged sensor refused only by protected processes (Windows
+	// protected processes, this build host's sandboxed pid 1): ok.
+	s = monitorSurface(procmon.Stats{Source: procmon.SourceCNProc, ExecHealthy: true, ProcsTotal: 200, ProcsUnreadable: 3, ProcsProtected: 3})
+	if s.Status != "ok" {
+		t.Errorf("only protected processes unreadable: %+v", s)
+	}
+	// One more, of another account: a privilege is missing.
+	s = monitorSurface(procmon.Stats{Source: procmon.SourceCNProc, ExecHealthy: true, ProcsTotal: 200, ProcsUnreadable: 4, ProcsProtected: 3})
+	if s.Status != "degraded" || s.Reason != "procs_unreadable" {
+		t.Errorf("an unprotected process unreadable: %+v", s)
+	}
+	// hidepid=1 without the privilege: hidden processes are unreadable.
+	s = monitorSurface(procmon.Stats{Source: procmon.SourceCNProc, ExecHealthy: true, ProcsTotal: 97, ProcsUnreadable: 96, ProcsHidden: 96})
+	if s.Status != "degraded" || s.Reason != "procs_unreadable" {
+		t.Errorf("hidepid: %+v", s)
+	}
 }
 
 // TestProcReadabilityGauges: the monitor's readability counts and the count
@@ -139,12 +212,14 @@ func TestProcReadabilityGauges(t *testing.T) {
 	}
 	d.refreshProcs()
 	c := d.board.counters()
-	for _, k := range []string{"procs_total", "procs_unreadable", "procmon.self_excluded"} {
+	for _, k := range []string{"procs_total", "procs_unreadable", "procs_hidden", "procs_protected", "procmon.self_excluded"} {
 		if _, ok := c[k]; !ok {
 			t.Errorf("heartbeat counter %s missing: %v", k, c)
 		}
 	}
-	if c["procs_total"] == 0 || c["procs_unreadable"] > c["procs_total"] {
-		t.Errorf("procs_total %d procs_unreadable %d", c["procs_total"], c["procs_unreadable"])
+	if c["procs_total"] == 0 || c["procs_unreadable"] > c["procs_total"] ||
+		c["procs_hidden"] > c["procs_unreadable"] || c["procs_protected"] > c["procs_unreadable"] {
+		t.Errorf("procs_total %d procs_unreadable %d procs_hidden %d procs_protected %d",
+			c["procs_total"], c["procs_unreadable"], c["procs_hidden"], c["procs_protected"])
 	}
 }

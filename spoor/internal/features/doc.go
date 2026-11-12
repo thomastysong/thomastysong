@@ -111,33 +111,63 @@
 // A command written into a script by a file tool and run in a second event
 // ("sh /tmp/x.sh") would hide every shell fact from single-event rules.
 // WrittenScripts takes a file_write or file_edit event (Write, Edit,
-// MultiEdit, Copilot create/str_replace, Codex apply_patch split per file)
-// and, for each file whose content is a script, returns ScriptFacts: the
-// shell.* and net.* features a shell event carrying that content would
-// get. A script is content with a #! line naming a known interpreter, a
-// file with a script extension (.sh .bash .zsh .ksh .command .ps1 .psm1
-// .bat .cmd .py .pyw .js .mjs .cjs .ts .mts .cts .rb .pl .pm .php .lua),
-// or a file with no extension (or one that is not a document, data or
-// compiled-language source format) whose content parses as POSIX shell.
-// Shell, PowerShell and cmd content is analysed in its dialect; Python,
-// JavaScript, Ruby, Perl, PHP and Lua content as the code of an
-// interpreter one-liner (what shellx sees through: shell commands handed to
-// exec-style calls, URLs, decoded payloads, reads), minus what the
+// MultiEdit, Copilot create/str_replace/insert, Gemini replace, Codex
+// apply_patch split per file) and, for each file whose content is a
+// script, returns ScriptFacts: the shell.* and net.* features a shell event
+// carrying that content would get. A script is content with a #! line
+// naming a known interpreter, a file with a script extension (.sh .bash
+// .zsh .ksh .csh .tcsh .fish .command .ps1 .psm1 .bat .cmd .py .pyw .js
+// .mjs .cjs .ts .mts .cts .rb .pl .pm .php .lua), or a file with no
+// extension (or one that is not a document, data or compiled-language
+// source format) whose content parses as POSIX shell. Shell content (csh,
+// tcsh and fish read as POSIX shell), PowerShell and cmd content is
+// analysed in its dialect; Python, JavaScript, Ruby, Perl, PHP and Lua
+// content as the program an interpreter reads from a quoted heredoc, in
+// pieces of at most 30 KiB (what shellx sees through: shell commands handed
+// to exec-style calls, URLs, decoded payloads, reads), minus what the
 // synthetic wrapper itself contributes, plus a POSIX analysis when the text
-// parses as shell ("bash x.py"). ScriptFacts are bounded (3 KiB of strings,
-// 96 commands of 32 arguments, 64 entries per list; duplicate and inert
-// commands go first, cuts are recorded) and validated as hostile input
-// when they come back from a session state file.
+// parses as shell ("bash x.py"). Only a patch tool's input that starts with
+// "*** Begin Patch" is read as an apply_patch envelope; the content of a
+// write is always that file's.
 //
-// The rule engine keeps them per normalized path and, when a later shell
-// command or process.exec runs that path, calls Inherit: the script's
-// facts are merged into the executing event's features (lists unioned,
-// booleans ORed, commands appended to shell.cmds), shell.inherited_kinds
-// is set to written_script, and output.untrusted is recomputed for a shell
-// result. The same parsed-fact rules then fire on the execution event. No
-// file is ever opened: the content is what the tool call carried, so a
-// script changed outside the agent's file tools (a shell redirect, an
-// editor, a download) is known only by the facts of the last tool write.
+// The analysis runs inside the event's time budget (ScriptOptions.Stop):
+// the first piece of text and the last 8 KiB are always analysed, the rest
+// while the budget lasts, and what is skipped is recorded as incomplete
+// (Cut, shell.truncated). The credential scan of a written file reuses the
+// one Compute made of the same content.
+//
+// ScriptFacts are bounded (3 KiB of strings, 96 commands of 32 arguments,
+// 64 entries per list) and validated as hostile input when they come back
+// from a session state file. What the bounds shed is ordered by value
+// (ScriptOptions.Keep, which the rule engine fills from its rules):
+// duplicate and inert commands first, then commands and list values no
+// rule matches, and only then, head and tail kept, the ones a rule
+// matches; every cut is recorded. So a script padded with hundreds of
+// ordinary lines keeps the line a rule needs, unless the rule-matched
+// commands alone exceed the bounds. Credentials are redacted in every
+// argument, path and value ("[REDACTED:<kind>]", no fingerprint); their
+// kinds stay in shell.secret_kinds.
+//
+// An edit sends only its new text, which can be harmless alone and
+// dangerous in the line it lands in ("| cat" replaced by "| sh"). When the
+// engine holds the file's text (WrittenScript.Keep: the whole text of a
+// script of at most 8 KiB with no credential in it, kept in session state)
+// the edit is applied to it as the tool applies it (old/new replacement,
+// insert, patch hunks) and the whole result is analysed (InContext).
+// Otherwise the new text is analysed on its own and its facts are a
+// Fragment; an event that inherits them carries shell.inherited_kinds =
+// edit_fragment and shell.cmds is recorded as incomplete.
+//
+// The rule engine keeps the facts per normalized path and, when a later
+// shell command or process.exec runs that path, calls Inherit: the
+// script's facts are merged into the executing event's features (lists
+// unioned, booleans ORed, commands appended to shell.cmds),
+// shell.inherited_kinds is set to written_script, and output.untrusted is
+// recomputed for a shell result. The parsed-fact rules then fire on the
+// execution event as on the content, within the bounds above. No file is
+// ever opened: the content is what the tool call carried, so a script
+// changed outside the agent's file tools (a shell redirect, an editor, a
+// download) is known only by the facts of the last tool write.
 //
 // # Filled by the rule engine
 //
@@ -145,7 +175,7 @@
 // session.first_event, session.runs_written_file and
 // session.written_exec_path (write-then-run across events),
 // shell.inherited_kinds (the event's shell facts include a written
-// script's, see above),
+// script's: written_script, edit_fragment; see above),
 // session.secret_flow and session.secret_flow_kinds (a value read from a
 // credential-class path leaves in a later command, URL or MCP argument),
 // session.secret_flow_truncated (that outbound data was too large to scan

@@ -293,3 +293,201 @@ func idOf(t *testing.T, fi os.FileInfo, p string) string {
 	}
 	return id
 }
+
+// hideSource lists some pids as denied, as procfs does under hidepid=1:
+// the pid is listed, nothing under it can be read.
+type hideSource struct {
+	source
+	hide map[int]string // pid -> owner uid
+}
+
+func (d hideSource) list() ([]ident, map[int]*platform.Proc, error) {
+	ids, recs, err := d.source.list()
+	for i := range ids {
+		if uid, ok := d.hide[ids[i].pid]; ok {
+			ids[i] = ident{pid: ids[i].pid, denied: true, uid: uid}
+		}
+	}
+	return ids, recs, err
+}
+
+func (d hideSource) identOf(pid int) (ident, bool) {
+	if _, ok := d.hide[pid]; ok {
+		return ident{}, false
+	}
+	return d.source.identOf(pid)
+}
+
+func (d hideSource) read(pid int) (platform.Proc, ident, bool) {
+	if _, ok := d.hide[pid]; ok {
+		return platform.Proc{}, ident{}, false
+	}
+	return d.source.read(pid)
+}
+
+// TestFixtureHiddenPidsCounted: pids the listing found but could not read
+// even the stat of (hidepid=1) count as total, unreadable and hidden; a
+// process the table knew that becomes hidden stays (no false exit) and
+// counts as unreadable; nothing is protected without the read privilege.
+func TestFixtureHiddenPidsCounted(t *testing.T) {
+	h := newFakeHost(t)
+	h.add(fakeProc{pid: 1, comm: "systemd", ticks: 1, args: []string{"/sbin/init"}, exe: "/usr/lib/systemd/systemd", uid: "0"})
+	h.add(fakeProc{pid: 200, ppid: 1, comm: "bash", ticks: 60, args: []string{"-bash"}, exe: "/usr/bin/bash"})
+	h.add(fakeProc{pid: 300, ppid: 1, comm: "codex", ticks: 70, args: []string{"codex"}, exe: "/usr/local/bin/codex", uid: "1001"})
+	m, clk := newFixtureMonitor(t, h)
+	m.privileged = false
+	m.fullScan(m.now())
+	drain(m)
+	if st := m.Stats(); st.ProcsTotal != 3 || st.ProcsUnreadable != 0 || st.ProcsHidden != 0 {
+		t.Fatalf("readable host: %+v", st)
+	}
+	// /proc remounted hidepid=1: the agent of uid 1001 and root's init are
+	// hidden now, and two processes never seen before are hidden too.
+	h.add(fakeProc{pid: 500, ppid: 1, comm: "node", ticks: 90, uid: "1001"})
+	h.add(fakeProc{pid: 600, ppid: 2, comm: "kworker/0:1", ticks: 95, uid: "0"})
+	m.src = hideSource{source: m.src, hide: map[int]string{1: "0", 300: "1001", 500: "1001", 600: "0"}}
+	clk.add(defaultIdle)
+	m.fullScan(m.now())
+	evs := drain(m)
+	st := m.Stats()
+	if st.ProcsTotal != 5 || st.ProcsUnreadable != 4 || st.ProcsHidden != 4 || st.ProcsProtected != 0 {
+		t.Errorf("hidepid: total %d unreadable %d hidden %d protected %d, want 5 4 4 0",
+			st.ProcsTotal, st.ProcsUnreadable, st.ProcsHidden, st.ProcsProtected)
+	}
+	if len(ofType(evs, event.TypeAgentProcessStop)) != 0 {
+		t.Error("a hidden but live agent was reported as stopped")
+	}
+	m.mu.Lock()
+	n := m.nodes[300]
+	m.mu.Unlock()
+	if n == nil || !n.unreadable {
+		t.Errorf("known process that became hidden: %+v", n)
+	}
+	// A privileged monitor (root, the reader capabilities) is not stopped
+	// by hidepid; if root-owned pids still refuse it, they are protected.
+	m.privileged = true
+	clk.add(defaultIdle)
+	m.fullScan(m.now())
+	if st := m.Stats(); st.ProcsProtected != 2 {
+		t.Errorf("privileged: protected %d, want 2 (root's init and the kernel worker)", st.ProcsProtected)
+	}
+	// Gone from the listing: no longer counted.
+	h.remove(500)
+	clk.add(defaultIdle)
+	m.fullScan(m.now())
+	if st := m.Stats(); st.ProcsHidden != 3 || st.ProcsTotal != 4 {
+		t.Errorf("after an exit: %+v", st)
+	}
+}
+
+// TestFixtureProtectedProcesses: a process that refuses a monitor holding
+// the read privilege and runs as the system account is protected (counted
+// in ProcsUnreadable and ProcsProtected); one of any other account is not,
+// and without the privilege nothing is protected.
+func TestFixtureProtectedProcesses(t *testing.T) {
+	h := newFakeHost(t)
+	h.add(fakeProc{pid: 1, comm: "process_api", ticks: 1, args: []string{"/process_api"}, exe: "/process_api", uid: "0"})
+	h.add(fakeProc{pid: 200, ppid: 1, comm: "bash", ticks: 60, args: []string{"-bash"}, exe: "/usr/bin/bash"})
+	h.add(fakeProc{pid: 300, ppid: 1, comm: "node", ticks: 70, args: []string{"node", "x.js"}, exe: "/usr/bin/node", uid: "1001"})
+	for _, c := range []struct {
+		privileged bool
+		deny       map[int]bool
+		unreadable uint64
+		protected  uint64
+	}{
+		{true, map[int]bool{1: true}, 1, 1},
+		{true, map[int]bool{1: true, 300: true}, 2, 1},
+		{false, map[int]bool{1: true}, 1, 0},
+		{false, map[int]bool{1: true, 300: true}, 2, 0},
+	} {
+		m, _ := newFixtureMonitor(t, h)
+		m.privileged = c.privileged
+		m.src = denySource{source: m.src, deny: c.deny}
+		m.fullScan(m.now())
+		drain(m)
+		if st := m.Stats(); st.ProcsUnreadable != c.unreadable || st.ProcsProtected != c.protected {
+			t.Errorf("privileged %v deny %v: unreadable %d protected %d, want %d %d",
+				c.privileged, c.deny, st.ProcsUnreadable, st.ProcsProtected, c.unreadable, c.protected)
+		}
+	}
+}
+
+// TestFixtureSelfHookUntrustedInstallReported: an installed spoor binary on
+// a path accounts other than root can change (here under the
+// world-writable temporary directory) is not trusted, so a process
+// running it as `spoor hook` is reported like any program: whoever can
+// write there could put their own program in its place.
+func TestFixtureSelfHookUntrustedInstallReported(t *testing.T) {
+	h := newFakeHost(t)
+	installed := writeBinary(t, filepath.Join(t.TempDir(), "usr", "bin"), "spoor")
+	if platform.TrustedPath(installed) {
+		t.Skipf("%s is trusted here (temporary directory not writable by others)", installed)
+	}
+	h.add(fakeProc{pid: 1, comm: "systemd", ticks: 1, args: []string{"/sbin/init"}, exe: "/usr/lib/systemd/systemd", uid: "0"})
+	h.add(fakeProc{pid: 40, ppid: 1, comm: "claude", ticks: 4000, args: []string{"claude", "-p", "x"},
+		exe: "/opt/claude-code/bin/claude", cwd: "/home/dev/proj", children: []int{41}})
+	h.add(fakeProc{pid: 41, ppid: 40, comm: "spoor", ticks: 4100, args: []string{installed, "hook", "--agent", "claude-code"},
+		exe: installed, env: map[string]string{"CLAUDECODE": "1"}, cwd: "/home/dev/proj"})
+	m, _ := newFixtureMonitor(t, h)
+	m.o.SelfExes = []string{installed}
+	fi, _ := os.Stat(installed)
+	if m.selfIDs(m.now()).ids[idOf(t, fi, installed)] {
+		t.Fatal("an installed binary on an untrusted path is in the identity set")
+	}
+	m.selfSet.Store(nil)
+	m.fullScan(m.now())
+	if byPID(ofType(drain(m), event.TypeProcessExec), 41) == nil {
+		t.Error("a hook process running a binary from an untrusted path was hidden")
+	}
+}
+
+// TestFixtureExecIDStable: with the daemon's persisted key (Options.IDKey)
+// the process.exec id of a live process is the same in two runs of the
+// sensor (a restart reports every live process again), and the
+// connector's record of an exec gets the id a rescan gives the same
+// process. A monitor with its own random key gives another id.
+func TestFixtureExecIDStable(t *testing.T) {
+	h := newFakeHost(t)
+	h.add(fakeProc{pid: 1, comm: "init", ticks: 1, args: []string{"/sbin/init"}, exe: "/sbin/init", uid: "0"})
+	h.add(fakeProc{pid: 300, ppid: 1, comm: "codex", ticks: 100, args: []string{"codex", "--yolo"}, exe: "/usr/local/bin/codex"})
+	child := fakeProc{pid: 301, ppid: 300, comm: "git", ticks: 200, args: []string{"git", "push", "--force"}, exe: "/usr/bin/git",
+		env: map[string]string{"CODEX_THREAD_ID": "th-1"}}
+	h.add(child)
+	key := bytes.Repeat([]byte{0x5a}, 32)
+	scanID := func(k []byte) string {
+		t.Helper()
+		m, _ := newFixtureMonitor(t, h)
+		m.idKey = argsKeyFor(k)
+		m.fullScan(m.now())
+		ex := byPID(ofType(drain(m), event.TypeProcessExec), 301)
+		if ex == nil {
+			t.Fatal("no process.exec for the agent's child")
+		}
+		return ex.ID
+	}
+	first, second := scanID(key), scanID(key)
+	if first != second {
+		t.Errorf("two runs with the stored key: %s and %s", first, second)
+	}
+	if other := scanID(nil); other == first {
+		t.Error("the per-process key gave the stored key's id")
+	}
+	// The connector sees the exec, at its own time.
+	h.remove(301)
+	m, _ := newFixtureMonitor(t, h)
+	m.idKey = argsKeyFor(key)
+	m.fullScan(m.now())
+	drain(m)
+	h.add(child)
+	m.cnExec(301, time.Unix(fixtureBoot+20_000, 0))
+	ex := byPID(ofType(drain(m), event.TypeProcessExec), 301)
+	if ex == nil {
+		t.Fatal("no process.exec from the connector")
+	}
+	if !ex.TS.Equal(time.Unix(fixtureBoot+20_000, 0)) {
+		t.Errorf("exec TS = %v, want the connector's time", ex.TS)
+	}
+	if ex.ID != first {
+		t.Errorf("connector id %s, rescan id %s: one process, two ids", ex.ID, first)
+	}
+}

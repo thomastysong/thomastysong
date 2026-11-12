@@ -234,7 +234,7 @@ $ spoor rules test --no-host-rules --no-embedded --dir myrules
 $ spoor rules lint --no-host-rules --no-embedded --dir myrules
 warning ACME-KUBE-001 [missing_field]: no framework tags
 2 rules: 0 error(s), 1 warning(s)
-$ spoor rules list --no-host-rules --dir myrules | grep -E 'ID |ACME'
+$ spoor rules list --no-host-rules --dir myrules | grep -E '^(ID|ACME)'
 ID              CLASS    SEVERITY  RESPONSE  PACK             ON   TITLE
 ACME-KUBE-001   signal   info      none      acme             yes  Agent reads the production kubeconfig
 ACME-KUBE-002   finding  high      none      acme             yes  kubectl delete after the production kubeconfig was read
@@ -282,7 +282,7 @@ go test ./internal/rules
 
 ## Signed bundles
 
-Rules, lists, suppressions and catalog overlays reach hosts as an Ed25519-signed archive that each host verifies before installing it. There is no spoor server: the bundle and its detached signature are two static files at a URL you choose (`bundle.url`), or a file dropped on the host (air-gapped hosts, MDM). Versions only ever increase; hosts refuse a downgrade. The commands below were run as shown (the key is the one this run made).
+Rules, lists, suppressions and catalog overlays reach hosts as an Ed25519-signed archive that each host verifies before installing it. There is no spoor server: the bundle and its detached signature are two static files at a URL you choose (`bundle.url`), or a file dropped on the host (air-gapped hosts, MDM). Versions only ever increase; hosts refuse a downgrade. The commands below were run as shown, with `spoor.yaml` holding `data_dir` and the printed `bundle.public_keys` entry; the key is the one that run made.
 
 1. Make a signing key pair once, and keep the private key offline:
 
@@ -314,7 +314,7 @@ Rules, lists, suppressions and catalog overlays reach hosts as an Ed25519-signed
    $ spoor bundle verify --pub keys/acme-rules.pub out/acme-rules-1.tar.gz
    OK: version 1, created 2026-11-12T08:00:00Z, 1 files, digest c93ecb45ef7c
      rules/acme.yaml
-   $ spoor bundle verify --pub keys/acme-rules.pub out/tampered.tar.gz
+   $ spoor bundle verify --pub keys/acme-rules.pub out/tampered.tar.gz     (one byte of the archive changed)
    INVALID: bundle: signature does not verify against any trusted key
    ```
 
@@ -322,7 +322,7 @@ Rules, lists, suppressions and catalog overlays reach hosts as an Ed25519-signed
 
    ```
    $ spoor bundle pull --config spoor.yaml --file out/acme-rules-1.tar.gz
-   installed bundle version 1 (1 files) under <data_dir>/bundle
+   installed bundle version 1 (1 files) under <data_dir>/bundle      (path shortened)
    $ spoor bundle pull --config spoor.yaml --file out/acme-rules-1.tar.gz
    bundle version 1 is current
    $ spoor rules list --config spoor.yaml | tail -1

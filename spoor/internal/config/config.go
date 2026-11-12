@@ -124,6 +124,11 @@ type Sources struct {
 type HookSource struct {
 	Enabled *bool    `yaml:"enabled"`
 	Poll    Duration `yaml:"poll"`
+	// DetectInHook makes `spoor hook` evaluate the full rule set itself and
+	// append detection records next to the activity it spools. It is for
+	// daemonless, container and CI use, where no daemon re-detects from the
+	// spool; with a daemon it only adds hook latency. Off by default.
+	DetectInHook bool `yaml:"detect_in_hook"`
 }
 
 // TranscriptSource tails agents' on-disk session logs.

@@ -82,3 +82,23 @@ func TestOversizeConfigRejected(t *testing.T) {
 		t.Fatal("oversize config accepted")
 	}
 }
+
+func TestDetectInHook(t *testing.T) {
+	c, err := Load("", "/d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Sources.Hooks.DetectInHook {
+		t.Fatal("detect_in_hook must default to off")
+	}
+	c, err = Load(write(t, "sources:\n  hooks:\n    detect_in_hook: true\n"), "/d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Sources.Hooks.DetectInHook || !On(c.Sources.Hooks.Enabled, false) {
+		t.Fatalf("detect_in_hook not applied or hooks.enabled lost: %+v", c.Sources.Hooks)
+	}
+	if _, err := Load(write(t, "sources:\n  hooks:\n    detect_in_hook: yes-please\n"), "/d"); err == nil {
+		t.Fatal("non-boolean detect_in_hook accepted")
+	}
+}

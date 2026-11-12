@@ -1,0 +1,484 @@
+package engine
+
+import (
+	"container/list"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/thomastysong/spoor/internal/config"
+	"github.com/thomastysong/spoor/internal/event"
+	"github.com/thomastysong/spoor/internal/platform"
+	"github.com/thomastysong/spoor/internal/privacy"
+	"github.com/thomastysong/spoor/internal/rules"
+)
+
+// Pipeline is the detection pipeline of one spoor process.
+type Pipeline struct {
+	o         Options
+	cfg       *config.Config
+	pol       *privacy.Policy
+	mode      string
+	integrity event.Integrity
+	forceHost bool
+	writer    string
+	started   time.Time
+	minRank   int
+	contextN  int
+	rate      float64
+	burst     float64
+	labels    map[string]string // operator labels from config.Labels
+	streamsOK map[string]bool   // nil: every stream ships
+	homes     *homeCache
+	bl        *Baseline
+	blPath    string
+	disabled  func() bool
+	async     bool
+	ruleOpts  rules.Options
+	salt      []byte // per-process key for local-only dedup keys
+
+	// ingest side (no processing lock)
+	qmu      sync.Mutex
+	queue    []*event.Event
+	qcap     int
+	wake     chan struct{}
+	done     chan struct{}
+	wg       sync.WaitGroup
+	closed   atomic.Bool
+	closeErr error
+	once     sync.Once
+
+	disAt  atomic.Int64 // unix nanos of the cached kill-switch reading
+	disVal atomic.Bool
+
+	ingested, queueDropped, disabledDropped, closedDropped atomic.Uint64
+
+	// processing side, guarded by pmu
+	pmu       sync.Mutex
+	set       *rules.Set
+	eng       *rules.Engine
+	rulesVer  string
+	rulesHash string
+	bundleVer string
+
+	sessions map[string]*list.Element // of *session, LRU by wall time
+	lru      *list.List
+	excluded map[string]struct{}
+	corr     *correlator
+	cov      map[covKey]*covEntry
+	procs    map[string]*proc
+
+	outbox   []*event.Event
+	local    []*event.Event
+	stateQ   []*event.Event
+	streams  map[string]*streamStat
+	seq      map[string]uint64
+	lseq     map[string]uint64
+	surfaces map[event.Source]*surfaceStat
+	ctr      counters
+
+	lastHeartbeat time.Time
+	lastBLSave    time.Time
+	lastWriteErr  string
+}
+
+// New validates the options and returns a running Pipeline. In daemon mode
+// a worker goroutine processes the ingest queue; in every other mode Ingest
+// processes synchronously in the caller's goroutine.
+func New(o Options) (*Pipeline, error) {
+	if o.Outbox == nil {
+		return nil, errNoOutbox
+	}
+	cfg := o.Config
+	if cfg == nil {
+		cfg = config.Default("")
+	}
+	if o.Mode == "" {
+		o.Mode = ModeDaemon
+	}
+	if !validMode(o.Mode) {
+		return nil, fmt.Errorf("engine: unknown mode %q", o.Mode)
+	}
+	if o.Now == nil {
+		o.Now = time.Now
+	}
+	if o.Integrity == "" {
+		o.Integrity = event.IntegrityUser
+		if platform.IsPrivileged() {
+			o.Integrity = event.IntegrityRoot
+		}
+	}
+	if o.Integrity != event.IntegrityRoot && o.Integrity != event.IntegrityUser {
+		return nil, fmt.Errorf("engine: integrity %q: want root or user", o.Integrity)
+	}
+	if o.SensorVersion == "" {
+		o.SensorVersion = "dev"
+	}
+	minClass := cfg.Rules.MinClass
+	if minClass == "" {
+		minClass = event.ClassFinding
+	}
+	if !validClass(minClass) {
+		return nil, fmt.Errorf("rules.min_class %q: want signal, finding or alert", minClass)
+	}
+	set, err := ruleSet(o.Rules, cfg.Rules.Disable)
+	if err != nil {
+		return nil, err
+	}
+	var pol *privacy.Policy
+	if o.Policy == nil {
+		if pol, err = PolicyFromConfig(cfg); err != nil {
+			return nil, err
+		}
+	} else {
+		c := *o.Policy // the caller's policy is not modified
+		pol = &c
+		if pol.MaxLine == 0 {
+			pol.MaxLine = cfg.Output.MaxLine
+		}
+	}
+	sups, err := suppressions(cfg.Rules.Suppressions)
+	if err != nil {
+		return nil, err
+	}
+
+	p := &Pipeline{
+		o: o, cfg: cfg, mode: o.Mode, integrity: o.Integrity,
+		forceHost: o.Host.ID != "" || o.Host.Name != "",
+		started:   o.Now(),
+		minRank:   event.ClassRank(minClass),
+		contextN:  min(max(cfg.Privacy.ContextEvents, 0), privacy.MaxContext),
+		rate:      float64(cfg.Limits.ActivityPerSecond),
+		burst:     float64(cfg.Limits.ActivityBurst),
+		async:     o.Mode == ModeDaemon,
+		disabled:  o.Disabled,
+		bundleVer: o.BundleVersion,
+		sessions:  map[string]*list.Element{},
+		lru:       list.New(),
+		excluded:  map[string]struct{}{},
+		corr:      newCorrelator(),
+		cov:       map[covKey]*covEntry{},
+		procs:     map[string]*proc{},
+		streams:   map[string]*streamStat{},
+		seq:       map[string]uint64{},
+		lseq:      map[string]uint64{},
+		surfaces:  map[event.Source]*surfaceStat{},
+		wake:      make(chan struct{}, 1),
+		done:      make(chan struct{}),
+	}
+	if p.disabled == nil {
+		p.disabled = defaultDisabled
+	}
+	if p.rate <= 0 {
+		p.rate = 20
+	}
+	if p.burst <= 0 {
+		p.burst = 200
+	}
+	p.qcap = o.QueueSize
+	if p.qcap <= 0 {
+		p.qcap = DefaultQueueSize
+	}
+	p.writer = randomWriter(o.Mode)
+	p.salt = make([]byte, 32)
+	_, _ = rand.Read(p.salt)
+	if len(cfg.Labels) > 0 {
+		p.labels = make(map[string]string, len(cfg.Labels))
+		for k, v := range cfg.Labels {
+			p.labels[k] = v
+		}
+	}
+	if len(cfg.Output.Streams) > 0 {
+		p.streamsOK = map[string]bool{}
+		for _, s := range cfg.Output.Streams {
+			p.streamsOK[s] = true
+		}
+	}
+	p.homes = newHomeCache(o.HomeOf)
+	if pol.HomeOf == nil {
+		pol.HomeOf = func(user string) string { return p.homes.home("", user, time.Now()) }
+	}
+	p.pol = pol
+
+	p.blPath = baselinePath(cfg, o.Mode)
+	var blErr error
+	p.bl, blErr = OpenBaseline(p.blPath, BaselineKeys)
+	if blErr != nil {
+		// A damaged baseline is a cache: start empty and report it.
+		p.ctr.baselineErrors++
+	}
+
+	p.ruleOpts = rules.Options{
+		Now:          o.Now,
+		SuppressFor:  cfg.Rules.SuppressFor.D(),
+		Suppressions: sups,
+		OS:           o.Host.OS,
+		HostTags:     append([]string(nil), cfg.Tags...),
+		Baseline:     p.bl,
+	}
+	if o.Mode == ModeHook {
+		// One process per user: the acting user's home is the home.
+		p.ruleOpts.Home = platform.CurrentUser().Home
+	}
+	p.installRules(set)
+
+	if p.async {
+		p.wg.Add(1)
+		go p.worker()
+	}
+	return p, nil
+}
+
+func randomWriter(mode string) string {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return mode + "-" + hex.EncodeToString(b[:])
+}
+
+// installRules builds a rules engine for s; called with pmu held (or before
+// the pipeline is shared).
+func (p *Pipeline) installRules(s *rules.Set) {
+	p.set = s
+	p.eng = rules.NewEngine(s, p.ruleOpts)
+	p.rulesVer = s.Version()
+	p.rulesHash = s.Hash()
+}
+
+// SetRules swaps the rule set (a bundle update) without a restart. The
+// per-session rule state (flags, counters, written paths, secret
+// fingerprints) of every live session is carried over to the new engine.
+// bundleVersion "" keeps the current one. (Additive API.)
+func (p *Pipeline) SetRules(s *rules.Set, bundleVersion string) error {
+	if s == nil {
+		return errors.New("engine: SetRules: nil set")
+	}
+	s, err := ruleSet(s, p.cfg.Rules.Disable)
+	if err != nil {
+		return err
+	}
+	p.pmu.Lock()
+	defer p.pmu.Unlock()
+	old := p.eng
+	p.installRules(s)
+	if bundleVersion != "" {
+		p.bundleVer = bundleVersion
+	}
+	for k := range p.sessions {
+		if b, ok := old.ExportSession(k); ok {
+			if err := p.eng.ImportSession(k, b); err != nil {
+				p.ctr.errors++
+			}
+		}
+	}
+	return nil
+}
+
+// Ingest hands events to the pipeline. It is safe for concurrent use. In
+// daemon mode it only appends to a bounded queue and returns; when the queue
+// is full the events are dropped and counted (ingest.queue_dropped), never
+// silently. While the kill switch is on, input is dropped and counted
+// (ingest.disabled_dropped).
+func (p *Pipeline) Ingest(evs ...*event.Event) {
+	n := uint64(len(evs))
+	if n == 0 {
+		return
+	}
+	p.ingested.Add(n)
+	if p.closed.Load() {
+		p.closedDropped.Add(n)
+		return
+	}
+	if p.disabledNow(false) {
+		p.disabledDropped.Add(n)
+		return
+	}
+	if !p.async {
+		p.pmu.Lock()
+		defer p.pmu.Unlock()
+		now := p.o.Now()
+		for _, ev := range evs {
+			p.processSafe(ev, now)
+		}
+		p.flushWrites()
+		return
+	}
+	p.qmu.Lock()
+	room := p.qcap - len(p.queue)
+	if room < len(evs) {
+		if room < 0 {
+			room = 0
+		}
+		p.queueDropped.Add(uint64(len(evs) - room))
+		evs = evs[:room]
+	}
+	p.queue = append(p.queue, evs...)
+	p.qmu.Unlock()
+	select {
+	case p.wake <- struct{}{}:
+	default:
+	}
+}
+
+// disabledNow reads the kill switch, cached for a second on the ingest path
+// (fresh=false) so a hot Ingest does not stat a file per call.
+func (p *Pipeline) disabledNow(fresh bool) bool {
+	now := time.Now().UnixNano()
+	if !fresh && now-p.disAt.Load() < int64(disabledTTL) {
+		return p.disVal.Load()
+	}
+	v := p.disabled()
+	p.disVal.Store(v)
+	p.disAt.Store(now)
+	return v
+}
+
+func (p *Pipeline) worker() {
+	defer p.wg.Done()
+	for {
+		select {
+		case <-p.done:
+			return
+		case <-p.wake:
+		}
+		// pmu is taken before the queue is swapped, so a Tick that holds
+		// pmu has seen every event queued before it started.
+		p.pmu.Lock()
+		p.drainLocked()
+		p.flushWrites()
+		p.pmu.Unlock()
+	}
+}
+
+// drainLocked processes everything queued; pmu must be held.
+func (p *Pipeline) drainLocked() {
+	for {
+		p.qmu.Lock()
+		batch := p.queue
+		p.queue = nil
+		p.qmu.Unlock()
+		if len(batch) == 0 {
+			return
+		}
+		now := p.o.Now()
+		for _, ev := range batch {
+			p.processSafe(ev, now)
+		}
+	}
+}
+
+// Tick runs the timers: it first processes everything queued, then
+// releases transcript and OTel tool events whose hook never came, checks
+// sessions for hook bypass, emits rolling and idle session summaries, writes
+// the heartbeat when it is due (config heartbeat, default 5 min; the first
+// Tick always writes one) and applies the batched state changes. While the
+// kill switch is on it writes only a heartbeat whose status is disabled.
+func (p *Pipeline) Tick(now time.Time) {
+	p.pmu.Lock()
+	defer p.pmu.Unlock()
+	if p.closed.Load() {
+		return
+	}
+	p.tickLocked(now, false)
+}
+
+func (p *Pipeline) tickLocked(now time.Time, closing bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			p.ctr.panics++
+			p.ctr.errors++
+		}
+	}()
+	disabled := p.disabledNow(true)
+	if disabled {
+		// Collectors idle: queued input is dropped and counted like any
+		// input that arrives while the switch is on.
+		p.qmu.Lock()
+		n := len(p.queue)
+		p.queue = nil
+		p.qmu.Unlock()
+		p.disabledDropped.Add(uint64(n))
+		if p.heartbeatDue(now) || closing {
+			p.heartbeat(now, true)
+		}
+		p.flushWrites()
+		return
+	}
+	p.drainLocked()
+	p.releaseHeld(now, closing)
+	p.checkBypass(now)
+	p.sweepSessions(now, closing)
+	p.corr.expire(now)
+	if p.heartbeatDue(now) || closing {
+		p.heartbeat(now, false)
+	}
+	p.flushWrites()
+	p.flushState(now)
+	if p.bl.Dirty() && p.blPath != "" && (closing || now.Sub(p.lastBLSave) >= baselineSaveGap) {
+		if err := p.bl.Save(); err != nil {
+			p.ctr.baselineErrors++
+		}
+		p.lastBLSave = now
+	}
+}
+
+func (p *Pipeline) heartbeatDue(now time.Time) bool {
+	every := p.cfg.Heartbeat.D()
+	if every <= 0 {
+		every = 5 * time.Minute
+	}
+	return p.lastHeartbeat.IsZero() || now.Sub(p.lastHeartbeat) >= every
+}
+
+// Coverage returns the per-agent, per-account visibility statement.
+func (p *Pipeline) Coverage() []event.Coverage {
+	p.pmu.Lock()
+	defer p.pmu.Unlock()
+	return p.coverage(p.o.Now())
+}
+
+// Stats returns the pipeline's counters since start (the totals that go into
+// heartbeats). (Additive API, for tests and `spoor doctor`.)
+func (p *Pipeline) Stats() map[string]uint64 {
+	p.pmu.Lock()
+	defer p.pmu.Unlock()
+	return p.totals()
+}
+
+// Writer returns this process's writer id (Event.Writer of shipped records).
+func (p *Pipeline) Writer() string { return p.writer }
+
+// Close stops the worker, processes what is queued, releases held events,
+// emits session summaries (Final only outside daemon mode: a daemon restart
+// does not end anyone's session) and a last heartbeat, flushes the sinks
+// and the state batch, and saves the baseline. Sinks and the state store
+// stay open: they belong to the caller. Close is idempotent.
+func (p *Pipeline) Close() error {
+	p.once.Do(func() {
+		p.closed.Store(true)
+		close(p.done)
+		p.wg.Wait()
+		p.pmu.Lock()
+		defer p.pmu.Unlock()
+		p.tickLocked(p.o.Now(), true)
+		var errs []error
+		if err := p.o.Outbox.Flush(); err != nil {
+			errs = append(errs, fmt.Errorf("outbox flush: %w", err))
+		}
+		if p.o.Local != nil {
+			if err := p.o.Local.Flush(); err != nil {
+				errs = append(errs, fmt.Errorf("local flush: %w", err))
+			}
+		}
+		if p.blPath != "" && p.bl.Dirty() {
+			if err := p.bl.Save(); err != nil {
+				errs = append(errs, fmt.Errorf("baseline: %w", err))
+			}
+		}
+		p.closeErr = errors.Join(errs...)
+	})
+	return p.closeErr
+}

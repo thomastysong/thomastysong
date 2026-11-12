@@ -1,0 +1,105 @@
+# agent: gemini-cli
+# scope: user
+# path: /home/dev/.gemini/settings.json
+# action: create
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "name": "hawkbell",
+            "type": "command",
+            "command": "'/usr/local/bin/hawkbell' hook --agent gemini-cli",
+            "timeout": 10000
+          }
+        ]
+      }
+    ],
+    "BeforeAgent": [
+      {
+        "hooks": [
+          {
+            "name": "hawkbell",
+            "type": "command",
+            "command": "'/usr/local/bin/hawkbell' hook --agent gemini-cli",
+            "timeout": 10000
+          }
+        ]
+      }
+    ],
+    "BeforeTool": [
+      {
+        "hooks": [
+          {
+            "name": "hawkbell",
+            "type": "command",
+            "command": "'/usr/local/bin/hawkbell' hook --agent gemini-cli",
+            "timeout": 10000
+          }
+        ]
+      }
+    ],
+    "AfterTool": [
+      {
+        "hooks": [
+          {
+            "name": "hawkbell",
+            "type": "command",
+            "command": "'/usr/local/bin/hawkbell' hook --agent gemini-cli",
+            "timeout": 10000
+          }
+        ]
+      }
+    ],
+    "AfterAgent": [
+      {
+        "hooks": [
+          {
+            "name": "hawkbell",
+            "type": "command",
+            "command": "'/usr/local/bin/hawkbell' hook --agent gemini-cli",
+            "timeout": 10000
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "name": "hawkbell",
+            "type": "command",
+            "command": "'/usr/local/bin/hawkbell' hook --agent gemini-cli",
+            "timeout": 10000
+          }
+        ]
+      }
+    ],
+    "PreCompress": [
+      {
+        "hooks": [
+          {
+            "name": "hawkbell",
+            "type": "command",
+            "command": "'/usr/local/bin/hawkbell' hook --agent gemini-cli",
+            "timeout": 10000
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "name": "hawkbell",
+            "type": "command",
+            "command": "'/usr/local/bin/hawkbell' hook --agent gemini-cli",
+            "timeout": 10000
+          }
+        ]
+      }
+    ]
+  }
+}
+# ----

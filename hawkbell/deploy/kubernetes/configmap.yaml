@@ -1,0 +1,45 @@
+# Configuration of the hawkbell node sensor (mounted at /etc/hawkbell/hawkbell.yaml).
+# Every key not set here takes its default; `hawkbell export config` prints them
+# all with comments. Unknown keys are errors.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hawkbell-node-sensor
+  namespace: hawkbell
+  labels:
+    app.kubernetes.io/name: hawkbell
+    app.kubernetes.io/component: node-sensor
+data:
+  hawkbell.yaml: |
+    # An emptyDir: the outbox, local ring and state database live only as long
+    # as the pod. Records leave through stdout (the kubelet's log pipeline).
+    data_dir: /var/lib/hawkbell
+    privacy:
+      # minimal: detections, health (with per-agent coverage), inventory,
+      # posture and session summaries leave the node; process activity stays
+      # in the pod's local ring. standard also ships process activity
+      # (agent.process.start, process.exec with the container id), redacted.
+      profile: minimal
+    output:
+      # The node sensor's sink: one NDJSON record per line on stdout, collected
+      # by the cluster's log agent (deploy/fluent-bit/kubernetes.yaml).
+      stdout: true
+    sources:
+      # What a node sensor sees in this release: processes of every container
+      # on the node through the host pid namespace (agent roots, their
+      # children, container ids, the agents' session markers).
+      processes:
+        enabled: true
+      # Off, and why: these collectors read the sensor container's own file
+      # system, not the workloads'. Transcripts and inventory inside other
+      # containers are not harvested by the daemon in this release; see
+      # README.md ("What the node sensor does not do yet"). The osquery
+      # socket and the OTLP receiver do not exist in the pod.
+      transcripts:
+        enabled: false
+      scan:
+        enabled: false
+      osquery_exec:
+        enabled: false
+      otlp:
+        enabled: false

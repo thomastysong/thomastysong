@@ -1,0 +1,31 @@
+# Standalone example: hawkbell findings to Splunk, everything to S3.
+# Copy, then replace the output includes with the destinations you use
+# (outputs/*.yaml). Run: fluent-bit -c hawkbell.yaml
+service:
+  flush: 1
+  grace: 10
+  log_level: info
+  http_server: on
+  http_listen: 127.0.0.1
+  http_port: 2020
+  health_check: on
+  hot_reload: on
+  storage.path: ${HAWKBELL_FLB_STATE:-/var/lib/fluent-bit}/storage
+  storage.sync: normal
+  storage.checksum: on
+  storage.max_chunks_up: 64
+  storage.backlog.mem_limit: 32M
+  storage.metrics: on
+  # A permanent error (401 after a token rotation, 400, 413) drops a chunk
+  # even with unlimited retries. Keep a copy instead of losing it, and
+  # watch dropped_records in /api/v1/metrics (hawkbell doctor does).
+  storage.keep.rejected: on
+  storage.rejected.path: rejected
+  storage.rejected.limit: 256M
+  scheduler.base: 3
+  scheduler.cap: 300
+
+includes:
+  - hawkbell-inputs.yaml
+  - outputs/splunk.yaml
+  - outputs/s3.yaml

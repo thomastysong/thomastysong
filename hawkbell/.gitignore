@@ -1,0 +1,25 @@
+# build outputs
+/bin/
+/dist/
+*.exe
+*.ext
+*.test
+*.out
+# coverage reports in the module root only: internal/engine/coverage.go and
+# internal/rules/packs/coverage.yaml are sources
+/coverage.*
+# local state written by tests and manual runs
+/tmp/
+*.db
+*.db-wal
+*.db-shm
+# editor noise
+.DS_Store
+.idea/
+.vscode/
+
+# go build ./cmd/hawkbell writes the binary here
+/hawkbell
+/hawkbell.exe
+/cmd/hawkbell/hawkbell
+/cmd/hawkbell/hawkbell.exe

@@ -1,0 +1,36 @@
+# Example global GitOps file for Fleet Free (Fleet 4.94 vocabulary: fleets,
+# reports). It deploys the "stock" hawkbell profile to every host and makes the
+# install scripts available to run. Validated with
+#   fleetctl gitops -f deploy/fleet/gitops/default.yml --dry-run
+# (deploy/fleet/VERIFIED.md). GitOps resets or deletes everything a file
+# omits: copy the hawkbell entries into your own default.yml, never apply this
+# file as it stands to a server that has other configuration.
+org_settings:
+  server_settings:
+    server_url: $FLEET_URL
+  org_info:
+    org_name: Example
+  secrets:
+    - secret: $FLEET_GLOBAL_ENROLL_SECRET
+# Your own agent options. This example is tier 3: the install scripts below
+# register the hawkbell osquery extension (their default tier), so the agent
+# options must NOT carry hawkbell's ATC tables, or osquery refuses the
+# extension. For tier 2 use ../lib/agent-options.example.yml (the ATC
+# fragment merged in) and set TIER=atc in both install scripts; Fleet runs
+# scripts without environment variables (README, "Three tiers").
+agent_options:
+  path: ../lib/agent-options.base.example.yml
+controls:
+  scripts:
+    - path: ../scripts/install-hawkbell.sh
+    - path: ../scripts/uninstall-hawkbell.sh
+    - path: ../scripts/install-hawkbell.ps1
+    - path: ../scripts/uninstall-hawkbell.ps1
+labels:
+  - path: ../lib/stock/labels.yml
+policies:
+  - path: ../lib/stock/policies.yml
+reports:
+  - path: ../lib/stock/reports.yml
+  # Opt-in only, read the privacy warning in the file first:
+  # - path: ../lib/opt-in/exec-events.reports.yml

@@ -1,0 +1,32 @@
+{
+  "id": "hawkbell",
+  "version": "0.1.0",
+  "name": "hawkbell AI agent sensor (in-image hook mode)",
+  "description": "SKETCH, UNTESTED with the devcontainer CLI: installs the hawkbell binary (SHA-256 verified), registers managed hooks for the AI agents in the image and starts the hawkbell daemon at container start so its records reach the container log. See deploy/kubernetes/README.md.",
+  "options": {
+    "version": {
+      "type": "string",
+      "default": "0.1.0",
+      "description": "hawkbell release"
+    },
+    "sha256": {
+      "type": "string",
+      "default": "",
+      "description": "SHA-256 of hawkbell_linux_<arch> from the release's checksums.txt (required)"
+    },
+    "url": {
+      "type": "string",
+      "default": "https://downloads.example.com/hawkbell",
+      "description": "Base URL of the release downloads"
+    },
+    "agents": {
+      "type": "string",
+      "default": "claude-code,codex,gemini-cli,copilot-cli",
+      "description": "Agents to register managed hooks for (catalog ids)"
+    }
+  },
+  "entrypoint": "/usr/local/share/hawkbell/hawkbell-entrypoint.sh",
+  "installsAfter": [
+    "ghcr.io/devcontainers/features/common-utils"
+  ]
+}

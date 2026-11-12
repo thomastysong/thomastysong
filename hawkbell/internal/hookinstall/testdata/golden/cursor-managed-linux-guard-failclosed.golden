@@ -1,0 +1,105 @@
+# agent: cursor
+# scope: managed
+# path: /etc/cursor/hooks.json
+# action: create
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "[ -x '/usr/local/bin/hawkbell' ] || exit 0; exec '/usr/local/bin/hawkbell' hook --agent cursor",
+        "timeout": 10
+      }
+    ],
+    "beforeSubmitPrompt": [
+      {
+        "command": "exec '/usr/local/bin/hawkbell' hook --agent cursor",
+        "timeout": 10,
+        "failClosed": true
+      }
+    ],
+    "preToolUse": [
+      {
+        "command": "exec '/usr/local/bin/hawkbell' hook --agent cursor",
+        "timeout": 10,
+        "failClosed": true
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": "[ -x '/usr/local/bin/hawkbell' ] || exit 0; exec '/usr/local/bin/hawkbell' hook --agent cursor",
+        "timeout": 10
+      }
+    ],
+    "postToolUseFailure": [
+      {
+        "command": "[ -x '/usr/local/bin/hawkbell' ] || exit 0; exec '/usr/local/bin/hawkbell' hook --agent cursor",
+        "timeout": 10
+      }
+    ],
+    "beforeShellExecution": [
+      {
+        "command": "exec '/usr/local/bin/hawkbell' hook --agent cursor",
+        "timeout": 10,
+        "failClosed": true
+      }
+    ],
+    "afterShellExecution": [
+      {
+        "command": "[ -x '/usr/local/bin/hawkbell' ] || exit 0; exec '/usr/local/bin/hawkbell' hook --agent cursor",
+        "timeout": 10
+      }
+    ],
+    "beforeMCPExecution": [
+      {
+        "command": "exec '/usr/local/bin/hawkbell' hook --agent cursor",
+        "timeout": 10,
+        "failClosed": true
+      }
+    ],
+    "afterMCPExecution": [
+      {
+        "command": "[ -x '/usr/local/bin/hawkbell' ] || exit 0; exec '/usr/local/bin/hawkbell' hook --agent cursor",
+        "timeout": 10
+      }
+    ],
+    "beforeReadFile": [
+      {
+        "command": "exec '/usr/local/bin/hawkbell' hook --agent cursor",
+        "timeout": 10,
+        "failClosed": true
+      }
+    ],
+    "afterFileEdit": [
+      {
+        "command": "[ -x '/usr/local/bin/hawkbell' ] || exit 0; exec '/usr/local/bin/hawkbell' hook --agent cursor",
+        "timeout": 10
+      }
+    ],
+    "subagentStart": [
+      {
+        "command": "[ -x '/usr/local/bin/hawkbell' ] || exit 0; exec '/usr/local/bin/hawkbell' hook --agent cursor",
+        "timeout": 10
+      }
+    ],
+    "subagentStop": [
+      {
+        "command": "[ -x '/usr/local/bin/hawkbell' ] || exit 0; exec '/usr/local/bin/hawkbell' hook --agent cursor",
+        "timeout": 10
+      }
+    ],
+    "stop": [
+      {
+        "command": "[ -x '/usr/local/bin/hawkbell' ] || exit 0; exec '/usr/local/bin/hawkbell' hook --agent cursor",
+        "timeout": 10
+      }
+    ],
+    "sessionEnd": [
+      {
+        "command": "[ -x '/usr/local/bin/hawkbell' ] || exit 0; exec '/usr/local/bin/hawkbell' hook --agent cursor",
+        "timeout": 10
+      }
+    ]
+  }
+}
+# ----

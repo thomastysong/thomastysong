@@ -1,0 +1,440 @@
+# Destruction. Deleting inside the working directory or a temp directory
+# is never destructive here (rm -rf node_modules is housekeeping); the
+# shell.destructive vocabulary already encodes that, and the rules only
+# add class and context.
+pack: destructive
+version: "2026.11.0"
+description: Recursive deletes outside the workspace, disk wipes, infrastructure teardown and history rewrites.
+rules:
+  - id: HB-DESTR-001
+    title: Recursive delete of the filesystem root or a home directory
+    description: >-
+      rm -rf of / or of a whole home directory, however it is spelled: the
+      literal path, ~, ~user or $HOME; find started at a home directory
+      that deletes without narrowing what it matches; a recursive delete of
+      * or . right after cd to a home directory; or a delete of .. (or cd
+      .. and a delete of $PWD) from a directory directly below a home
+      directory. No coding task needs it; Shai-Hulud 2.0 and the Tensorlake
+      watcher wiped $HOME, and agents have deleted user data on their own.
+      The analyser does not apply a cd to the paths that follow it, so these
+      spellings are matched on the parsed commands themselves.
+    kind: activity
+    class: alert
+    severity: critical
+    confidence: high
+    maturity: stable
+    category: impact
+    tags: [attack.t1485, atlas.aml.t0101, owasp.asi02]
+    references:
+      - "research/threats.md section 2 row 26: Shai-Hulud 2.0 home wipe fallback"
+      - "research/threats.md section 2 row 30: token-revocation watcher wipes $HOME"
+      - "research/threats.md section 2 row 43: destructive autonomy"
+      - "research/threats.md section 3 R40"
+    falsepositives:
+      - "Tearing down a disposable container's home directory"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      any:
+        - shell.destructive|contains_any: [rm_recursive_root, rm_recursive_home]
+        # rm -r of ~user (the analyser tags ~, $HOME and literal homes).
+        - any_command:
+            name: rm
+            all:
+              - args|any_re: "^-(-recursive|[a-zA-Z]*[rR])"
+              - args|any_re: '(?i)^(~[a-z0-9._-]*|\$\{?home\}?|/home/[^/]+|/Users/[^/]+|/root|/var/root)/?(\*|\.\*)?$'
+        # find from a home directory that deletes whatever it finds: -type
+        # and depth limits still take everything; a name, path, age or size
+        # test narrows it to housekeeping (find ~ -name '*.pyc' -delete).
+        - any_command:
+            name: find
+            args|any_re: '(?i)^(~[a-z0-9._-]*|\$\{?home\}?|/home/[^/]+|/Users/[^/]+|/root|/var/root|%userprofile%|\$env:userprofile|[a-z]:[\\/]users[\\/][^\\/]+)[/\\]?$'
+            any:
+              - args|contains: -delete
+              - all:
+                  - args|contains_any: [-exec, -execdir, -ok, -okdir]
+                  - args|contains_any: [rm, /bin/rm, /usr/bin/rm, shred, unlink]
+            not:
+              args|contains_any: [-name, -iname, -path, -ipath, -wholename, -iwholename, -regex, -iregex, -lname, -ilname, -newer, -newermt, -anewer, -cnewer, -mtime, -mmin, -atime, -amin, -ctime, -cmin, -used, -size, -empty, -user, -nouser, -group, -nogroup, -uid, -gid, -perm, -links, -inum, -samefile, -prune, -fstype, -xtype, -readable, -writable, -executable]
+        # cd to a home directory (or a bare cd), then a recursive delete of
+        # everything in the new working directory.
+        - all:
+            - any_command:
+                name: cd
+                any:
+                  - args|any_re: '(?i)^(~[a-z0-9._-]*|\$\{?home\}?|/home/[^/]+|/Users/[^/]+|/root|/var/root|%userprofile%|\$env:userprofile|[a-z]:[\\/]users[\\/][^\\/]+)[/\\]?$'
+                  - args|exists: false
+            - any_command:
+                name|in: [rm, find]
+                args|any_re: '^(\.|\./?\*|\*|\.\*|\$\{?PWD\}?)/?$'
+            - any:
+                - shell.destructive|contains_any: [rm_recursive_wildcard, find_delete]
+                - any_command:
+                    name: find
+                    args|contains: -delete
+        # From a directory directly below a home directory, .. is the home
+        # directory itself.
+        - all:
+            - session.cwd|re: '(?i)^(/home/[^/]+|/Users/[^/]+|/root|[a-z]:[\\/]users[\\/][^\\/]+)[/\\][^/\\]+[/\\]?$'
+            - shell.destructive|contains_any: [rm_recursive_wildcard, find_delete]
+            - any:
+                - any_command:
+                    name|in: [rm, find]
+                    args|any_re: '^\.\./?\*?$'
+                - all:
+                    - any_command:
+                        name: cd
+                        args|any_re: '^\.\./?$'
+                    - any_command:
+                        name|in: [rm, find]
+                        args|any_re: '^(\.|\./?\*|\*|\$\{?PWD\}?)/?$'
+    dedup: [shell.deletes]
+    evidence: [target.command, shell.deletes, shell.destructive]
+    remedy: Stop the agent; check backups for the paths it named.
+    tests:
+      - name: rm -rf /
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf /" } }
+        expect: match
+      - name: rm -rf $HOME
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf $HOME" } }
+        expect: match
+      - name: build directories
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf node_modules dist build .next target" } }
+        expect: no_match
+      - name: a cache below home
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf ~/.cache/go-build" } }
+        expect: no_match
+      - name: find from home deleting everything below it
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "find ~ -mindepth 1 -delete" } }
+        expect: match
+      - name: find from $HOME deleting everything
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "find $HOME -delete" } }
+        expect: match
+      - name: find from home deleting every file through rm
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "find ~ -type f -exec rm -f {} +" } }
+        expect: match
+      - name: cd home, then delete everything
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cd ~ && rm -rf *" } }
+        expect: match
+      - name: bare cd, then delete everything
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cd; rm -rf ./*" } }
+        expect: match
+      - name: cd up from a project below home, then delete the new working directory
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cd .. && rm -rf \"$PWD\"" } }
+        expect: match
+      - name: parent of a project below home deleted
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf ../*" } }
+        expect: match
+      - name: another user's home through ~user
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf ~tester" } }
+        expect: match
+      - name: compiled files under home removed by name
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "find ~ -name '*.pyc' -delete" } }
+        expect: no_match
+      - name: old logs under home removed by age
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "find ~ -mtime +30 -name '*.log' -delete" } }
+        expect: no_match
+      - name: cd into a project below home, then clean it
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cd ~/project/build && rm -rf *" } }
+        expect: no_match
+      - name: sibling directory of the project removed
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf ../project-old" } }
+        expect: no_match
+      - name: rm refuses an operand that ends in ..
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf /tmp/.. /tmp/x/../.. ~/x/.. /home/u/proj/build/../.." } }
+        expect: no_match
+      - name: everything below the root through dot segments
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf /tmp/../*" } }
+        expect: match
+
+  - id: HB-DESTR-002
+    title: Disk wiped, filesystem created or shadow copies deleted
+    description: >-
+      dd onto a block device, wipefs, mkfs, diskutil erase or vssadmin
+      delete shadows. These destroy whole volumes or their recovery points.
+    kind: activity
+    class: alert
+    severity: critical
+    confidence: high
+    maturity: stable
+    category: impact
+    tags: [attack.t1485, attack.t1490, atlas.aml.t0101, owasp.asi02]
+    references:
+      - "research/threats.md section 3 R40"
+    falsepositives:
+      - "Formatting a removable disk at the user's request"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      any:
+        - shell.destructive|contains_any: [disk_wipe, mkfs, shadow_copy_delete]
+        - any_command:
+            name|re: "mkfs(\\.[a-z0-9]+)?$"
+            args|any_startswith: ["/dev/"]
+    evidence: [target.command, shell.destructive]
+    remedy: Stop the agent and check which device was targeted.
+    tests:
+      - name: dd to a disk
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "dd if=/dev/zero of=/dev/sda bs=1M" } }
+        expect: match
+      - name: mkfs.ext4
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "mkfs.ext4 /dev/sdb1" } }
+        expect: match
+      - name: shadow copies
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "vssadmin delete shadows /all /quiet" } }
+        expect: match
+      - name: filesystem created in an image file
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "truncate -s 16M vol.img && mkfs.ext4 -q -F vol.img" } }
+        expect: no_match
+      - name: dd to an image file
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "dd if=/dev/zero of=./disk.img bs=1M count=10" } }
+        expect: no_match
+      - name: listing disks
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "lsblk -f" } }
+        expect: no_match
+
+  - id: HB-DESTR-003
+    title: Infrastructure or data store destroyed
+    description: >-
+      terraform destroy, cloud CLI deletes and terminations, kubectl delete
+      namespace, or DROP DATABASE. DataTalks lost production to an agent's
+      terraform destroy; PocketOS lost a volume in nine seconds.
+    kind: activity
+    class: finding
+    severity: high
+    confidence: high
+    maturity: stable
+    category: impact
+    tags: [attack.t1485, atlas.aml.t0101, owasp.asi02]
+    references:
+      - "research/threats.md section 2 row 43: DataTalks terraform destroy, PocketOS volumeDelete"
+      - "research/threats.md section 2 row 2: Amazon Q wiper prompt (terminate-instances, s3 rm, iam delete-user)"
+      - "research/threats.md section 3 R41"
+    falsepositives:
+      - "Tearing down a sandbox stack"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      shell.destructive|contains_any: [terraform_destroy, cloud_delete, kubectl_delete_namespace, db_drop, db_truncate]
+    dedup: [shell.destructive]
+    evidence: [target.command, shell.destructive]
+    remedy: Confirm the target was a disposable environment; restore from backup otherwise.
+    tests:
+      - name: terraform destroy
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "terraform destroy -auto-approve" } }
+        expect: match
+      - name: terminate instances
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "aws ec2 terminate-instances --instance-ids i-0abc" } }
+        expect: match
+      - name: terraform plan
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "terraform plan -out tf.plan" } }
+        expect: no_match
+      - name: delete one pod
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "kubectl delete pod web-1" } }
+        expect: no_match
+
+  - id: HB-DESTR-004
+    title: Shared git history force-pushed or rewritten
+    description: >-
+      A force push to main or master, or a history rewrite (filter-branch,
+      filter-repo). Force-with-lease to a feature branch is ordinary and is
+      not matched.
+    kind: activity
+    class: finding
+    severity: medium
+    confidence: medium
+    maturity: stable
+    category: impact
+    tags: [attack.t1485, owasp.asi02]
+    references:
+      - "research/threats.md section 3 R41; section 6 (force-with-lease on a feature branch is benign)"
+    falsepositives:
+      - "Repository owners cleaning a leaked secret out of history"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      any:
+        - shell.destructive: git_history_rewrite
+        - any_command:
+            name: git
+            all:
+              - args|contains_all: [push]
+              - args|contains_any: ["--force", "-f", "--force-with-lease", "+main", "+master", "+HEAD:main", "+HEAD:master"]
+              - args|contains_any: [main, master, "HEAD:main", "HEAD:master", "+main", "+master", "+HEAD:main", "+HEAD:master"]
+    evidence: [target.command]
+    remedy: Check the remote's reflog and restore the overwritten commits.
+    tests:
+      - name: force push to main
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "git push -f origin main" } }
+        expect: match
+      - name: filter-branch
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "git filter-branch --tree-filter 'rm secrets' HEAD" } }
+        expect: match
+      - name: force with lease to a feature branch
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "git push --force-with-lease origin feature/x" } }
+        expect: no_match
+      - name: ordinary push to main
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "git push origin main" } }
+        expect: no_match
+
+  - id: HB-DESTR-005
+    title: Burst of destructive commands
+    description: >-
+      Five destructive commands (recursive wildcard deletes, find -delete,
+      truncation, git reset --hard / clean -f, kubectl or cloud deletes,
+      prunes) within two minutes in one session. A single one is
+      housekeeping; a burst is an agent tearing things down.
+    kind: activity
+    class: finding
+    severity: high
+    confidence: medium
+    maturity: experimental
+    category: impact
+    tags: [attack.t1485, atlas.aml.t0101, owasp.asi02]
+    references:
+      - "research/threats.md section 2 row 43: Cowork deleted 15k photos"
+      - "research/threats.md section 4 S9"
+    falsepositives:
+      - "Scripted clean-up of many test resources"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      shell.destructive|contains_any: [rm_recursive_wildcard, find_delete, truncate_file, git_reset_hard, git_clean_force, kubectl_delete, kubectl_delete_namespace, cloud_delete, terraform_destroy, docker_prune_all, db_drop, db_truncate]
+    threshold:
+      count: 5
+      window: 2m
+    evidence: [target.command, shell.destructive]
+    escalate: true
+    remedy: Stop the agent and inventory what was removed.
+    tests:
+      - name: five deletes in a row
+        events:
+          - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "aws s3 rm s3://b1 --recursive" } }
+          - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "aws s3 rm s3://b2 --recursive" } }
+          - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "aws s3 rm s3://b3 --recursive" } }
+          - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "kubectl delete pod a b c" } }
+          - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "git reset --hard HEAD~5" } }
+        expect: match
+      - name: one reset
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "git reset --hard origin/main" } }
+        expect: no_match
+      - name: interleaved ordinary commands
+        events:
+          - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "git reset --hard origin/main" } }
+          - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "go build ./..." } }
+          - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "go test ./..." } }
+        expect: no_match
+
+  - id: HB-DESTR-006
+    title: Recursive delete in a system directory
+    description: >-
+      rm -r of a path under a system directory (/usr, /etc, /var/lib,
+      /opt, C:\Windows ...). /run, /tmp and /var/tmp are runtime scratch and
+      are not listed: in the benign replay every hit of the system_dir path
+      class was a red-team scratch mount under /run.
+    kind: activity
+    class: finding
+    severity: medium
+    confidence: medium
+    maturity: experimental
+    category: impact
+    tags: [attack.t1485, owasp.asi02]
+    references:
+      - "research/threats.md section 3 R40"
+      - "redteam/detection-quality.md section 1 (R40b: deletes outside the workspace)"
+    falsepositives:
+      - "Replacing a toolchain under /usr/local"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      shell.deletes|any_re: "(?i)^(/usr|/etc|/var/lib|/var/log|/opt|/bin|/sbin|/lib|/lib64|/boot|/srv|/System|/Library|/Applications|c:\\\\windows|c:\\\\program files)(/|\\\\|$)"
+      any_command:
+        name|in: [rm, rmdir, remove-item, rd]
+        args|any_re: "^-(-recursive|[a-zA-Z]*[rR])"
+    dedup: [shell.deletes]
+    evidence: [target.command, shell.deletes]
+    remedy: Check what was removed and whether the user asked for it.
+    tests:
+      - name: rm -rf under /var/lib
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf /var/lib/postgresql/16/main" } }
+        expect: match
+      - name: rm -rf under /tmp
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf /tmp/build-1234" } }
+        expect: no_match
+      - name: runtime scratch under /run
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf /run/test-mount" } }
+        expect: no_match
+      - name: delete in the workspace
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf ./out" } }
+        expect: no_match
+
+  - id: HB-DESTR-007
+    title: Permissions opened recursively
+    description: chmod -R 777 (or a+rwx) on a directory tree. Common on bind mounts in development; a signal.
+    kind: activity
+    class: signal
+    severity: low
+    confidence: high
+    maturity: stable
+    category: impact
+    tags: [attack.t1222.002]
+    references:
+      - "redteam/detection-quality.md section 1 (chmod 777 on docker bind mounts)"
+    falsepositives:
+      - "chmod -R 777 on a build or cache directory inside a container"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      shell.destructive: chmod_recursive_open
+    evidence: [target.command]
+    remedy: No action on its own.
+    tests:
+      - name: chmod -R 777
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "chmod -R 777 /srv/data" } }
+        expect: match
+      - name: chmod 644
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "chmod 644 config.yaml" } }
+        expect: no_match
+      - name: chmod +x
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "chmod +x run.sh" } }
+        expect: no_match
+
+  - id: HB-DESTR-008
+    title: Personal files deleted
+    description: >-
+      A command deletes in the user's Pictures, Documents, Desktop, Music,
+      Movies, Videos or Downloads folder. Coding work rarely touches them;
+      an agent cleaning up "duplicates" deleted 15,000 family photos.
+    kind: activity
+    class: finding
+    severity: high
+    confidence: medium
+    maturity: experimental
+    category: impact
+    tags: [attack.t1485, atlas.aml.t0101, owasp.asi02]
+    references:
+      - "research/threats.md section 2 row 43: Cowork deleted 15k photos"
+      - "research/threats.md section 3 R40"
+    falsepositives:
+      - "Clearing old installers out of Downloads at the user's request"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      shell.deletes|any_re: "(?i)^(~|\\$HOME|\\$\\{HOME\\}|/root|/home/[^/]+|/Users/[^/]+|c:\\\\users\\\\[^\\\\]+)[/\\\\](Pictures|Photos|Documents|Desktop|Music|Movies|Videos|Downloads)([/\\\\]|$)"
+    dedup: [shell.deletes]
+    evidence: [target.command, shell.deletes]
+    escalate: true
+    remedy: Stop the agent and restore from backup; check what it was asked to clean up.
+    tests:
+      - name: find delete in Pictures
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "find ~/Pictures -name '*.jpg' -size -2M -delete" } }
+        expect: match
+      - name: rm in Documents
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf /Users/tester/Documents/old" } }
+        expect: match
+      - name: delete in the project
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf ./docs/pictures" } }
+        expect: no_match
+      - name: listing Pictures
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "ls ~/Pictures | wc -l" } }
+        expect: no_match

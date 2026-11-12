@@ -1,0 +1,38 @@
+# perplexityai/numbat output -> Fluent Bit (for sites that already run
+# numbat hooks). numbat writes NDJSON per user; its records mix timestamps
+# with and without fractional seconds, so no time parser is applied here:
+# event time is ingestion time and the record keeps its own timestamp.
+#
+# To get hawkbell's correlation, Fleet tables and rules over numbat's records,
+# point hawkbell at the same files instead (sources.adapters: format numbat).
+#
+# On macOS set NUMBAT_FILES=/Users/*/.numbat/live.ndjson. The default lists
+# Linux paths only: Fluent Bit logs an error on every refresh for a glob
+# whose top directory does not exist (verified with 5.2.0), so /Users/* is
+# not in the default.
+#
+# Include from a config whose service section sets storage.path (the tail
+# input buffers on the filesystem); Fluent Bit refuses to start otherwise.
+parsers:
+  - name: numbat_ndjson
+    format: json
+
+pipeline:
+  inputs:
+    - name: tail
+      alias: numbat_live
+      path: ${NUMBAT_FILES:-/home/*/.numbat/live.ndjson,/root/.numbat/live.ndjson}
+      tag: numbat.raw
+      parser: numbat_ndjson
+      db: ${HAWKBELL_FLB_DB:-/var/lib/fluent-bit}/numbat.db
+      db.locking: false
+      db.compare_filename: true
+      read_from_head: true
+      refresh_interval: 5
+      buffer_max_size: 1M
+      skip_long_lines: on
+      storage.type: filesystem
+  filters:
+    - name: rewrite_tag
+      match: numbat.raw
+      rule: '$record_type ^(event|finding|enforcement|indicator|scan_summary|diagnostic)$ numbat.$record_type false'

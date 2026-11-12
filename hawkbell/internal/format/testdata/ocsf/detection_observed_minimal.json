@@ -1,0 +1,87 @@
+{
+  "action": "Observed",
+  "action_id": 3,
+  "activity_id": 1,
+  "activity_name": "Create",
+  "category_name": "Findings",
+  "category_uid": 2,
+  "class_name": "Detection Finding",
+  "class_uid": 2004,
+  "device": {
+    "hostname": "dev-mbp-042",
+    "os": {
+      "name": "macOS",
+      "type": "macOS",
+      "type_id": 300
+    },
+    "type": "Unknown",
+    "type_id": 0,
+    "uid": "6F1D2C3B-0000-4000-8000-ABCDEF012345"
+  },
+  "disposition": "Detected",
+  "disposition_id": 15,
+  "finding_info": {
+    "analytic": {
+      "name": "Hook telemetry missing for a running agent",
+      "state": "Experimental",
+      "state_id": 3,
+      "type": "Rule",
+      "type_id": 1,
+      "uid": "HB-COV-002"
+    },
+    "created_time": 1794391203123,
+    "title": "Hook telemetry missing for a running agent",
+    "uid": "019a7a00-0000-7000-8000-000000000001"
+  },
+  "is_alert": true,
+  "message": "Hook telemetry missing for a running agent",
+  "metadata": {
+    "event_code": "detection.finding",
+    "log_name": "hawkbell.detection",
+    "product": {
+      "name": "hawkbell",
+      "vendor_name": "hawkbell"
+    },
+    "profiles": [
+      "host",
+      "security_control"
+    ],
+    "sequence": 42,
+    "uid": "019a7a00-0000-7000-8000-000000000001",
+    "version": "1.9.0"
+  },
+  "severity": "Medium",
+  "severity_id": 3,
+  "status": "New",
+  "status_id": 1,
+  "time": 1794391203123,
+  "type_name": "Detection Finding: Create",
+  "type_uid": 200401,
+  "unmapped": {
+    "hawkbell": {
+      "detection": {
+        "escalate": true,
+        "maturity": "experimental",
+        "response": "none",
+        "rule_id": "HB-COV-002",
+        "severity": "medium",
+        "title": "Hook telemetry missing for a running agent"
+      },
+      "fidelity": "observed",
+      "host": {
+        "arch": "arm64",
+        "id": "6F1D2C3B-0000-4000-8000-ABCDEF012345",
+        "name": "dev-mbp-042",
+        "os": "darwin"
+      },
+      "id": "019a7a00-0000-7000-8000-000000000001",
+      "kind": "detection",
+      "privacy": "redacted",
+      "seq": 42,
+      "source": "sensor",
+      "ts": "2026-11-11T10:00:03.123456Z",
+      "type": "detection.finding",
+      "v": 1
+    }
+  }
+}

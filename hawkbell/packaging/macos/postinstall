@@ -1,0 +1,109 @@
+#!/bin/sh
+# hawkbell macOS installer package post-install script (pkgbuild --scripts).
+# UNTESTED on macOS hardware in this release: written to match
+# deploy/fleet/scripts/install-hawkbell.sh (macOS branch), which is also
+# unexercised on macOS; `sh -n` and the shared logic are checked on Linux.
+#
+# The payload put /usr/local/bin/hawkbell and
+# /Library/LaunchDaemons/com.github.thomastysong.hawkbell.plist in place. This
+# script:
+#  1. creates the hawkbell group (outbox readers) when it is missing;
+#  2. creates /Library/Application Support/hawkbell (configuration and data,
+#     root:wheel 0755; the daemon tightens what it creates inside) and
+#     /Library/Logs/hawkbell, which the plist's StandardErrorPath names and
+#     launchd does not create (without it the daemon's stderr is lost);
+#  3. writes hawkbell.yaml with `hawkbell export config` when there is none;
+#  4. refreshes the osquery extension copy when hawkbell is registered in
+#     /var/osquery/extensions.load, and restarts osquery detached;
+#  5. (re)loads the launchd job so the new binary runs;
+#  6. rewrites hawkbell's hook entries (managed tier, and Codex's system tier
+#     that `hooks install --scope system` writes) where they already exist
+#     (`hawkbell hooks install --only-installed`: entries an earlier release
+#     wrote report "modified" until then), keeping the options each file was
+#     installed with (--guard --fail-closed, --timeout); entries edited by
+#     hand are left as they are and reported.
+# Reading other users' transcripts needs Full Disk Access for
+# /usr/local/bin/hawkbell, granted by an MDM PPPC profile (SystemPolicyAllFiles).
+set -eu
+
+# $3 is the target volume ("/" for the boot volume).
+ROOT=${3:-/}
+ROOT=${ROOT%/}
+BIN=$ROOT/usr/local/bin/hawkbell
+CONF_DIR="$ROOT/Library/Application Support/hawkbell"
+CONF=$CONF_DIR/hawkbell.yaml
+LOGS=$ROOT/Library/Logs/hawkbell
+LABEL=com.github.thomastysong.hawkbell
+PLIST=$ROOT/Library/LaunchDaemons/$LABEL.plist
+EXT_DIR=$ROOT/usr/local/lib/hawkbell
+EXT=$EXT_DIR/hawkbell.ext
+LOAD=$ROOT/var/osquery/extensions.load
+
+warn() { echo "hawkbell: warning: $*" >&2; }
+
+# 1. Group.
+if ! dseditgroup -o read hawkbell >/dev/null 2>&1; then
+	dseditgroup -o create -r "hawkbell outbox readers" hawkbell
+fi
+
+# 2. Directories.
+for d in "$CONF_DIR" "$LOGS"; do
+	if [ -L "$d" ]; then
+		echo "hawkbell: $d is a symbolic link; refusing to use it" >&2
+		exit 1
+	fi
+	mkdir -p "$d"
+	chown root:wheel "$d"
+	chmod 0755 "$d"
+done
+
+# 3. Configuration.
+if [ ! -e "$CONF" ] && [ ! -L "$CONF" ]; then
+	if "$BIN" export config --out "$CONF" >/dev/null 2>&1; then
+		chown root:wheel "$CONF"
+		chmod 0644 "$CONF"
+	else
+		warn "could not write $CONF; the daemon runs with built-in defaults"
+	fi
+fi
+
+# 4. osquery extension copy (osquery runs a root-owned copy named *.ext).
+if [ -f "$LOAD" ] && grep -qxF "$EXT" "$LOAD"; then
+	if ! cmp -s "$BIN" "$EXT" 2>/dev/null; then
+		mkdir -p "$EXT_DIR"
+		chown root:wheel "$EXT_DIR"
+		chmod 0755 "$EXT_DIR"
+		cp "$BIN" "$EXT.new" && chown root:wheel "$EXT.new" && chmod 0755 "$EXT.new" && mv -f "$EXT.new" "$EXT"
+		svc=system/com.facebook.osqueryd
+		launchctl print system/com.fleetdm.orbit >/dev/null 2>&1 && svc=system/com.fleetdm.orbit
+		# Detached: a package installed by orbit must report before orbit restarts.
+		nohup sh -c "sleep 10; launchctl kickstart -k $svc" >/dev/null 2>&1 &
+		echo "hawkbell: osquery ($svc) restarts in 10 s to load $EXT"
+	fi
+fi
+
+# 5. launchd job.
+chown root:wheel "$PLIST"
+chmod 0644 "$PLIST"
+if [ "$ROOT" = "" ]; then
+	launchctl bootout "system/$LABEL" >/dev/null 2>&1 || true
+	launchctl bootstrap system "$PLIST" || warn "launchctl bootstrap failed; see /Library/Logs/hawkbell/hawkbell.log"
+fi
+
+# 6. Hooks (the step of packaging/linux/postinstall.sh). On another volume
+# the hook files are below $ROOT and the hooks run the binary as it will be
+# found when that volume boots.
+if out=$("$BIN" hooks install --only-installed --scope managed ${ROOT:+--root "$ROOT"} --binary /usr/local/bin/hawkbell 2>&1); then
+	[ -z "$out" ] || printf '%s\n' "$out" | sed 's/^/hawkbell: /'
+else
+	[ -z "$out" ] || printf '%s\n' "$out" | sed 's/^/hawkbell: /' >&2
+	warn "could not refresh the managed hooks; run: /usr/local/bin/hawkbell hooks install --only-installed --scope managed"
+fi
+# The same for Codex's system tier (hooks install --scope system).
+if out=$("$BIN" hooks install --only-installed --scope system ${ROOT:+--root "$ROOT"} --binary /usr/local/bin/hawkbell 2>&1); then
+	[ -z "$out" ] || printf '%s\n' "$out" | sed 's/^/hawkbell: /'
+else
+	[ -z "$out" ] || printf '%s\n' "$out" | sed 's/^/hawkbell: /' >&2
+	warn "could not refresh the system hooks; run: /usr/local/bin/hawkbell hooks install --only-installed --scope system"
+fi
+exit 0

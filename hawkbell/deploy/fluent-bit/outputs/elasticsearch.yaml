@@ -1,0 +1,19 @@
+# Elasticsearch / OpenSearch. id_key makes at-least-once delivery
+# idempotent: hawkbell record ids are deterministic, so a replayed chunk
+# overwrites instead of duplicating.
+pipeline:
+  outputs:
+    - name: es
+      alias: hawkbell_es
+      match: 'hawkbell.*'
+      host: ${ES_HOST}
+      port: ${ES_PORT:-9200}
+      tls: on
+      http_user: ${ES_USER}
+      http_passwd: ${ES_PASSWORD}
+      index: hawkbell
+      suppress_type_name: on
+      id_key: id
+      replace_dots: on
+      retry_limit: no_limits
+      storage.total_limit_size: 512M

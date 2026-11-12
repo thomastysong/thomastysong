@@ -1,0 +1,131 @@
+{
+  "activity_id": 2,
+  "activity_name": "Collect",
+  "actor": {
+    "user": {
+      "name": "alice"
+    }
+  },
+  "category_name": "Discovery",
+  "category_uid": 5,
+  "class_name": "Software Inventory Info",
+  "class_uid": 5020,
+  "device": {
+    "hostname": "dev-mbp-042",
+    "os": {
+      "name": "macOS",
+      "type": "macOS",
+      "type_id": 300
+    },
+    "type": "Unknown",
+    "type_id": 0,
+    "uid": "6F1D2C3B-0000-4000-8000-ABCDEF012345"
+  },
+  "message": "mcp_server filesystem (new)",
+  "metadata": {
+    "correlation_uid": "3f6c1f0e-1111-4222-8333-444455556666",
+    "event_code": "inventory.asset",
+    "log_name": "hawkbell.inventory",
+    "product": {
+      "name": "hawkbell",
+      "vendor_name": "hawkbell"
+    },
+    "profiles": [
+      "host"
+    ],
+    "sequence": 42,
+    "uid": "019a7a00-0000-7000-8000-000000000001",
+    "version": "1.9.0"
+  },
+  "sbom": {
+    "package": {
+      "hash": {
+        "algorithm": "SHA-256",
+        "algorithm_id": 3,
+        "value": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+      },
+      "name": "@modelcontextprotocol/server-filesystem",
+      "package_manager": "npm",
+      "purl": "pkg:npm/%40modelcontextprotocol/server-filesystem@2026.1.14",
+      "uid": "ast-7c1d",
+      "version": "2026.1.14"
+    },
+    "software_components": []
+  },
+  "severity": "Informational",
+  "severity_id": 1,
+  "time": 1794391203123,
+  "type_name": "Software Inventory Info: Collect",
+  "type_uid": 502002,
+  "unmapped": {
+    "hawkbell": {
+      "agent": {
+        "id": "claude-code",
+        "name": "Claude Code",
+        "pid": 48120,
+        "surface": "cli",
+        "version": "2.1.0"
+      },
+      "asset": {
+        "change": "new",
+        "confidence": "medium",
+        "evidence": [
+          "path"
+        ],
+        "id": "ast-7c1d",
+        "kind": "mcp_server",
+        "mcp": {
+          "args": [
+            "-y",
+            "@modelcontextprotocol/server-filesystem@2026.1.14",
+            "/Users/alice/src"
+          ],
+          "command": "npx",
+          "ecosystem": "npm",
+          "env_keys": [
+            "FS_ROOT"
+          ],
+          "package": "@modelcontextprotocol/server-filesystem",
+          "pinned": true,
+          "runner": "npx",
+          "transport": "stdio",
+          "version": "2026.1.14"
+        },
+        "name": "filesystem",
+        "owner": "alice",
+        "parent": "claude-code",
+        "path": "/Users/alice/.claude.json",
+        "risk_flags": [
+          "unpinned"
+        ],
+        "scope": "user",
+        "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+      },
+      "fidelity": "observed",
+      "host": {
+        "arch": "arm64",
+        "id": "6F1D2C3B-0000-4000-8000-ABCDEF012345",
+        "name": "dev-mbp-042",
+        "os": "darwin"
+      },
+      "id": "019a7a00-0000-7000-8000-000000000001",
+      "kind": "inventory",
+      "privacy": "redacted",
+      "seq": 42,
+      "session": {
+        "cwd": "/Users/alice/src/app",
+        "id": "3f6c1f0e-1111-4222-8333-444455556666",
+        "model": "claude-sonnet-4-5",
+        "permission_mode": "default"
+      },
+      "source": "scan",
+      "ts": "2026-11-11T10:00:03.123456Z",
+      "type": "inventory.asset",
+      "user": {
+        "id": "501",
+        "name": "alice"
+      },
+      "v": 1
+    }
+  }
+}

@@ -1,0 +1,17 @@
+# Build context of the Dockerfile: sources only. Test binaries, release
+# output, binaries built in the module root (`go build ./cmd/hawkbell` writes
+# ./hawkbell, or hawkbell.exe) and local state never go into the image build.
+.git
+.github
+dist
+bin
+tmp
+**/*.test
+**/*.out
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/zz_*_test.go
+/hawkbell
+**/*.exe
+**/*.tar

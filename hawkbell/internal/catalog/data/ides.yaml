@@ -1,0 +1,513 @@
+# hawkbell catalog: AI IDEs, agentic editors and AI terminals.
+# Provenance and conventions are described at the top of agents.yaml.
+# macOS bundle ids and state paths come from the Homebrew cask of each app;
+# Windows display names from Fleet's maintained-apps list
+# (fleetdm/fleet ee/maintained-apps/outputs/apps.json); Windows executable
+# names from the Scoop manifests.
+version: "2026.11.11"
+
+products:
+  - id: cursor
+    name: Cursor
+    vendor: Anysphere
+    kind: app
+    # cursor-agent: the CLI shares ~/.cursor and the hook files.
+    aliases: [cursor-agent]
+    # "cursor" is the launcher shim (the cask installs the bundled bin/code
+    # under that name).
+    binaries: [cursor]
+    process_names: [Cursor, Cursor Helper]
+    packages: [cask:cursor, scoop:cursor, winget:Anysphere.Cursor]
+    bundle_ids: [com.todesktop.230313mzl4w4u92]
+    win_display: ["^Cursor"]
+    desktop_ids: [cursor]
+    install_paths:
+      darwin: ["/Applications/Cursor.app"]
+      windows: ['%LOCALAPPDATA%\Programs\cursor']
+      linux: ["/opt/Cursor", "/usr/share/cursor"]
+    state_dirs:
+      all: ["~/.cursor"]
+      darwin: ["~/Library/Application Support/Cursor"]
+      linux: ["~/.config/Cursor"]
+      windows: ['%APPDATA%\Cursor']
+    env_markers: [CURSOR_TRACE_ID, CURSOR_AGENT, CURSOR_SANDBOX]
+    mcp:
+      - {paths: ["~/.cursor/mcp.json"], format: mcpServers, scope: user}
+      - {project_paths: [".cursor/mcp.json"], format: mcpServers, scope: project}
+    skills: ["~/.cursor/skills", "./.cursor/skills"]
+    rules: ["./.cursor/rules", "./.cursorrules", "./AGENTS.md"]
+    plugins: ["~/.cursor/plugins", "~/.cursor/extensions"]
+    # Cursor also writes JSONL agent transcripts under
+    # ~/.cursor/projects/<hash>/agent-transcripts/; the SQLite store is the
+    # one uber/ADR and Fleet parse.
+    transcript:
+      format: cursor-sqlite
+      globs:
+        darwin: ["~/Library/Application Support/Cursor/User/globalStorage/state.vscdb"]
+        linux: ["~/.config/Cursor/User/globalStorage/state.vscdb"]
+        windows: ['%APPDATA%\Cursor\User\globalStorage\state.vscdb']
+    hooks:
+      dialect: cursor
+      managed_paths:
+        darwin: ["/Library/Application Support/Cursor/hooks.json"]
+        linux: ["/etc/cursor/hooks.json"]
+        windows: ['C:\ProgramData\Cursor\hooks.json']
+      user_paths: ["~/.cursor/hooks.json"]
+      project_paths: [".cursor/hooks.json"]
+      notes: >-
+        For local sessions every matching Enterprise, Team, trusted Project
+        and User hook runs; priority only settles conflicting responses.
+        Team hooks can also be distributed from the dashboard. Cloud agents
+        do not load the user file and emit no sessionStart or sessionEnd.
+        Exit code 2 or permission "deny" blocks; other failures fail open
+        unless failClosed is set. subagentStart ignores a deny. cursor.com
+        was unreachable when this was written: the paths are confirmed by
+        two independent code bases, the semantics by neither vendor docs nor
+        a test.
+    risky_flags: [--force, --yolo]
+    settings:
+      - {file: ["~/.cursor/cli-config.json"], format: json, key: permissions.allow, op: exists, flag: cli_allowlist_present, severity: info}
+    api_hosts: [downloads.cursor.com]
+    signers: {darwin_team_id: VDXQ22DGB9}
+    capabilities: [executes_shell, edits_files, mcp_client, cloud_execution]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/c/cursor.rb
+      - https://raw.githubusercontent.com/ScoopInstaller/Extras/master/bucket/cursor.json
+      - https://raw.githubusercontent.com/fleetdm/fleet/main/ee/maintained-apps/outputs/apps.json
+      - https://raw.githubusercontent.com/perplexityai/numbat/main/docs/deployment.md
+      - https://raw.githubusercontent.com/perplexityai/numbat/main/docs/agent-coverage.md
+      - research:agent-surfaces-a.md#6
+    # risky_flags and settings describe the cursor-agent CLI; the IDE's
+    # auto-run switch lives in state.vscdb under a key we could not confirm.
+    unverified: [risky_flags, settings, env_markers, signers, install_paths.windows, install_paths.linux, packages, plugins]
+
+  - id: vscode
+    name: Visual Studio Code
+    vendor: Microsoft
+    kind: app
+    binaries: [code, code-tunnel]
+    process_names: [Code, Code Helper]
+    packages: [cask:visual-studio-code, scoop:vscode, winget:Microsoft.VisualStudioCode, snap:code]
+    bundle_ids: [com.microsoft.VSCode]
+    win_display: [Microsoft Visual Studio Code]
+    desktop_ids: [code]
+    install_paths:
+      darwin: ["/Applications/Visual Studio Code.app"]
+      windows: ['%LOCALAPPDATA%\Programs\Microsoft VS Code', '%ProgramFiles%\Microsoft VS Code']
+      linux: ["/usr/share/code", "/snap/code"]
+    state_dirs:
+      all: ["~/.vscode"]
+      darwin: ["~/Library/Application Support/Code"]
+      linux: ["~/.config/Code", "~/.vscode-server"]
+      windows: ['%APPDATA%\Code']
+    mcp:
+      - paths:
+          darwin: ["~/Library/Application Support/Code/User/mcp.json", "~/Library/Application Support/Code/User/settings.json"]
+          linux: ["~/.config/Code/User/mcp.json", "~/.config/Code/User/settings.json"]
+          windows: ['%APPDATA%\Code\User\mcp.json', '%APPDATA%\Code\User\settings.json']
+        format: vscode
+        scope: user
+      - {project_paths: [".vscode/mcp.json"], format: vscode, scope: project}
+    plugins: ["~/.vscode/extensions", "~/.vscode-server/extensions"]
+    rules: ["./.github/copilot-instructions.md", "./AGENTS.md"]
+    settings:
+      - file: &vscode_settings
+          darwin: ["~/Library/Application Support/Code/User/settings.json"]
+          linux: ["~/.config/Code/User/settings.json"]
+          windows: ['%APPDATA%\Code\User\settings.json']
+        format: jsonc
+        key: '"chat.tools.global.autoApprove"'
+        op: eq
+        value: "true"
+        flag: auto_approve_all_tools
+        severity: high
+      - {file: *vscode_settings, format: jsonc, key: '"chat.useHooks"', op: eq, value: "false", flag: hooks_disabled, severity: medium}
+    signers: {darwin_team_id: UBF8T346G9, windows_publisher: Microsoft Corporation}
+    capabilities: [executes_shell, edits_files, mcp_client]
+    notes: >-
+      Agent mode, Copilot Chat and third-party agent extensions run here.
+      The Copilot harness loads the Copilot CLI hook files (see copilot-cli);
+      enterprise policy ChatToolsAutoApprove controls the global auto-approve
+      switch. Cursor and Kiro ship a launcher also named code.
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/v/visual-studio-code.rb
+      - https://raw.githubusercontent.com/ScoopInstaller/Extras/master/bucket/vscode.json
+      - https://raw.githubusercontent.com/microsoft/vscode-docs/main/docs/enterprise/policies.md
+      - research:agent-surfaces-a.md#4
+    unverified: [signers, install_paths, packages]
+
+  - id: vscode-insiders
+    name: Visual Studio Code Insiders
+    vendor: Microsoft
+    kind: app
+    binaries: [code-insiders]
+    process_names: [Code - Insiders, Code - Insiders Helper]
+    packages: [cask:visual-studio-code@insiders, scoop:vscode-insiders]
+    bundle_ids: [com.microsoft.VSCodeInsiders]
+    win_display: [Microsoft Visual Studio Code Insiders]
+    state_dirs:
+      all: ["~/.vscode-insiders"]
+      darwin: ["~/Library/Application Support/Code - Insiders"]
+      linux: ["~/.config/Code - Insiders"]
+      windows: ['%APPDATA%\Code - Insiders']
+    mcp:
+      - paths:
+          darwin: ["~/Library/Application Support/Code - Insiders/User/mcp.json"]
+          linux: ["~/.config/Code - Insiders/User/mcp.json"]
+          windows: ['%APPDATA%\Code - Insiders\User\mcp.json']
+        format: vscode
+        scope: user
+    plugins: ["~/.vscode-insiders/extensions"]
+    capabilities: [executes_shell, edits_files, mcp_client]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/v/visual-studio-code@insiders.rb
+      - https://raw.githubusercontent.com/ScoopInstaller/Versions/master/bucket/vscode-insiders.json
+    unverified: [win_display, state_dirs.linux, state_dirs.windows, mcp]
+
+  - id: vscodium
+    name: VSCodium
+    vendor: VSCodium
+    kind: app
+    binaries: [codium]
+    process_names: [VSCodium]
+    packages: [cask:vscodium, scoop:vscodium]
+    bundle_ids: [com.vscodium]
+    state_dirs:
+      all: ["~/.vscode-oss"]
+      darwin: ["~/Library/Application Support/VSCodium"]
+      linux: ["~/.config/VSCodium"]
+    plugins: ["~/.vscode-oss/extensions"]
+    capabilities: [executes_shell, edits_files, mcp_client]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/v/vscodium.rb
+    unverified: [bundle_ids]
+
+  - id: devin-desktop
+    name: Devin Desktop
+    vendor: Cognition
+    kind: app
+    # devin-cli: its binary is devin, this app's process is Devin.
+    aliases: [windsurf, Windsurf, Codeium Windsurf, Cascade, devin-cli]
+    binaries: [devin-desktop, windsurf]
+    process_names: [Devin, Windsurf]
+    packages: [cask:devin-desktop, scoop:windsurf]
+    bundle_ids: [com.exafunction.windsurf]
+    win_display: ["^Windsurf", "^Devin Desktop"]
+    desktop_ids: [windsurf]
+    install_paths:
+      darwin: ["/Applications/Devin.app", "/Applications/Windsurf.app"]
+    state_dirs:
+      all: ["~/.codeium/windsurf", "~/.devin", "~/.windsurf"]
+      darwin: ["~/Library/Application Support/Devin", "~/Library/Application Support/Windsurf"]
+    mcp:
+      - {paths: ["~/.codeium/windsurf/mcp_config.json"], format: mcpServers, scope: user}
+    skills: ["~/.codeium/windsurf/skills"]
+    rules: ["./.windsurfrules", "./.windsurf/rules"]
+    transcript:
+      format: windsurf-jsonl
+      globs: ["~/.windsurf/transcripts/*.jsonl"]
+    hooks:
+      managed_paths:
+        darwin: ["/Library/Application Support/Windsurf/hooks.json"]
+        linux: ["/etc/windsurf/hooks.json"]
+        windows: ['C:\ProgramData\Windsurf\hooks.json']
+      user_paths: ["~/.codeium/windsurf/hooks.json"]
+      notes: >-
+        Cascade hooks; exit code 2 blocks pre_read_code, pre_write_code,
+        pre_run_command and pre_mcp_tool_use. System hooks run first but user
+        and workspace hooks also execute. No hawkbell dialect.
+    api_hosts: [windsurf-stable.codeium.com, windsurf-stable.codeiumdata.com]
+    capabilities: [executes_shell, edits_files, mcp_client, cloud_execution]
+    notes: >-
+      Windsurf was renamed Devin Desktop in 2026 and kept its bundle id; the
+      Windows uninstall entry and the Scoop package still say Windsurf.
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/d/devin-desktop.rb
+      - https://raw.githubusercontent.com/ScoopInstaller/Extras/master/bucket/windsurf.json
+      - https://raw.githubusercontent.com/fleetdm/fleet/main/ee/maintained-apps/outputs/apps.json
+      - https://raw.githubusercontent.com/perplexityai/numbat/main/docs/deployment.md
+      - research:agent-surfaces-b.md#1b
+    unverified: [desktop_ids, rules, win_display]
+
+  - id: kiro
+    name: Kiro
+    vendor: Amazon Web Services
+    kind: app
+    # kiro-cli shares ~/.kiro.
+    aliases: [kiro-ide, kiro-cli]
+    binaries: [kiro]
+    process_names: [Kiro, Kiro Helper]
+    packages: [cask:kiro, scoop:kiro]
+    bundle_ids: [dev.kiro.desktop]
+    win_display: ["^Kiro"]
+    install_paths:
+      darwin: ["/Applications/Kiro.app"]
+    state_dirs:
+      all: ["~/.kiro"]
+      darwin: ["~/Library/Application Support/Kiro"]
+    mcp:
+      - {paths: ["~/.kiro/settings/mcp.json"], format: mcpServers, scope: user}
+      - {project_paths: [".kiro/settings/mcp.json"], format: mcpServers, scope: project}
+    rules: ["./.kiro/steering"]
+    hooks:
+      user_paths: ["~/.kiro/hooks/*.json"]
+      project_paths: [".kiro/hooks/*"]
+      notes: Global v1 hook files from Kiro IDE 1.0.182. No hawkbell dialect.
+    api_hosts: [prod.download.desktop.kiro.dev]
+    capabilities: [executes_shell, edits_files, mcp_client]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/k/kiro.rb
+      - https://raw.githubusercontent.com/ScoopInstaller/Extras/master/bucket/kiro.json
+      - https://raw.githubusercontent.com/fleetdm/fleet/main/ee/maintained-apps/outputs/apps.json
+      - research:agent-surfaces-b.md#1b
+    unverified: [mcp, rules, hooks.project_paths]
+
+  - id: antigravity
+    name: Google Antigravity
+    vendor: Google
+    kind: app
+    # antigravity-cli: its staged binary is named antigravity.
+    aliases: [antigravity-hub, antigravity-cli]
+    process_names: [Antigravity]
+    packages: [cask:antigravity, scoop:antigravity]
+    bundle_ids: [com.google.antigravity]
+    win_display: ["^Google Antigravity$", "^Antigravity$"]
+    desktop_ids: [antigravity]
+    install_paths:
+      darwin: ["/Applications/Antigravity.app"]
+    state_dirs:
+      all: ["~/.antigravity", "~/.gemini/antigravity"]
+      darwin: ["~/Library/Application Support/Antigravity"]
+    env_markers: [ANTIGRAVITY_AGENT]
+    mcp:
+      - {paths: ["~/.gemini/antigravity/mcp_config.json"], format: mcpServers, scope: user}
+    hooks:
+      user_paths: ["~/.gemini/config/hooks.json"]
+      notes: No hawkbell dialect.
+    transcript:
+      format: antigravity-jsonl
+      globs: ["~/.gemini/antigravity/brain/**/transcript.jsonl"]
+    signers: {darwin_team_id: EQHXZ8M8AV}
+    capabilities: [executes_shell, edits_files, browses, mcp_client, orchestrates]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/a/antigravity.rb
+      - https://raw.githubusercontent.com/ScoopInstaller/Extras/master/bucket/antigravity.json
+      - https://raw.githubusercontent.com/perplexityai/numbat/main/docs/agent-coverage.md
+      - research:agent-surfaces-b.md#1b
+    unverified: [win_display, desktop_ids, mcp, transcript, signers, env_markers]
+
+  - id: antigravity-ide
+    name: Google Antigravity IDE
+    vendor: Google
+    kind: app
+    binaries: [antigravity-ide, agy-ide]
+    process_names: [Antigravity IDE]
+    packages: [cask:antigravity-ide]
+    bundle_ids: [com.google.antigravity-ide]
+    win_display: [Antigravity IDE]
+    install_paths:
+      darwin: ["/Applications/Antigravity IDE.app"]
+    state_dirs:
+      all: ["~/.antigravity-ide", "~/.antigravity-ide-server", "~/.gemini/antigravity-ide"]
+      darwin: ["~/Library/Application Support/Antigravity IDE"]
+    signers: {darwin_team_id: EQHXZ8M8AV}
+    capabilities: [executes_shell, edits_files, mcp_client]
+    notes: ~/.antigravity-ide-server on a host suggests the remote server component was installed there.
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/a/antigravity-ide.rb
+      - https://raw.githubusercontent.com/fleetdm/fleet/main/ee/maintained-apps/outputs/apps.json
+    unverified: [signers]
+
+  - id: zed
+    name: Zed
+    vendor: Zed Industries
+    kind: app
+    binaries: [zed, zeditor]
+    process_names: [Zed]
+    packages: [cask:zed, scoop:zed]
+    bundle_ids: [dev.zed.Zed]
+    win_display: ["^Zed"]
+    desktop_ids: [dev.zed.Zed, zed]
+    install_paths:
+      darwin: ["/Applications/Zed.app"]
+      linux: ["~/.local/zed.app"]
+    state_dirs:
+      posix: ["~/.config/zed"]
+      darwin: ["~/Library/Application Support/Zed"]
+      linux: ["~/.local/share/zed"]
+      windows: ['%APPDATA%\Zed']
+    mcp:
+      - paths:
+          posix: ["~/.config/zed/settings.json"]
+          windows: ['%APPDATA%\Zed\settings.json']
+        format: zed
+        scope: user
+      - {project_paths: [".zed/settings.json"], format: zed, scope: project}
+    rules: ["./.rules", "./AGENTS.md"]
+    signers: {darwin_team_id: MQ55VZLNZQ}
+    capabilities: [executes_shell, edits_files, mcp_client, orchestrates]
+    notes: >-
+      settings.json key agent_servers registers external ACP agents (Claude
+      Code, Codex, Gemini CLI). /usr/sbin/zed on Linux is the ZFS event
+      daemon, not this editor.
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/z/zed.rb
+      - https://raw.githubusercontent.com/ScoopInstaller/Extras/master/bucket/zed.json
+      - research:agent-surfaces-b.md#1b
+    unverified: [signers, rules, install_paths.linux, binaries]
+
+  - id: trae
+    name: Trae
+    vendor: ByteDance
+    kind: app
+    binaries: [trae]
+    process_names: [Trae]
+    packages: [cask:trae, scoop:trae]
+    bundle_ids: [com.trae.app]
+    win_display: ["^Trae"]
+    desktop_ids: [trae]
+    state_dirs:
+      all: ["~/.trae"]
+      darwin: ["~/Library/Application Support/Trae"]
+    plugins: ["~/.trae/extensions"]
+    capabilities: [executes_shell, edits_files, mcp_client]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/t/trae.rb
+      - https://raw.githubusercontent.com/ScoopInstaller/Extras/master/bucket/trae.json
+    unverified: [win_display, desktop_ids]
+
+  - id: trae-cn
+    name: Trae CN
+    vendor: ByteDance
+    kind: app
+    binaries: [trae-cn]
+    process_names: [Trae CN]
+    packages: [cask:trae-cn]
+    bundle_ids: [cn.trae.app]
+    state_dirs:
+      all: ["~/.trae-cn"]
+      darwin: ["~/Library/Application Support/Trae CN"]
+      linux: ["~/.config/Trae CN"]
+    capabilities: [executes_shell, edits_files, mcp_client]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/t/trae-cn.rb
+
+  - id: qoder
+    name: Qoder
+    vendor: Alibaba
+    kind: app
+    process_names: [Qoder]
+    packages: [cask:qoder]
+    bundle_ids: [com.qoder.app, com.qoder.app.stable]
+    state_dirs:
+      all: ["~/.qoder"]
+      darwin: ["~/Library/Application Support/com.qoder.app.stable"]
+    capabilities: [executes_shell, edits_files, mcp_client]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/q/qoder.rb
+    unverified: [vendor]
+
+  - id: codebuddy
+    name: CodeBuddy
+    vendor: Tencent
+    kind: app
+    # codebuddy-code: the CLI is also named codebuddy and shares ~/.codebuddy.
+    aliases: [codebuddy-code]
+    process_names: [CodeBuddy]
+    packages: [cask:codebuddy]
+    bundle_ids: [com.tencent.codebuddy]
+    state_dirs:
+      all: ["~/.codebuddy"]
+      darwin: ["~/Library/Application Support/CodeBuddy"]
+    capabilities: [executes_shell, edits_files, mcp_client]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/c/codebuddy.rb
+
+  - id: zcode
+    name: ZCode
+    vendor: Z.ai
+    kind: app
+    process_names: [ZCode]
+    packages: [cask:zcode]
+    bundle_ids: [dev.zcode.app]
+    state_dirs:
+      all: ["~/.zcode"]
+      darwin: ["~/Library/Application Support/ZCode"]
+    capabilities: [executes_shell, edits_files]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/z/zcode.rb
+
+  - id: void
+    name: Void
+    vendor: Void
+    kind: app
+    binaries: [void]
+    process_names: [Void]
+    packages: [cask:void]
+    bundle_ids: [com.voideditor.Void]
+    state_dirs:
+      darwin: ["~/Library/Application Support/Void"]
+    capabilities: [executes_shell, edits_files, mcp_client]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/v/void.rb
+
+  - id: jetbrains-air
+    name: JetBrains Air
+    vendor: JetBrains
+    kind: app
+    process_names: [Air]
+    packages: [cask:jetbrains-air]
+    bundle_ids: [com.jetbrains.air]
+    install_paths:
+      darwin: ["/Applications/Air.app"]
+    state_dirs:
+      darwin: ["~/Library/Application Support/JetBrains/Air"]
+    signers: {darwin_team_id: 2ZEFAR8TH3}
+    capabilities: [executes_shell, edits_files, orchestrates, mcp_client]
+    notes: Reported to run Codex, Claude Agent, Gemini CLI and Junie over ACP; not confirmed from a primary source.
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/j/jetbrains-air.rb
+      - research:agent-surfaces-b.md#1b
+    unverified: [signers, bundle_ids]
+
+  - id: warp
+    name: Warp
+    vendor: Warp
+    kind: app
+    binaries: [warp-terminal]
+    process_names: [Warp]
+    packages: [cask:warp, scoop:warp-terminal]
+    bundle_ids: [dev.warp.Warp-Stable]
+    desktop_ids: [dev.warp.Warp]
+    install_paths:
+      darwin: ["/Applications/Warp.app"]
+      linux: ["/opt/warpdotdev"]
+    state_dirs:
+      all: ["~/.warp"]
+      darwin: ["~/Library/Application Support/dev.warp.Warp-Stable"]
+      linux: ["~/.config/warp-terminal", "~/.local/share/warp-terminal", "~/.local/state/warp-terminal"]
+    signers: {darwin_team_id: 2BBY89MBSN}
+    capabilities: [executes_shell, edits_files, mcp_client, orchestrates]
+    notes: >-
+      A terminal with a built-in agent that also hosts third-party CLI agents.
+      scoop "warp" is an unrelated packer and Cloudflare WARP is a VPN client.
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/w/warp.rb
+      - https://raw.githubusercontent.com/ScoopInstaller/Extras/master/bucket/warp-terminal.json
+      - research:agent-surfaces-b.md#1b
+    unverified: [signers, desktop_ids, install_paths.linux, process_names]
+
+  - id: replit
+    name: Replit Desktop
+    vendor: Replit
+    kind: app
+    process_names: [Replit]
+    packages: [cask:replit]
+    bundle_ids: [com.electron.replit]
+    state_dirs:
+      darwin: ["~/Library/Application Support/Replit"]
+    env_markers: [REPL_ID]
+    capabilities: [cloud_execution]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/r/replit.rb
+    unverified: [env_markers]

@@ -1,0 +1,18 @@
+# Splunk HTTP Event Collector: findings, summaries, health, posture,
+# inventory. Searches should deduplicate on "id" (delivery is at-least-once;
+# ids are deterministic): | dedup id
+pipeline:
+  outputs:
+    - name: splunk
+      alias: hawkbell_splunk
+      match_regex: '^hawkbell\.(detection|summary|health|posture|inventory|parse_error)$'
+      host: ${SPLUNK_HEC_HOST}
+      port: ${SPLUNK_HEC_PORT:-8088}
+      tls: on
+      tls.verify: on
+      splunk_token: ${SPLUNK_HEC_TOKEN}
+      splunk_send_raw: off
+      event_sourcetype: hawkbell:event
+      event_index: ${SPLUNK_INDEX:-hawkbell}
+      retry_limit: no_limits
+      storage.total_limit_size: 512M

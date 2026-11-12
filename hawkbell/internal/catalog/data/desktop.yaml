@@ -1,0 +1,603 @@
+# hawkbell catalog: desktop AI assistants, agent orchestrator GUIs and other
+# desktop AI apps. Provenance and conventions are described at the top of
+# agents.yaml. Bundle ids and state paths come from each app's Homebrew cask.
+version: "2026.11.11"
+
+products:
+  - id: claude-desktop
+    name: Claude Desktop
+    vendor: Anthropic
+    kind: app
+    # claude-code: on Windows both run as claude.exe.
+    aliases: [claude-code, cowork, Claude Cowork]
+    binaries: [claude-desktop]
+    process_names: [Claude, Claude Helper]
+    packages: [cask:claude, scoop:claude, apt:claude-desktop, winget:Anthropic.Claude]
+    bundle_ids: [com.anthropic.claudefordesktop]
+    win_display: ["^Claude$"]
+    appx: [Claude_pzs8sxrjxfjjc]
+    install_paths:
+      darwin: ["/Applications/Claude.app"]
+      windows: ['%LOCALAPPDATA%\AnthropicClaude']
+    state_dirs:
+      darwin: ["~/Library/Application Support/Claude"]
+      linux: ["~/.config/Claude"]
+      windows: ['%APPDATA%\Claude']
+    env_markers: [CLAUDE_CODE_IS_COWORK]
+    mcp:
+      - paths:
+          darwin: ["~/Library/Application Support/Claude/claude_desktop_config.json"]
+          linux: ["~/.config/Claude/claude_desktop_config.json"]
+          windows: ['%APPDATA%\Claude\claude_desktop_config.json']
+        format: mcpServers
+        scope: user
+    transcript:
+      format: cowork-audit
+      globs:
+        darwin: ["~/Library/Application Support/Claude/local-agent-mode-sessions/**/audit.jsonl"]
+    api_hosts: [claude.ai, api.anthropic.com, downloads.claude.ai]
+    signers: {darwin_team_id: Q6L2SF6YDW, windows_publisher: "Anthropic, PBC"}
+    capabilities: [executes_shell, edits_files, browses, mcp_client, computer_use]
+    notes: >-
+      Includes Cowork and the Code tab. claude_desktop_config.json is also
+      loaded into local Code sessions. Cowork on Linux runs a QEMU/KVM guest,
+      so expect qemu-system-* children. On SSH remotes it leaves helpers
+      under ~/.claude/remote/.
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/c/claude.rb
+      - https://raw.githubusercontent.com/ScoopInstaller/Extras/master/bucket/claude.json
+      - https://raw.githubusercontent.com/fleetdm/fleet/main/ee/maintained-apps/outputs/apps.json
+      - https://code.claude.com/docs/en/desktop-linux.md
+      - https://raw.githubusercontent.com/perplexityai/numbat/main/docs/agent-coverage.md
+      - research:agent-surfaces-b.md#1b
+    unverified: [appx, signers, install_paths.windows, env_markers, packages]
+
+  - id: chatgpt
+    name: ChatGPT
+    vendor: OpenAI
+    kind: app
+    # codex: the unified app shares ~/.codex with the Codex CLI and took
+    # over the bundle id and process name of the former Codex.app.
+    aliases: [chatgpt-desktop, codex-app, Codex desktop, codex]
+    process_names: [ChatGPT, Codex]
+    packages: [cask:chatgpt, cask:codex-app, scoop:chatgpt]
+    bundle_ids: [com.openai.codex, com.openai.chat]
+    win_display: ["^ChatGPT"]
+    install_paths:
+      darwin: ["/Applications/ChatGPT.app", "/Applications/Codex.app"]
+    state_dirs:
+      all: ["~/.codex"]
+      darwin:
+        - "~/Library/Application Support/Codex"
+        - "~/Library/Application Support/com.openai.codex"
+        - "~/Library/Application Support/OpenAI/Codex"
+        - "/Library/Application Support/CodexComputerUseAuthorizationPlugin"
+    mcp:
+      - {paths: ["~/.codex/config.toml"], format: codex.toml, scope: user}
+    api_hosts: [chatgpt.com, api.openai.com, persistent.oaistatic.com]
+    signers: {darwin_team_id: 2DC432GLL2}
+    capabilities: [executes_shell, edits_files, browses, mcp_client, computer_use, cloud_execution]
+    notes: >-
+      Since mid-2026 ChatGPT.app is the unified Chat, Work and Codex app and
+      carries bundle id com.openai.codex; com.openai.chat is the older chat
+      app. The computer-use helper is com.openai.sky.CUAService.
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/c/chatgpt.rb
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/c/codex-app.rb
+      - https://raw.githubusercontent.com/ScoopInstaller/Extras/master/bucket/chatgpt.json
+      - research:agent-surfaces-b.md#1b
+    unverified: [win_display, signers, api_hosts, mcp]
+
+  - id: perplexity
+    name: Perplexity
+    vendor: Perplexity
+    kind: app
+    aliases: [perplexity-desktop]
+    process_names: [Perplexity, perplexityd]
+    packages: [cask:perplexity]
+    bundle_ids: [ai.perplexity.macv3]
+    state_dirs:
+      darwin: ["~/Library/Application Support/ai.perplexity.macv3"]
+    capabilities: [computer_use, browses, persistent_service]
+    notes: >-
+      Ships the Personal Computer agent and a daemon,
+      ai.perplexity.macv3.perplexityd. uber/ADR lists ai.perplexity.mac,
+      which the current cask does not use.
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/p/perplexity.rb
+      - research:agent-surfaces-b.md#2
+
+  - id: gemini-app
+    name: Gemini
+    vendor: Google
+    kind: app
+    # gemini-cli: its binary is gemini.
+    aliases: [gemini-desktop, gemini-cli]
+    process_names: [Gemini]
+    packages: [cask:google-gemini]
+    bundle_ids: [com.google.GeminiMacOS]
+    install_paths:
+      darwin: ["/Applications/Gemini.app"]
+    state_dirs:
+      darwin: ["~/Library/Application Support/com.google.GeminiMacOS"]
+    signers: {darwin_team_id: EQHXZ8M8AV}
+    capabilities: [computer_use]
+    notes: >-
+      MacPaw's Gemini 2 duplicate finder (com.macpaw.site.Gemini2) is a
+      different product with the same process name; its first version also
+      installed as Gemini.app, so only the bundle id separates the two.
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/g/google-gemini.rb
+    unverified: [signers, capabilities]
+
+  - id: microsoft-365-copilot
+    name: Microsoft 365 Copilot
+    vendor: Microsoft
+    kind: app
+    packages: [cask:microsoft-365-copilot]
+    bundle_ids: [com.microsoft.m365copilot]
+    appx: [Microsoft.MicrosoftOfficeHub]
+    signers: {darwin_team_id: UBF8T346G9, windows_publisher: Microsoft Corporation}
+    notes: Arrives with Microsoft 365 apps, so presence is inventory noise rather than a user choice.
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/m/microsoft-365-copilot.rb
+      - research:agent-surfaces-b.md#1b
+    unverified: [appx, signers]
+
+  - id: microsoft-copilot
+    name: Microsoft Copilot
+    vendor: Microsoft
+    kind: app
+    appx: [Microsoft.Copilot]
+    signers: {windows_publisher: Microsoft Corporation}
+    notes: The consumer Copilot app on Windows. Copilot in Edge is a browser feature and is not an install.
+    sources: [research:agent-surfaces-b.md#1b]
+    unverified: [appx, signers]
+
+  - id: copilot-for-xcode
+    name: GitHub Copilot for Xcode
+    vendor: GitHub
+    kind: app
+    process_names: [GitHub Copilot for Xcode]
+    packages: [cask:github-copilot-for-xcode]
+    bundle_ids: [com.github.CopilotForXcode]
+    state_dirs:
+      darwin: ["~/Library/Application Support/com.github.CopilotForXcode"]
+    signers: {darwin_team_id: VEKTX9H2N7}
+    capabilities: [edits_files, mcp_client]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/g/github-copilot-for-xcode.rb
+
+  - id: github-copilot-app
+    name: GitHub Copilot app
+    vendor: GitHub
+    kind: app
+    # copilot-cli: the app reads the same ~/.copilot.
+    aliases: [copilot-cli]
+    process_names: [GitHub Copilot]
+    packages: [cask:github-copilot-app]
+    bundle_ids: [com.github.githubapp]
+    desktop_ids: [com.github.githubapp]
+    state_dirs:
+      all: ["~/.copilot"]
+      darwin: ["~/Library/Application Support/com.github.githubapp"]
+      linux: ["~/.config/com.github.githubapp", "~/.local/share/com.github.githubapp"]
+    capabilities: [executes_shell, edits_files, mcp_client]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/g/github-copilot-app.rb
+
+  - id: raycast
+    name: Raycast
+    vendor: Raycast
+    kind: app
+    process_names: [Raycast]
+    packages: [cask:raycast]
+    bundle_ids: [com.raycast.macos]
+    state_dirs:
+      darwin: ["~/.config/raycast", "~/Library/Application Support/com.raycast.macos"]
+    signers: {darwin_team_id: SY64MV22J9}
+    capabilities: [mcp_client]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/r/raycast.rb
+    unverified: [signers, capabilities]
+
+  - id: manus
+    name: Manus
+    vendor: Manus
+    kind: app
+    process_names: [Manus Studio]
+    packages: [cask:manus]
+    bundle_ids: [im.manus.desktop]
+    state_dirs:
+      darwin: ["~/Library/Application Support/Manus"]
+    capabilities: [computer_use, cloud_execution]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/m/manus.rb
+    unverified: [process_names]
+
+  - id: kimi-desktop
+    name: Kimi
+    vendor: Moonshot AI
+    kind: app
+    # kimi-code: the CLI binary is kimi.
+    aliases: [kimi-code]
+    process_names: [Kimi]
+    packages: [cask:kimi]
+    bundle_ids: [com.moonshot.kimichat]
+    state_dirs:
+      all: ["~/.kimi-work", "~/.kimi-webbridge"]
+      darwin: ["~/Library/Application Support/kimi-desktop"]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/k/kimi.rb
+
+  - id: doubao
+    name: Doubao
+    vendor: ByteDance
+    kind: app
+    process_names: [Doubao]
+    packages: [cask:doubao]
+    bundle_ids: [com.bot.pc.doubao]
+    state_dirs:
+      darwin: ["~/Library/Application Support/Doubao"]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/d/doubao.rb
+
+  - id: poe
+    name: Poe
+    vendor: Quora
+    kind: app
+    process_names: [Poe]
+    packages: [cask:poe]
+    bundle_ids: [com.quora.poe.electron]
+    install_paths:
+      darwin: ["/Applications/Poe.app"]
+    state_dirs:
+      darwin: ["~/Library/Application Support/Poe", "~/Library/Application Support/poe-electron"]
+    notes: The Python task runner poethepoet also installs a command named poe.
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/p/poe.rb
+
+  - id: goose-desktop
+    name: goose Desktop
+    vendor: Agentic AI Foundation (formerly Block)
+    kind: app
+    # goose: the CLI binary has the same name.
+    aliases: [goose]
+    process_names: [Goose]
+    packages: [cask:block-goose, scoop:goose]
+    bundle_ids: [com.electron.goose]
+    install_paths:
+      darwin: ["/Applications/Goose.app"]
+      windows: ['%LOCALAPPDATA%\Programs\Goose']
+    state_dirs:
+      darwin: ["~/Library/Application Support/Goose"]
+    capabilities: [executes_shell, edits_files, mcp_client]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/b/block-goose.rb
+      - https://raw.githubusercontent.com/ScoopInstaller/Extras/master/bucket/goose.json
+      - research:agent-surfaces-b.md#1a
+
+  - id: opencode-desktop
+    name: OpenCode Desktop
+    vendor: Anomaly
+    kind: app
+    # opencode: the CLI binary has the same name.
+    aliases: [opencode]
+    process_names: [OpenCode]
+    packages: [cask:opencode-desktop]
+    bundle_ids: [ai.opencode.desktop]
+    install_paths:
+      darwin: ["/Applications/OpenCode.app"]
+    state_dirs:
+      darwin: ["~/Library/Application Support/ai.opencode.desktop"]
+      linux: ["~/.config/OpenCode", "~/.local/share/ai.opencode.desktop"]
+    capabilities: [executes_shell, edits_files, mcp_client]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/o/opencode-desktop.rb
+
+  - id: factory-desktop
+    name: Factory
+    vendor: Factory
+    kind: app
+    # droid: the CLI shares ~/.factory.
+    aliases: [droid]
+    process_names: [Factory]
+    packages: [cask:factory]
+    bundle_ids: [ai.factory.desktop]
+    install_paths:
+      darwin: ["/Applications/Factory.app"]
+    state_dirs:
+      all: ["~/.factory"]
+      darwin: ["~/Library/Application Support/ai.factory.desktop", "~/Library/Application Support/Factory"]
+    capabilities: [executes_shell, edits_files, mcp_client, orchestrates]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/f/factory.rb
+
+  # ------------------------------------------------- orchestrator GUIs
+  # Apps that spawn many CLI agents. Their children are the agents, so
+  # parent-process attribution matters more than the app itself.
+  - id: conductor
+    name: Conductor
+    vendor: Conductor
+    kind: app
+    process_names: [Conductor]
+    packages: [cask:conductor]
+    bundle_ids: [com.conductor.app]
+    install_paths:
+      darwin: ["/Applications/Conductor.app"]
+    state_dirs:
+      all: ["~/.conductor"]
+      darwin: ["~/Library/Application Support/com.conductor.app"]
+    capabilities: [orchestrates, executes_shell]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/c/conductor.rb
+    unverified: [bundle_ids]
+
+  - id: superset-desktop
+    name: Superset (Paradev)
+    vendor: Paradev
+    kind: app
+    aliases: [paradev]
+    process_names: [Superset]
+    packages: [cask:superset]
+    bundle_ids: [com.superset.desktop]
+    install_paths:
+      darwin: ["/Applications/Superset.app"]
+    state_dirs:
+      all: ["~/.superset"]
+      darwin: ["~/Library/Application Support/Superset"]
+      linux: ["~/.config/Superset"]
+    capabilities: [orchestrates, executes_shell]
+    notes: Not Apache Superset, whose CLI is also called superset.
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/s/superset.rb
+
+  - id: emdash
+    name: Emdash
+    vendor: Emdash
+    kind: app
+    process_names: [Emdash]
+    packages: [cask:emdash]
+    bundle_ids: [com.emdash.stable, com.emdash]
+    state_dirs:
+      darwin: ["~/Library/Application Support/Emdash"]
+    capabilities: [orchestrates, executes_shell]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/e/emdash.rb
+
+  - id: sculptor
+    name: Sculptor
+    vendor: Imbue
+    kind: app
+    process_names: [Sculptor]
+    packages: [cask:sculptor]
+    bundle_ids: [com.electron.sculptor]
+    state_dirs:
+      darwin: ["~/Library/Application Support/Sculptor"]
+    capabilities: [orchestrates, executes_shell]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/s/sculptor.rb
+
+  - id: t3-code
+    name: T3 Code
+    vendor: T3 Tools
+    kind: app
+    process_names: [T3 Code]
+    packages: [cask:t3-code]
+    bundle_ids: [com.t3tools.t3code]
+    desktop_ids: [com.t3tools.T3Code]
+    state_dirs:
+      all: ["~/.t3"]
+      darwin: ["~/Library/Application Support/t3code"]
+      linux: ["~/.config/t3code"]
+    capabilities: [orchestrates, executes_shell]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/t/t3-code.rb
+    unverified: [process_names]
+
+  - id: nimbalyst
+    name: Nimbalyst
+    vendor: Nimbalyst
+    kind: app
+    aliases: [crystal]
+    process_names: [Nimbalyst, Crystal]
+    packages: [cask:nimbalyst]
+    bundle_ids: [com.nimbalyst.electron, com.stravu.crystal]
+    state_dirs:
+      darwin: ["~/Library/Application Support/@nimbalyst", "~/Library/Application Support/Crystal"]
+    capabilities: [orchestrates, executes_shell]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/n/nimbalyst.rb
+    unverified: [process_names]
+
+  - id: cmux
+    name: cmux
+    vendor: cmux
+    kind: app
+    binaries: [cmux]
+    packages: [cask:cmux]
+    bundle_ids: [com.cmuxterm.app]
+    state_dirs:
+      all: ["~/.cmuxterm", "~/.config/cmux"]
+      darwin: ["~/Library/Application Support/cmux"]
+    capabilities: [orchestrates, executes_shell]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/c/cmux.rb
+
+  - id: aionui
+    name: AionUi
+    vendor: AionUi
+    kind: app
+    process_names: [AionUi]
+    packages: [cask:aionui]
+    bundle_ids: [com.aionui.app]
+    state_dirs:
+      all: ["~/.aionui"]
+      darwin: ["~/Library/Application Support/AionUi"]
+    capabilities: [orchestrates, executes_shell]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/a/aionui.rb
+    unverified: [bundle_ids]
+
+  # ------------------------------------------------- chat and capture apps
+  - id: cherry-studio
+    name: Cherry Studio
+    vendor: Cherry Studio
+    kind: app
+    binaries: [cherry-studio]
+    process_names: [Cherry Studio]
+    packages: [cask:cherry-studio, scoop:cherry-studio]
+    bundle_ids: [com.kangfenmao.CherryStudio]
+    state_dirs:
+      all: ["~/.cherrystudio"]
+      darwin: ["~/Library/Application Support/CherryStudio"]
+      linux: ["~/.config/CherryStudio"]
+    capabilities: [mcp_client]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/c/cherry-studio.rb
+      - https://raw.githubusercontent.com/ScoopInstaller/Extras/master/bucket/cherry-studio.json
+
+  - id: anythingllm
+    name: AnythingLLM
+    vendor: Mintplex Labs
+    kind: app
+    process_names: [AnythingLLM]
+    packages: [cask:anythingllm, scoop:anythingllm]
+    bundle_ids: [com.anythingllm]
+    state_dirs:
+      darwin: ["~/Library/Application Support/anythingllm-desktop"]
+    capabilities: [local_inference, mcp_client]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/a/anythingllm.rb
+      - https://raw.githubusercontent.com/ScoopInstaller/Extras/master/bucket/anythingllm.json
+    unverified: [bundle_ids, vendor]
+
+  - id: msty
+    name: Msty
+    vendor: Msty
+    kind: app
+    status: deprecated
+    aliases: [msty-studio]
+    process_names: [Msty]
+    packages: [cask:msty]
+    bundle_ids: [app.msty.app]
+    state_dirs:
+      darwin: ["~/Library/Application Support/Msty"]
+    capabilities: [local_inference]
+    notes: The cask was deprecated on 2026-01-02 in favour of Msty Studio.
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/m/msty.rb
+
+  - id: chatbox
+    name: Chatbox
+    vendor: Chatbox
+    kind: app
+    process_names: [Chatbox]
+    packages: [cask:chatbox]
+    bundle_ids: [xyz.chatboxapp.app]
+    win_display: ["^Chatbox"]
+    state_dirs:
+      darwin: ["~/Library/Application Support/xyz.chatboxapp.app"]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/c/chatbox.rb
+      - https://raw.githubusercontent.com/fleetdm/fleet/main/ee/maintained-apps/outputs/apps.json
+
+  - id: lobehub
+    name: LobeHub
+    vendor: LobeHub
+    kind: app
+    aliases: [lobe-chat]
+    process_names: [LobeHub]
+    packages: [cask:lobehub]
+    bundle_ids: [com.lobehub.lobehub-desktop, com.lobehub.lobehub-desktop-beta]
+    state_dirs:
+      darwin: ["~/Library/Application Support/LobeHub"]
+      linux: ["~/.config/LobeHub"]
+    capabilities: [mcp_client]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/l/lobehub.rb
+
+  - id: boltai
+    name: BoltAI
+    vendor: BoltAI
+    kind: app
+    process_names: [BoltAI]
+    packages: [cask:boltai]
+    bundle_ids: [co.podzim.boltai-mobile]
+    state_dirs:
+      all: ["~/.boltai"]
+      darwin: ["~/Library/Application Support/BoltAI"]
+    capabilities: [mcp_client]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/b/boltai.rb
+      - https://raw.githubusercontent.com/fleetdm/fleet/main/ee/maintained-apps/outputs/apps.json
+
+  - id: pieces
+    name: Pieces
+    vendor: Pieces
+    kind: app
+    process_names: [Pieces, Pieces OS]
+    packages: [cask:pieces]
+    bundle_ids: [com.pieces.x]
+    state_dirs:
+      darwin: ["~/Library/Application Support/com.pieces.x"]
+    capabilities: [captures_av, local_inference, mcp_client]
+    notes: Long-term memory product that captures on-screen workflow context.
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/p/pieces.rb
+    unverified: [process_names, capabilities]
+
+  - id: granola
+    name: Granola
+    vendor: Granola
+    kind: app
+    process_names: [Granola]
+    packages: [cask:granola]
+    bundle_ids: [com.granola.app]
+    win_display: ["^Granola"]
+    state_dirs:
+      darwin: ["~/Library/Application Support/Granola"]
+    capabilities: [captures_av]
+    notes: Meeting notepad that transcribes system audio.
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/g/granola.rb
+      - https://raw.githubusercontent.com/fleetdm/fleet/main/ee/maintained-apps/outputs/apps.json
+
+  - id: superwhisper
+    name: superwhisper
+    vendor: superwhisper
+    kind: app
+    process_names: [superwhisper]
+    packages: [cask:superwhisper]
+    bundle_ids: [com.superduper.superwhisper]
+    state_dirs:
+      darwin: ["~/Library/Application Support/superwhisper"]
+    capabilities: [captures_av, local_inference]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/s/superwhisper.rb
+
+  - id: wispr-flow
+    name: Wispr Flow
+    vendor: Wispr
+    kind: app
+    process_names: [Wispr Flow]
+    packages: [cask:wispr-flow]
+    bundle_ids: [com.electron.wispr-flow]
+    state_dirs:
+      darwin: ["~/Library/Application Support/Wispr Flow"]
+    capabilities: [captures_av]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/w/wispr-flow.rb
+
+  - id: highlight-ai
+    name: Highlight
+    vendor: Highlight
+    kind: app
+    process_names: [Highlight]
+    bundle_ids: [tv.medal.highlight]
+    install_paths:
+      darwin: ["/Applications/Highlight.app"]
+    capabilities: [captures_av, mcp_client]
+    sources:
+      - https://raw.githubusercontent.com/fleetdm/fleet/main/ee/maintained-apps/outputs/apps.json
+    unverified: [process_names, capabilities, install_paths]

@@ -1,0 +1,11 @@
+# Local files, for trying hawkbell out and for tests.
+pipeline:
+  outputs:
+    - name: file
+      alias: hawkbell_local
+      match: 'hawkbell.*'
+      path: ${HAWKBELL_FILE_OUT:-/var/log/hawkbell-shipped}
+      format: plain
+      mkdir: true
+      retry_limit: no_limits
+      storage.total_limit_size: 256M

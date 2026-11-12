@@ -1,0 +1,68 @@
+# nfpm configuration of the Linux packages (deb and rpm), for building them
+# without goreleaser (`make package`). The release build (.goreleaser.yaml,
+# nfpms) carries the same file list and scripts; packaging/packaging_test.go
+# keeps the two in step. Paths are relative to the module root.
+#
+#   cp dist/linux_amd64/hawkbell dist/package/hawkbell   # the binary to package
+#   VERSION=1.2.3 ARCH=amd64 nfpm package -f packaging/linux/nfpm.yaml -p deb -t dist/
+#
+# nfpm expands environment variables in arch and version but not in content
+# sources, hence the fixed staging path dist/package/hawkbell.
+#
+# Install locations are fixed: deploy/fleet (install scripts, extension
+# registration, policies) and the systemd unit expect /usr/bin/hawkbell.
+name: hawkbell
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+version_schema: semver
+release: "1"
+section: admin
+priority: optional
+# UNVERIFIED: placeholder maintainer address (.invalid is reserved); set the
+# real contact before the first release.
+maintainer: hawkbell maintainers <maintainers@hawkbell.invalid>
+description: |-
+  AI coding agent detection sensor.
+  hawkbell collects what AI coding agents do (hooks, session transcripts,
+  processes), detects risky behaviour on the endpoint, reports sensor health
+  and hook coverage, and hands findings to Fluent Bit and Fleet/osquery.
+vendor: hawkbell
+homepage: https://github.com/thomastysong/thomastysong/tree/main/hawkbell
+license: Apache-2.0
+contents:
+  - src: dist/package/hawkbell
+    dst: /usr/bin/hawkbell
+    file_info:
+      mode: 0755
+      owner: root
+      group: root
+  - src: packaging/systemd/hawkbell.service
+    dst: /usr/lib/systemd/system/hawkbell.service
+    file_info:
+      mode: 0644
+      owner: root
+      group: root
+  - src: LICENSE
+    dst: /usr/share/doc/hawkbell/LICENSE
+    file_info:
+      mode: 0644
+      owner: root
+      group: root
+  - src: NOTICE
+    dst: /usr/share/doc/hawkbell/NOTICE
+    file_info:
+      mode: 0644
+      owner: root
+      group: root
+  - src: THIRD_PARTY_LICENSES
+    dst: /usr/share/doc/hawkbell/THIRD_PARTY_LICENSES
+    file_info:
+      mode: 0644
+      owner: root
+      group: root
+scripts:
+  preinstall: packaging/linux/preinstall.sh
+  postinstall: packaging/linux/postinstall.sh
+  preremove: packaging/linux/preremove.sh
+  postremove: packaging/linux/postremove.sh

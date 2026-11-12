@@ -1,0 +1,105 @@
+# agent: cursor
+# scope: managed
+# path: /C/ProgramData/Cursor/hooks.json
+# action: create
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "if (Test-Path -LiteralPath 'C:\\Program Files\\hawkbell\\hawkbell.exe' -PathType Leaf) { & 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent cursor; exit $LASTEXITCODE } else { exit 0 }",
+        "timeout": 10
+      }
+    ],
+    "beforeSubmitPrompt": [
+      {
+        "command": "& 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent cursor",
+        "timeout": 10,
+        "failClosed": true
+      }
+    ],
+    "preToolUse": [
+      {
+        "command": "& 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent cursor",
+        "timeout": 10,
+        "failClosed": true
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": "if (Test-Path -LiteralPath 'C:\\Program Files\\hawkbell\\hawkbell.exe' -PathType Leaf) { & 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent cursor; exit $LASTEXITCODE } else { exit 0 }",
+        "timeout": 10
+      }
+    ],
+    "postToolUseFailure": [
+      {
+        "command": "if (Test-Path -LiteralPath 'C:\\Program Files\\hawkbell\\hawkbell.exe' -PathType Leaf) { & 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent cursor; exit $LASTEXITCODE } else { exit 0 }",
+        "timeout": 10
+      }
+    ],
+    "beforeShellExecution": [
+      {
+        "command": "& 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent cursor",
+        "timeout": 10,
+        "failClosed": true
+      }
+    ],
+    "afterShellExecution": [
+      {
+        "command": "if (Test-Path -LiteralPath 'C:\\Program Files\\hawkbell\\hawkbell.exe' -PathType Leaf) { & 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent cursor; exit $LASTEXITCODE } else { exit 0 }",
+        "timeout": 10
+      }
+    ],
+    "beforeMCPExecution": [
+      {
+        "command": "& 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent cursor",
+        "timeout": 10,
+        "failClosed": true
+      }
+    ],
+    "afterMCPExecution": [
+      {
+        "command": "if (Test-Path -LiteralPath 'C:\\Program Files\\hawkbell\\hawkbell.exe' -PathType Leaf) { & 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent cursor; exit $LASTEXITCODE } else { exit 0 }",
+        "timeout": 10
+      }
+    ],
+    "beforeReadFile": [
+      {
+        "command": "& 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent cursor",
+        "timeout": 10,
+        "failClosed": true
+      }
+    ],
+    "afterFileEdit": [
+      {
+        "command": "if (Test-Path -LiteralPath 'C:\\Program Files\\hawkbell\\hawkbell.exe' -PathType Leaf) { & 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent cursor; exit $LASTEXITCODE } else { exit 0 }",
+        "timeout": 10
+      }
+    ],
+    "subagentStart": [
+      {
+        "command": "if (Test-Path -LiteralPath 'C:\\Program Files\\hawkbell\\hawkbell.exe' -PathType Leaf) { & 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent cursor; exit $LASTEXITCODE } else { exit 0 }",
+        "timeout": 10
+      }
+    ],
+    "subagentStop": [
+      {
+        "command": "if (Test-Path -LiteralPath 'C:\\Program Files\\hawkbell\\hawkbell.exe' -PathType Leaf) { & 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent cursor; exit $LASTEXITCODE } else { exit 0 }",
+        "timeout": 10
+      }
+    ],
+    "stop": [
+      {
+        "command": "if (Test-Path -LiteralPath 'C:\\Program Files\\hawkbell\\hawkbell.exe' -PathType Leaf) { & 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent cursor; exit $LASTEXITCODE } else { exit 0 }",
+        "timeout": 10
+      }
+    ],
+    "sessionEnd": [
+      {
+        "command": "if (Test-Path -LiteralPath 'C:\\Program Files\\hawkbell\\hawkbell.exe' -PathType Leaf) { & 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent cursor; exit $LASTEXITCODE } else { exit 0 }",
+        "timeout": 10
+      }
+    ]
+  }
+}
+# ----

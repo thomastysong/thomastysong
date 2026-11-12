@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SKETCH, UNTESTED: a WiX v4 source for the hawkbell Windows installer (.msi).
+  It has not been compiled (no WiX toolset and no Windows host where this
+  release was built) and nothing below has run. Until it is built and tested,
+  install with packaging/windows/install-service.ps1 or the Fleet script
+  deploy/fleet/scripts/install-hawkbell.ps1, which do the same steps. XML
+  forbids two hyphens in a row inside a comment, so the command lines below
+  name their long options without them (scope managed means the option
+  "scope" with the value "managed"); packaging_test.go parses this file.
+
+    wix build -arch x64 -d Version=1.2.3 -d Binary=dist\hawkbell_windows_amd64_v1\hawkbell.exe ^
+      -ext WixToolset.Util.wixext -o dist\hawkbell_1.2.3_windows_amd64.msi packaging\windows\hawkbell.wxs
+
+  What it is meant to do (the same as install-service.ps1):
+    - %ProgramFiles%\hawkbell\hawkbell.exe; users may read and run it (hooks run
+      `hawkbell.exe hook`), only SYSTEM and Administrators may change it;
+    - %ProgramData%\hawkbell (configuration and data): SYSTEM and Administrators
+      full control, inherited by everything below; Users read and list on the
+      directory itself only (not inherited) and read on hawkbell.yaml, because
+      `hawkbell.exe hook` runs as the developer and reads hawkbell.yaml there (an
+      unreadable file silently means built-in defaults) and checks the kill
+      switch file; state.db and later files inherit SYSTEM and Administrators
+      alone, and the daemon sets protected DACLs on outbox, spool and bundle
+      (internal/daemon);
+    - service "hawkbell", LocalSystem, delayed automatic start, restart after 5 s
+      on the first three failures, command line
+      "%ProgramFiles%\hawkbell\hawkbell.exe" run, config "%ProgramData%\hawkbell\hawkbell.yaml"
+      (the Arguments attribute below);
+      Windows Installer writes the service command line itself, so the
+      PowerShell 5.1 quoting problem of `sc.exe binPath=` does not arise;
+    - after install: `hawkbell.exe export config` when hawkbell.yaml is missing,
+      a read grant for Users on hawkbell.yaml, and `hawkbell.exe hooks install`
+      (scope managed) for the agents whose entries an earlier release wrote
+      with default options only, never for entries installed with guard,
+      fail-closed or timeout options (install-service.ps1 shows the
+      selection; a custom action that runs a small script is the likely
+      shape; not here);
+    - before uninstall: `hawkbell.exe hooks uninstall` (scope managed); the
+      osquery extension registration is removed by Fleet's uninstall script
+      (deploy/fleet/scripts/uninstall-hawkbell.ps1) or by hand.
+  The binary is unsigned: sign hawkbell.exe and the .msi with your
+  Authenticode certificate before distributing.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <Package Name="hawkbell" Manufacturer="hawkbell" Version="$(var.Version)"
+           UpgradeCode="6f3d0b2a-6a49-4c55-9f1e-3b2a8f6d7c41" Scope="perMachine"
+           InstallerVersion="500" Compressed="yes">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of hawkbell is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="hawkbell" />
+    </StandardDirectory>
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="DATAFOLDER" Name="hawkbell" />
+    </StandardDirectory>
+
+    <ComponentGroup Id="HawkbellComponents">
+      <Component Id="HawkbellExe" Directory="INSTALLFOLDER" Bitness="always64">
+        <File Id="HawkbellExeFile" Source="$(var.Binary)" Name="hawkbell.exe" KeyPath="yes">
+          <!-- Users: read and execute; SYSTEM and Administrators: full. -->
+          <util:PermissionEx User="Users" GenericRead="yes" GenericExecute="yes" />
+          <util:PermissionEx User="Administrators" GenericAll="yes" />
+          <util:PermissionEx User="SYSTEM" GenericAll="yes" />
+        </File>
+        <ServiceInstall Id="HawkbellService" Name="hawkbell" DisplayName="hawkbell AI agent detection sensor"
+                        Description="Detects risky AI coding agent activity and reports sensor health."
+                        Type="ownProcess" Start="auto" Account="LocalSystem" ErrorControl="normal"
+                        Arguments="run --config &quot;[DATAFOLDER]hawkbell.yaml&quot;">
+          <ServiceConfig DelayedAutoStart="yes" OnInstall="yes" OnReinstall="yes" />
+          <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart"
+                              ThirdFailureActionType="restart" RestartServiceDelayInSeconds="5"
+                              ResetPeriodInDays="1" />
+        </ServiceInstall>
+        <ServiceControl Id="HawkbellServiceControl" Name="hawkbell" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+      </Component>
+      <Component Id="HawkbellData" Directory="DATAFOLDER" Guid="3c9a2f5e-1d7b-4e8a-9b6c-0f2e4d8a1b37">
+        <CreateFolder>
+          <!-- Replaces the inherited ACL. Users: list and read this folder
+               only (Inheritable="no"), so hooks can open hawkbell.yaml (granted
+               by GrantConfigRead) while state.db and the daemon's files stay
+               SYSTEM and Administrators only. UNVERIFIED: Inheritable on
+               util:PermissionEx as documented for WiX v4; not compiled. -->
+          <util:PermissionEx User="SYSTEM" GenericAll="yes" />
+          <util:PermissionEx User="Administrators" GenericAll="yes" />
+          <util:PermissionEx User="Users" GenericRead="yes" GenericExecute="yes" Inheritable="no" />
+        </CreateFolder>
+      </Component>
+    </ComponentGroup>
+
+    <!-- Deferred, elevated custom actions (UNTESTED): default configuration
+         after the files are installed; hook cleanup before they are removed. -->
+    <CustomAction Id="WriteDefaultConfig" Directory="INSTALLFOLDER" Execute="deferred" Impersonate="no" Return="ignore"
+                  ExeCommand="&quot;[INSTALLFOLDER]hawkbell.exe&quot; export config --out &quot;[DATAFOLDER]hawkbell.yaml&quot;" />
+    <!-- hawkbell.yaml is created by WriteDefaultConfig and inherits the folder's
+         SYSTEM/Administrators ACEs only; hooks need to read it. -->
+    <CustomAction Id="GrantConfigRead" Directory="DATAFOLDER" Execute="deferred" Impersonate="no" Return="ignore"
+                  ExeCommand="&quot;[System64Folder]icacls.exe&quot; &quot;[DATAFOLDER]hawkbell.yaml&quot; /grant:r *S-1-5-32-545:R" />
+    <CustomAction Id="RemoveManagedHooks" Directory="INSTALLFOLDER" Execute="deferred" Impersonate="no" Return="ignore"
+                  ExeCommand="&quot;[INSTALLFOLDER]hawkbell.exe&quot; hooks uninstall --scope managed" />
+    <InstallExecuteSequence>
+      <!-- export config refuses to overwrite an existing file (no force option). -->
+      <Custom Action="WriteDefaultConfig" Before="StartServices" Condition="NOT REMOVE" />
+      <Custom Action="GrantConfigRead" After="WriteDefaultConfig" Condition="NOT REMOVE" />
+      <Custom Action="RemoveManagedHooks" Before="RemoveFiles" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+    </InstallExecuteSequence>
+
+    <Feature Id="Main" Title="hawkbell" Level="1">
+      <ComponentGroupRef Id="HawkbellComponents" />
+    </Feature>
+  </Package>
+</Wix>

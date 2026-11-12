@@ -1,0 +1,14 @@
+# kubectl apply -k deploy/kubernetes   (or the directory `hawkbell export kubernetes` wrote)
+# seccomp/node-sensor.json is not a Kubernetes resource: the DaemonSet's
+# Localhost profile, installed on every Linux node first (README.md).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - daemonset.yaml
+# Point the DaemonSet at your registry's image:
+# images:
+#   - name: registry.example.com/hawkbell
+#     newName: your.registry/hawkbell
+#     digest: sha256:...

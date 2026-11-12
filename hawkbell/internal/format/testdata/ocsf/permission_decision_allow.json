@@ -1,0 +1,99 @@
+{
+  "action": "Allowed",
+  "action_id": 1,
+  "activity_id": 99,
+  "activity_name": "Other",
+  "actor": {
+    "app_name": "Claude Code",
+    "app_uid": "claude-code",
+    "process": {
+      "name": "Claude Code",
+      "pid": 48120
+    },
+    "user": {
+      "name": "alice",
+      "uid": "501"
+    }
+  },
+  "category_name": "Uncategorized",
+  "category_uid": 0,
+  "class_name": "Base Event",
+  "class_uid": 0,
+  "device": {
+    "hostname": "dev-mbp-042",
+    "os": {
+      "name": "macOS",
+      "type": "macOS",
+      "type_id": 300
+    },
+    "type": "Unknown",
+    "type_id": 0,
+    "uid": "6F1D2C3B-0000-4000-8000-ABCDEF012345"
+  },
+  "message": "claude-code permission.decision Bash",
+  "metadata": {
+    "correlation_uid": "3f6c1f0e-1111-4222-8333-444455556666",
+    "event_code": "permission.decision",
+    "log_name": "hawkbell.activity",
+    "product": {
+      "name": "hawkbell",
+      "vendor_name": "hawkbell"
+    },
+    "profiles": [
+      "host",
+      "security_control"
+    ],
+    "sequence": 42,
+    "uid": "019a7a00-0000-7000-8000-000000000001",
+    "version": "1.9.0"
+  },
+  "severity": "Informational",
+  "severity_id": 1,
+  "time": 1794391203123,
+  "type_name": "Base Event: Other",
+  "type_uid": 99,
+  "unmapped": {
+    "hawkbell": {
+      "agent": {
+        "id": "claude-code",
+        "name": "Claude Code",
+        "pid": 48120,
+        "surface": "cli",
+        "version": "2.1.0"
+      },
+      "fidelity": "observed",
+      "host": {
+        "arch": "arm64",
+        "id": "6F1D2C3B-0000-4000-8000-ABCDEF012345",
+        "name": "dev-mbp-042",
+        "os": "darwin"
+      },
+      "id": "019a7a00-0000-7000-8000-000000000001",
+      "kind": "activity",
+      "outcome": {
+        "decision": "allow",
+        "decision_source": "policy"
+      },
+      "privacy": "redacted",
+      "seq": 42,
+      "session": {
+        "cwd": "/Users/alice/src/app",
+        "id": "3f6c1f0e-1111-4222-8333-444455556666",
+        "model": "claude-sonnet-4-5",
+        "permission_mode": "default"
+      },
+      "source": "hook",
+      "tool": {
+        "kind": "shell",
+        "name": "Bash"
+      },
+      "ts": "2026-11-11T10:00:03.123456Z",
+      "type": "permission.decision",
+      "user": {
+        "id": "501",
+        "name": "alice"
+      },
+      "v": 1
+    }
+  }
+}

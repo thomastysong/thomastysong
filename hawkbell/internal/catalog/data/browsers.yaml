@@ -1,0 +1,167 @@
+# hawkbell catalog: agentic browsers and AI browser extensions.
+# Provenance and conventions are described at the top of agents.yaml.
+#
+# Gemini in Chrome and Copilot in Edge are browser features, visible only
+# through browser policy and profile preferences; they are not installs and
+# have no entry here.
+version: "2026.11.11"
+
+products:
+  - id: comet
+    name: Comet
+    vendor: Perplexity
+    kind: ai_browser
+    process_names: [Comet]
+    packages: [cask:comet]
+    bundle_ids: [ai.perplexity.comet]
+    win_display: ["^Comet$"]
+    install_paths:
+      darwin: ["/Applications/Comet.app"]
+    state_dirs:
+      darwin: ["~/Library/Application Support/Comet", "~/Library/Application Support/ai.perplexity.comet"]
+    capabilities: [browses]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/c/comet.rb
+      - https://raw.githubusercontent.com/fleetdm/fleet/main/ee/maintained-apps/outputs/apps.json
+
+  - id: dia
+    name: Dia
+    vendor: The Browser Company
+    kind: ai_browser
+    process_names: [Dia]
+    packages: [cask:thebrowsercompany-dia]
+    bundle_ids: [company.thebrowser.dia]
+    install_paths:
+      darwin: ["/Applications/Dia.app"]
+    state_dirs:
+      darwin: ["~/Library/Application Support/Dia"]
+    api_hosts: [releases.diabrowser.com]
+    signers: {darwin_team_id: S6N382Y83G}
+    capabilities: [browses]
+    notes: scoop "dia" and the dia binary on Linux are the Dia diagram editor.
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/t/thebrowsercompany-dia.rb
+      - research:agent-surfaces-b.md#1b
+    unverified: [signers]
+
+  - id: chatgpt-atlas
+    name: ChatGPT Atlas
+    vendor: OpenAI
+    kind: ai_browser
+    status: discontinued
+    process_names: [ChatGPT Atlas]
+    packages: [cask:chatgpt-atlas]
+    bundle_ids: [com.openai.atlas]
+    state_dirs:
+      darwin: ["~/Library/Application Support/com.openai.atlas", "~/Library/Application Support/OpenAI/ChatGPT Atlas"]
+    capabilities: [browses]
+    notes: >-
+      Discontinued; the Homebrew cask was disabled on 2026-08-26. Still
+      present on Macs that were not cleaned up, with a launchd helper
+      com.openai.atlas.update-helper.
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/c/chatgpt-atlas.rb
+      - research:agent-surfaces-b.md#1b
+
+  - id: arc
+    name: Arc
+    vendor: The Browser Company
+    kind: ai_browser
+    status: discontinued
+    process_names: [Arc]
+    packages: [cask:arc]
+    bundle_ids: [company.thebrowser.Browser]
+    win_display: ["^Arc$"]
+    install_paths:
+      darwin: ["/Applications/Arc.app"]
+    state_dirs:
+      darwin: ["~/Library/Application Support/Arc"]
+    signers: {darwin_team_id: S6N382Y83G}
+    capabilities: [browses]
+    notes: >-
+      Homebrew marks the cask discontinued (disable date 2026-12-22). scoop
+      "arc" is an archive tool.
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/a/arc.rb
+      - https://raw.githubusercontent.com/fleetdm/fleet/main/ee/maintained-apps/outputs/apps.json
+    unverified: [signers]
+
+  - id: sigmaos
+    name: SigmaOS
+    vendor: SigmaOS
+    kind: ai_browser
+    process_names: [SigmaOS]
+    packages: [cask:sigmaos]
+    bundle_ids: [com.sigmaos.sigmaos.macos]
+    capabilities: [browses]
+    sources:
+      - https://raw.githubusercontent.com/fleetdm/fleet/main/ee/maintained-apps/outputs/apps.json
+
+  - id: browseros
+    name: BrowserOS
+    vendor: BrowserOS
+    kind: ai_browser
+    state_dirs: ["~/.config/browser-os"]
+    capabilities: [browses, mcp_client]
+    sources: [research:agent-surfaces-b.md#1b]
+
+  # -------------------------------------------------- browser extensions
+  # Chrome Web Store ids are from memory and from the unnamed id table in
+  # fleetdm/fleet's ai_tools classifier; none was fetched from the store.
+  - id: claude-in-chrome
+    name: Claude in Chrome
+    vendor: Anthropic
+    kind: browser_extension
+    chrome_ids: [fcoeoabgfenejglbffodgkkbkcdhcgfn]
+    capabilities: [browses]
+    sources: [research:agent-surfaces-b.md#3]
+    unverified: [chrome_ids]
+
+  - id: chatgpt-for-google
+    name: ChatGPT for Google
+    vendor: chatgpt4google.com
+    kind: browser_extension
+    chrome_ids: [mfgnpcdebmgmmbjmhmboieiipghabkjf]
+    sources: ["repo:fleetdm/fleet orbit/pkg/table/ai_tools/internal/classify/classify_test.go"]
+    unverified: [chrome_ids, vendor]
+
+  - id: monica
+    name: Monica
+    vendor: Monica
+    kind: browser_extension
+    chrome_ids: [ofpnmcalabcbjgholdjcjblkibolbppb]
+    sources: ["repo:fleetdm/fleet orbit/pkg/table/ai_tools/internal/classify/kb.json"]
+    unverified: [chrome_ids]
+
+  - id: sider
+    name: Sider
+    vendor: Sider
+    kind: browser_extension
+    chrome_ids: [difoiogjjojoaoomphldepapgpbgkhkb]
+    sources: [research:agent-surfaces-b.md#3]
+    unverified: [chrome_ids]
+
+  - id: merlin
+    name: Merlin
+    vendor: Foyer
+    kind: browser_extension
+    chrome_ids: [camppjleccjaphfdbohjdohecfnoikec]
+    sources: [research:agent-surfaces-b.md#3]
+    unverified: [chrome_ids, vendor]
+
+  - id: harpa-ai
+    name: HARPA AI
+    vendor: HARPA AI
+    kind: browser_extension
+    chrome_ids: [eanggfilgoajaocelnaflolkadkeghjp]
+    capabilities: [browses]
+    sources: [research:agent-surfaces-b.md#3]
+    unverified: [chrome_ids]
+
+  - id: maxai
+    name: MaxAI
+    vendor: MaxAI
+    kind: browser_extension
+    chrome_ids: [mhnlakgilnojmhinhkckjpncpbhabphi]
+    sources: [research:agent-surfaces-b.md#3]
+    unverified: [chrome_ids]

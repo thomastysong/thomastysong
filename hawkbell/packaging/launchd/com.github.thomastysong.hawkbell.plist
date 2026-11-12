@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  hawkbell daemon (macOS). Install to /Library/LaunchDaemons/, owned root:wheel,
+  mode 0644, then: sudo launchctl bootstrap system /Library/LaunchDaemons/com.github.thomastysong.hawkbell.plist
+  Reading other users' transcripts needs Full Disk Access for /usr/local/bin/hawkbell,
+  granted by an MDM PPPC profile (SystemPolicyAllFiles). UNTESTED on hardware in this release.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.github.thomastysong.hawkbell</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/hawkbell</string>
+    <string>run</string>
+    <string>--config</string>
+    <string>/Library/Application Support/hawkbell/hawkbell.yaml</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>Nice</key>
+  <integer>5</integer>
+  <key>Umask</key>
+  <integer>23</integer>
+  <key>ExitTimeOut</key>
+  <integer>20</integer>
+  <key>StandardErrorPath</key>
+  <string>/Library/Logs/hawkbell/hawkbell.log</string>
+</dict>
+</plist>

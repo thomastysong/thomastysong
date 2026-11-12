@@ -1,0 +1,18 @@
+# Generic HTTPS JSON endpoint (webhooks, custom collectors).
+pipeline:
+  outputs:
+    - name: http
+      alias: hawkbell_http
+      match: 'hawkbell.*'
+      host: ${HAWKBELL_HTTP_HOST}
+      port: ${HAWKBELL_HTTP_PORT:-443}
+      uri: ${HAWKBELL_HTTP_URI:-/}
+      tls: on
+      # A receiver whose certificate is issued by a private CA: give Fluent
+      # Bit that CA's certificate (PEM) rather than switching tls.verify off.
+      # tls.ca_file: /etc/fluent-bit/ca/receiver-ca.pem
+      format: json_lines
+      json_date_key: false
+      header: Authorization Bearer ${HAWKBELL_HTTP_TOKEN}
+      retry_limit: no_limits
+      storage.total_limit_size: 512M

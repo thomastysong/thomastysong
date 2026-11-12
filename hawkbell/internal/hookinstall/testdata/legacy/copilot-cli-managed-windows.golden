@@ -1,0 +1,106 @@
+# agent: copilot-cli
+# scope: managed
+# path: /C/ProgramData/GitHub/Copilot/policy.d/hawkbell.json
+# action: create
+{
+  "version": 1,
+  "hooks": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "bash": "'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent copilot-cli",
+        "powershell": "& 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "type": "command",
+        "bash": "'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent copilot-cli",
+        "powershell": "& 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "PreToolUse": [
+      {
+        "type": "command",
+        "bash": "'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent copilot-cli",
+        "powershell": "& 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "type": "command",
+        "bash": "'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent copilot-cli",
+        "powershell": "& 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "PostToolUse": [
+      {
+        "type": "command",
+        "bash": "'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent copilot-cli",
+        "powershell": "& 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "type": "command",
+        "bash": "'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent copilot-cli",
+        "powershell": "& 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "subagentStart": [
+      {
+        "type": "command",
+        "bash": "'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent copilot-cli",
+        "powershell": "& 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "SubagentStop": [
+      {
+        "type": "command",
+        "bash": "'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent copilot-cli",
+        "powershell": "& 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "bash": "'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent copilot-cli",
+        "powershell": "& 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "PreCompact": [
+      {
+        "type": "command",
+        "bash": "'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent copilot-cli",
+        "powershell": "& 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "ErrorOccurred": [
+      {
+        "type": "command",
+        "bash": "'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent copilot-cli",
+        "powershell": "& 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "SessionEnd": [
+      {
+        "type": "command",
+        "bash": "'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent copilot-cli",
+        "powershell": "& 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ]
+  }
+}
+# ----

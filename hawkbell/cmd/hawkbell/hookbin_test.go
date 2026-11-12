@@ -1,0 +1,221 @@
+package main
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/thomastysong/thomastysong/hawkbell/internal/catalog"
+	"github.com/thomastysong/thomastysong/hawkbell/internal/event"
+)
+
+func TestBinaryFromCommand(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{`[ -x '/usr/local/bin/hawkbell' ] || exit 0; exec '/usr/local/bin/hawkbell' hook --agent codex`, "/usr/local/bin/hawkbell"},
+		{`[ -x '/opt/O'\''Brien Tools/hawkbell' ] || exit 0; exec '/opt/O'\''Brien Tools/hawkbell' hook --agent codex`, "/opt/O'Brien Tools/hawkbell"},
+		{`if (Test-Path -LiteralPath 'C:\Program Files\hawkbell\hawkbell.exe' -PathType Leaf) { & 'C:\Program Files\hawkbell\hawkbell.exe' hook --agent codex; exit $LASTEXITCODE } else { exit 0 }`, `C:\Program Files\hawkbell\hawkbell.exe`},
+		{`if (Test-Path -LiteralPath 'C:\O''Brien\hawkbell.exe' -PathType Leaf) { & 'C:\O''Brien\hawkbell.exe' hook --agent cursor; exit $LASTEXITCODE } else { exit 0 }`, `C:\O'Brien\hawkbell.exe`},
+		{`C:\hawkbell\hawkbell.exe hook --agent cursor`, `C:\hawkbell\hawkbell.exe`},
+		{`/usr/bin/hawkbell hook --agent gemini-cli`, "/usr/bin/hawkbell"},
+		{`"/opt/my tools/hawkbell" hook --agent x`, "/opt/my tools/hawkbell"},
+		{`npm test`, ""},
+		{` hook --agent x`, ""},
+	} {
+		if got := binaryFromCommand(tc.in); got != tc.want {
+			t.Errorf("binaryFromCommand(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// Every agent's file, as hooks install writes it, yields the binary back.
+func TestInstalledBinariesRoundTrip(t *testing.T) {
+	home := t.TempDir()
+	bin := "/opt/O'Brien Tools/hawkbell"
+	ta := newTestApp(t)
+	ta.env["HOME"] = home
+	var res planResult
+	decodeJSON(t, ta.mustRun(t, exitOK, "hooks", "install", "--scope", "user", "--home", home, "--binary", bin, "--json"), &res)
+	checked := 0
+	for _, p := range res.Plans {
+		if p.Action == "unsupported" {
+			continue
+		}
+		bins, err := installedBinaries(p.Path)
+		if err != nil {
+			t.Fatalf("%s: %v", p.Path, err)
+		}
+		if len(bins) != 1 || bins[0] != bin {
+			t.Errorf("%s (%s): binaries %q", p.Agent, p.Path, bins)
+		}
+		checked++
+	}
+	if checked < 4 {
+		t.Fatalf("only %d agent files checked: %+v", checked, res.Plans)
+	}
+}
+
+func TestDoctorReportsMissingHookBinary(t *testing.T) {
+	cfg, _ := testConfig(t, "")
+	home := t.TempDir()
+	ta := newTestApp(t)
+	missing := filepath.Join(t.TempDir(), "gone", "hawkbell")
+	ta.mustRun(t, exitOK, "hooks", "install", "--scope", "user", "--home", home, "--agents", "claude-code,codex", "--binary", missing)
+	code := ta.run("doctor", "--config", cfg, "--home", home, "--json")
+	var r doctorReport
+	decodeJSON(t, ta.out.String(), &r)
+	c := checkOf(&r, "hooks")
+	if c.Status != "fail" || !strings.Contains(c.Detail, "hooks.binary_missing") || code != exitCheck {
+		t.Fatalf("missing binary not reported: exit %d %+v", code, c)
+	}
+	// With the binary in place the check passes.
+	writeTestFile(t, missing, "#!/bin/sh\nexit 0\n", 0o755)
+	ta.run("doctor", "--config", cfg, "--home", home, "--json")
+	decodeJSON(t, ta.out.String(), &r)
+	if c := checkOf(&r, "hooks"); c.Status != "ok" {
+		t.Fatalf("hooks with the binary present: %+v", c)
+	}
+	n := 0
+	for _, h := range r.Hooks {
+		if len(h.Binaries) > 0 {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Fatalf("binaries found for %d hook files, want 2: %+v", n, r.Hooks)
+	}
+	if err := os.Chmod(missing, 0o644); err == nil && permsChecked {
+		ta.run("doctor", "--config", cfg, "--home", home, "--json")
+		decodeJSON(t, ta.out.String(), &r)
+		if c := checkOf(&r, "hooks"); c.Status != "fail" || !strings.Contains(c.Detail, "not executable") {
+			t.Fatalf("non-executable binary: %+v", c)
+		}
+	}
+}
+
+func TestQuotedStringsJSONC(t *testing.T) {
+	b := []byte("{ // comment\n \"hooks\": {\"x\": [{\"command\": \"[ -x '/a b/hawkbell' ] || exit 0; exec '/a b/hawkbell' hook --agent cursor\"},]}}\n")
+	dir := t.TempDir()
+	p := filepath.Join(dir, "hooks.json")
+	writeTestFile(t, p, string(b), 0o644)
+	bins, err := installedBinaries(p)
+	if err != nil || len(bins) != 1 || bins[0] != "/a b/hawkbell" {
+		t.Fatalf("%q %v", bins, err)
+	}
+}
+
+// A string in a hook file that a monitored user controls must not crash
+// the administrator's `hawkbell doctor`: only blanks before " hook --agent "
+// name no program.
+func TestBinaryFromCommandHostileNoPanic(t *testing.T) {
+	for _, s := range []string{"  hook --agent x", "\t hook --agent x", " \u00a0 hook --agent claude-code", "\x00 hook --agent x", `'' hook --agent x`, `"" hook --agent x`, ` hook --agent  hook --agent x`} {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("binaryFromCommand(%q) panicked: %v", s, r)
+				}
+			}()
+			_ = binaryFromCommand(s)
+		}()
+	}
+}
+
+// The same through the file reader doctor uses on every hook file that
+// holds hawkbell entries (any account's settings.json when doctor runs as
+// root), and strings outside the hook-command positions are not hooks.
+func TestInstalledBinariesHostileSettings(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "settings.json")
+	writeTestFile(t, p, `{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"/usr/bin/hawkbell","args":["hook","--agent","claude-code"]},{"type":"command","command":"  hook --agent x"}]}]},`+
+		`"note":"  hook --agent x","statusLine":{"type":"command","command":"/tmp/not-a-hook hook --agent x"},`+
+		`"mcpServers":{"m":{"command":"/tmp/mcp hook --agent x"}}}`, 0o600)
+	bins, err := installedBinaries(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bins) != 1 || bins[0] != "/usr/bin/hawkbell" {
+		t.Fatalf("binaries %q, want only the hook entry's /usr/bin/hawkbell", bins)
+	}
+}
+
+// End to end: a monitored user with hawkbell user hooks adds one string to
+// their own settings.json; `hawkbell doctor` (run by the administrator)
+// reports instead of dying with a runtime panic, and does not take the
+// status line for a hook binary.
+func TestDoctorSurvivesHostileUserSettings(t *testing.T) {
+	home := t.TempDir()
+	ta := newTestApp(t)
+	bin := filepath.Join(t.TempDir(), "hawkbell")
+	writeTestFile(t, bin, "#!/bin/sh\nexit 0\n", 0o755)
+	ta.mustRun(t, exitOK, "hooks", "install", "--scope", "user", "--home", home, "--agents", "claude-code", "--binary", bin)
+	settings := filepath.Join(home, ".claude", "settings.json")
+	b, err := os.ReadFile(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	m["statusLine"] = map[string]any{"type": "command", "command": "  hook --agent x"}
+	m["otherLine"] = map[string]any{"type": "command", "command": "/nonexistent/x hook --agent x"}
+	b, _ = json.Marshal(m)
+	writeTestFile(t, settings, string(b), 0o600)
+	cfg, _ := testConfig(t, "")
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("hawkbell doctor panicked on a user-controlled settings.json: %v", r)
+			}
+		}()
+		ta.run("doctor", "--config", cfg, "--home", home, "--json")
+	}()
+	var r doctorReport
+	decodeJSON(t, ta.out.String(), &r)
+	if c := checkOf(&r, "hooks"); strings.Contains(c.Detail, "binary_missing") {
+		t.Fatalf("a string outside the hook entries was taken for a hook binary: %+v", c)
+	}
+}
+
+// doctor audits every tier hawkbell writes: Codex's system tier
+// (`hooks install --scope system`, /etc/codex/hooks.json) too, so a
+// missing binary there is hooks.binary_missing; `hooks status` lists the
+// tier when its file exists, and leaves it out otherwise.
+func TestDoctorSeesCodexSystemTier(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("system hook files are root-owned")
+	}
+	prefix := t.TempDir()
+	ta := newTestApp(t)
+	cat, err := catalog.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	systemRows := func(states []hookState) []hookState {
+		var out []hookState
+		for _, s := range states {
+			if s.Scope == event.ScopeSystem {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	if st, _ := allHookStates(cat, nil, prefix); len(systemRows(st)) != 0 {
+		t.Fatalf("system tier listed without a file: %+v", systemRows(st))
+	}
+	ta.mustRun(t, exitOK, "hooks", "install", "--scope", "system", "--root", prefix, "--binary", "/nonexistent/hawkbell", "--agents", "codex")
+	states, _ := allHookStates(cat, nil, prefix)
+	sys := systemRows(states)
+	if len(sys) != 1 || sys[0].Agent != "codex" || sys[0].Hash == "" || sys[0].Path != filepath.Join(prefix, "etc", "codex", "hooks.json") {
+		t.Fatalf("system tier rows %+v", sys)
+	}
+	bins, err := installedBinaries(sys[0].Path)
+	if err != nil || len(bins) != 1 || binaryProblem(bins[0]) != "not found" {
+		t.Fatalf("system tier binaries %q (%v)", bins, err)
+	}
+	var st []hookState
+	decodeJSON(t, ta.mustRun(t, exitOK, "hooks", "status", "--root", prefix, "--home", t.TempDir(), "--json"), &st)
+	if s := systemRows(st); len(s) != 1 || s[0].Agent != "codex" || s[0].Hash == "" {
+		t.Fatalf("hooks status default rows for the system tier: %+v", s)
+	}
+}

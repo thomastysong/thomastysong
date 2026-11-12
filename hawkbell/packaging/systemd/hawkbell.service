@@ -1,0 +1,78 @@
+# hawkbell daemon (Linux). Installed by the deb/rpm packages to
+# /usr/lib/systemd/system/hawkbell.service.
+#
+# The daemon runs as root because it must read every user's agent
+# transcripts and process information and hand each user a private spool
+# directory. The hardening below takes away what it does not need: it can
+# read the whole file system but write only its own state, runtime and
+# configuration-free directories, and it keeps only the capabilities listed.
+[Unit]
+Description=hawkbell AI agent detection sensor
+Documentation=https://github.com/thomastysong/thomastysong/tree/main/hawkbell
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/hawkbell run --config /etc/hawkbell/hawkbell.yaml
+Restart=always
+RestartSec=5s
+# Flush on SIGTERM; systemd waits this long before SIGKILL.
+TimeoutStopSec=20s
+
+# /var/lib/hawkbell (state, outbox, spools) and /run/hawkbell. Group=hawkbell makes
+# the data directory root:hawkbell, which lets members of the hawkbell group (the
+# log shipper) read the outbox. Without it systemd sees the daemon's
+# root:hawkbell directory as foreign and re-owns it, recursively, to root:root
+# at every start, which also takes the per-user spool directories away from
+# their users. The packages create the group before the service starts.
+# 0711: users may traverse (not list) the data directory to reach their own
+# spool directory and the public rule bundle; the outbox (root:hawkbell 0750)
+# and the state database (0600) inside stay restricted.
+Group=hawkbell
+StateDirectory=hawkbell
+StateDirectoryMode=0711
+RuntimeDirectory=hawkbell
+RuntimeDirectoryMode=0755
+UMask=0027
+
+# Read-only view of the system and of home directories (transcripts, agent
+# configuration); writes only where listed.
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/hawkbell /run/hawkbell
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+NoNewPrivileges=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# AF_NETLINK for the process connector; AF_UNIX for osquery's extension
+# socket; AF_INET/6 for bundle pulls and the optional shippers.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+# CAP_DAC_READ_SEARCH: read transcripts in 0700 home directories.
+# CAP_SYS_PTRACE: read /proc/<pid>/{exe,cwd,environ} of other users' agents.
+# CAP_NET_ADMIN: subscribe to the netlink process connector.
+# CAP_CHOWN, CAP_FOWNER: create each user's private spool directory.
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SYS_PTRACE CAP_NET_ADMIN CAP_CHOWN CAP_FOWNER
+AmbientCapabilities=
+# Lower priority than interactive work.
+Nice=5
+IOSchedulingClass=idle
+CPUWeight=50
+MemoryHigh=256M
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,43 @@
+# osquery result logs (Fleet reports and osquery schedules) -> Fluent Bit.
+#
+# fleetd starts osquery with --logger_plugin=tls,filesystem, so scheduled
+# results are also written locally under <orbit root>/osquery_log. Plain
+# osquery writes them only when --logger_plugin includes filesystem. The
+# Fleet server's own "filesystem" result log plugin writes the same line
+# shapes to the file named by filesystem.result_log_file.
+#
+# Fluent Bit ships no osquery parser. osquery's numeric unixTime is not
+# honoured as a time key (it is a JSON number), so event time comes from
+# calendarTime; verified against Fluent Bit 5.2.0.
+parsers:
+  - name: osquery_result
+    format: json
+    time_key: calendarTime
+    time_format: '%a %b %d %H:%M:%S %Y UTC'
+    time_keep: on
+
+pipeline:
+  inputs:
+    - name: tail
+      alias: osquery_results
+      # Linux/macOS fleetd, plain osquery, and a Fleet server log file.
+      path: ${OSQUERY_RESULTS:-/opt/orbit/osquery_log/osqueryd.results.log,/var/log/osquery/osqueryd.results.log}
+      tag: osquery.results
+      parser: osquery_result
+      db: ${HAWKBELL_FLB_DB:-/var/lib/fluent-bit}/osquery-results.db
+      db.locking: false
+      db.compare_filename: true
+      read_from_head: true
+      refresh_interval: 5
+      buffer_chunk_size: 256k
+      # Snapshot lines carry a whole report result and can be large.
+      buffer_max_size: 4M
+      skip_long_lines: on
+      storage.type: filesystem
+  filters:
+    # Report names look like pack/Global/<name> or pack/team-<id>/<name>
+    # (pack_delimiter "/"). Route on a stable prefix of the report name you
+    # choose, for example every report whose name starts with "hawkbell":
+    - name: rewrite_tag
+      match: osquery.results
+      rule: '$name ^pack/[^/]+/hawkbell osquery.hawkbell false'

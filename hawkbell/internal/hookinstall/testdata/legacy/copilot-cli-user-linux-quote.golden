@@ -1,0 +1,106 @@
+# agent: copilot-cli
+# scope: user
+# path: /home/dev/.copilot/hooks/hawkbell.json
+# action: create
+{
+  "version": 1,
+  "hooks": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "bash": "'/opt/O'\\''Brien Tools/hawkbell' hook --agent copilot-cli",
+        "powershell": "& '/opt/O''Brien Tools/hawkbell' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "type": "command",
+        "bash": "'/opt/O'\\''Brien Tools/hawkbell' hook --agent copilot-cli",
+        "powershell": "& '/opt/O''Brien Tools/hawkbell' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "PreToolUse": [
+      {
+        "type": "command",
+        "bash": "'/opt/O'\\''Brien Tools/hawkbell' hook --agent copilot-cli",
+        "powershell": "& '/opt/O''Brien Tools/hawkbell' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "type": "command",
+        "bash": "'/opt/O'\\''Brien Tools/hawkbell' hook --agent copilot-cli",
+        "powershell": "& '/opt/O''Brien Tools/hawkbell' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "PostToolUse": [
+      {
+        "type": "command",
+        "bash": "'/opt/O'\\''Brien Tools/hawkbell' hook --agent copilot-cli",
+        "powershell": "& '/opt/O''Brien Tools/hawkbell' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "type": "command",
+        "bash": "'/opt/O'\\''Brien Tools/hawkbell' hook --agent copilot-cli",
+        "powershell": "& '/opt/O''Brien Tools/hawkbell' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "subagentStart": [
+      {
+        "type": "command",
+        "bash": "'/opt/O'\\''Brien Tools/hawkbell' hook --agent copilot-cli",
+        "powershell": "& '/opt/O''Brien Tools/hawkbell' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "SubagentStop": [
+      {
+        "type": "command",
+        "bash": "'/opt/O'\\''Brien Tools/hawkbell' hook --agent copilot-cli",
+        "powershell": "& '/opt/O''Brien Tools/hawkbell' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "bash": "'/opt/O'\\''Brien Tools/hawkbell' hook --agent copilot-cli",
+        "powershell": "& '/opt/O''Brien Tools/hawkbell' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "PreCompact": [
+      {
+        "type": "command",
+        "bash": "'/opt/O'\\''Brien Tools/hawkbell' hook --agent copilot-cli",
+        "powershell": "& '/opt/O''Brien Tools/hawkbell' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "ErrorOccurred": [
+      {
+        "type": "command",
+        "bash": "'/opt/O'\\''Brien Tools/hawkbell' hook --agent copilot-cli",
+        "powershell": "& '/opt/O''Brien Tools/hawkbell' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "SessionEnd": [
+      {
+        "type": "command",
+        "bash": "'/opt/O'\\''Brien Tools/hawkbell' hook --agent copilot-cli",
+        "powershell": "& '/opt/O''Brien Tools/hawkbell' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ]
+  }
+}
+# ----

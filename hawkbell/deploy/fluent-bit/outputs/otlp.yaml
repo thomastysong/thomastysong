@@ -1,0 +1,13 @@
+# Any OpenTelemetry collector or OTLP endpoint (logs).
+pipeline:
+  outputs:
+    - name: opentelemetry
+      alias: hawkbell_otlp
+      match: 'hawkbell.*'
+      host: ${OTLP_HOST}
+      port: ${OTLP_PORT:-4318}
+      tls: on
+      logs_uri: /v1/logs
+      throttle: on
+      retry_limit: no_limits
+      storage.total_limit_size: 512M

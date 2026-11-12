@@ -1,0 +1,81 @@
+# Example fleet file, Fleet Premium only (fleets, per-fleet agent options,
+# software deployment and policy automations are Premium). Hosts run fleetd
+# 1.59 or later, so the "fleetd" profile also reads Fleet's ai_tools table.
+# Not validated against a server: the verification server runs Fleet Free
+# (deploy/fleet/VERIFIED.md records what its dry run said).
+#
+# Tier 3: the packages' post-install script and the install scripts register
+# the hawkbell osquery extension, so this fleet's agent options must NOT carry
+# hawkbell's ATC tables (osquery refuses the extension when they exist). If
+# this fleet uses Fleet's `extensions` agent option (TUF-managed extensions),
+# orbit points osquery at its own extensions.load and the post-install
+# script fails, so Fleet rolls the package back: publish hawkbell through that
+# agent option instead, or make this fleet tier 2 (README, "Three tiers").
+name: "💻 Workstations"
+settings:
+  secrets:
+    - secret: $FLEET_WORKSTATIONS_ENROLL_SECRET
+agent_options:
+  path: ../../lib/agent-options.base.example.yml
+controls:
+  scripts:
+    - path: ../../scripts/install-hawkbell.sh
+    - path: ../../scripts/install-hawkbell.ps1
+# Fleet's built-in labels cover Ubuntu and only some Red Hat relatives, so
+# the package families are labels of their own (os_version reports
+# /etc/os-release ID as platform and ID_LIKE as platform_like).
+labels:
+  - name: Debian-family Linux
+    description: Debian, Ubuntu and distributions derived from them (ID or ID_LIKE debian); they install the hawkbell deb.
+    query: SELECT 1 FROM os_version WHERE platform = 'debian' OR platform_like LIKE '%debian%';
+    platform: linux
+    label_membership_type: dynamic
+  - name: Red Hat-family Linux
+    description: RHEL, CentOS, Fedora and distributions derived from them (ID or ID_LIKE rhel or fedora); they install the hawkbell rpm.
+    query: SELECT 1 FROM os_version WHERE platform IN ('rhel', 'centos', 'fedora') OR platform_like LIKE '%rhel%' OR platform_like LIKE '%fedora%';
+    platform: linux
+    label_membership_type: dynamic
+policies:
+  - path: ../../lib/fleetd/policies.yml
+  # Install automations: a host failing one of these gets the package. They
+  # check the binary only: the state database outlives an uninstall (data
+  # is kept unless HAWKBELL_PURGE=1), so it must not count as installed. A
+  # test in internal/fleetgen keeps the paths on fleetgen.DefaultBinPaths.
+  # Remove a host from this fleet before uninstalling hawkbell from it, or the
+  # policy installs it again.
+  - name: hawkbell installed (Linux deb)
+    description: The hawkbell binary is installed. Fails on Debian-family hosts without it, which installs the deb.
+    resolution: Fleet installs the hawkbell package automatically.
+    query: SELECT 1 FROM file WHERE path = '/usr/bin/hawkbell' LIMIT 1;
+    platform: linux
+    critical: false
+    labels_include_any:
+      - Debian-family Linux
+    install_software:
+      package_path: ../../software/hawkbell-deb.package.yml
+  - name: hawkbell installed (Linux rpm)
+    description: The hawkbell binary is installed. Fails on Red Hat-family hosts without it, which installs the rpm.
+    resolution: Fleet installs the hawkbell package automatically.
+    query: SELECT 1 FROM file WHERE path = '/usr/bin/hawkbell' LIMIT 1;
+    platform: linux
+    critical: false
+    labels_include_any:
+      - Red Hat-family Linux
+    install_software:
+      package_path: ../../software/hawkbell-rpm.package.yml
+  - name: hawkbell installed (macOS)
+    description: The hawkbell binary is installed. Fails on Macs without it, which installs the pkg.
+    resolution: Fleet installs the hawkbell package automatically.
+    query: SELECT 1 FROM file WHERE path = '/usr/local/bin/hawkbell' LIMIT 1;
+    platform: darwin
+    critical: false
+    install_software:
+      package_path: ../../software/hawkbell-pkg.package.yml
+reports:
+  - path: ../../lib/fleetd/reports.yml
+software:
+  packages:
+    - path: ../../software/hawkbell-deb.package.yml
+    - path: ../../software/hawkbell-rpm.package.yml
+    - path: ../../software/hawkbell-pkg.package.yml
+    - path: ../../software/hawkbell-msi.package.yml

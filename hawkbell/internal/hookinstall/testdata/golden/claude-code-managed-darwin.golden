@@ -1,0 +1,190 @@
+# agent: claude-code
+# scope: managed
+# path: /Library/Application Support/ClaudeCode/managed-settings.d/50-hawkbell.json
+# action: create
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/hawkbell",
+            "args": ["hook", "--agent", "claude-code"],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/hawkbell",
+            "args": ["hook", "--agent", "claude-code"],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/hawkbell",
+            "args": ["hook", "--agent", "claude-code"],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/hawkbell",
+            "args": ["hook", "--agent", "claude-code"],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PermissionDenied": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/hawkbell",
+            "args": ["hook", "--agent", "claude-code"],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/hawkbell",
+            "args": ["hook", "--agent", "claude-code"],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/hawkbell",
+            "args": ["hook", "--agent", "claude-code"],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/hawkbell",
+            "args": ["hook", "--agent", "claude-code"],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/hawkbell",
+            "args": ["hook", "--agent", "claude-code"],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/hawkbell",
+            "args": ["hook", "--agent", "claude-code"],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "ConfigChange": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/hawkbell",
+            "args": ["hook", "--agent", "claude-code"],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "InstructionsLoaded": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/hawkbell",
+            "args": ["hook", "--agent", "claude-code"],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Elicitation": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/hawkbell",
+            "args": ["hook", "--agent", "claude-code"],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/hawkbell",
+            "args": ["hook", "--agent", "claude-code"],
+            "timeout": 10,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/hawkbell",
+            "args": ["hook", "--agent", "claude-code"],
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
+# ----

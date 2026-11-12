@@ -1,0 +1,262 @@
+# Coverage: what hawkbell cannot see. Hooks and transcripts are self-reported
+# surfaces the monitored user (or the agent) can switch off; these rules
+# turn that into records a fleet owner can count. The pipeline's own
+# coverage computation (hook vs transcript vs process monitor) is
+# separate; these are the facts discovery and the process monitor report.
+pack: coverage
+version: "2026.11.0"
+description: Agents without hawkbell's hooks, hooks or transcripts switched off, and runs that skip them.
+rules:
+  - id: HB-COV-001
+    title: Installed agent without hawkbell's hooks
+    description: >-
+      Discovery found an agent that supports hooks but has no hawkbell hook
+      entry in managed or user settings. Its tool calls are seen only
+      through its session log, after the fact.
+    kind: inventory
+    class: finding
+    severity: low
+    confidence: high
+    maturity: stable
+    category: coverage
+    tags: [atlas.aml.t0138]
+    references:
+      - "redteam/platform-parity.md PP-1 (hook tiers per agent)"
+    falsepositives:
+      - "Agents installed but never used on this host"
+      - "Hosts where hooks are deliberately not deployed (build agents covered by another control)"
+    when:
+      type: inventory.asset
+    match:
+      asset.kind|in: [agent, app, ide_extension]
+      asset.telemetry.hooks: missing
+    evidence: [asset.catalog_id, asset.owner, asset.telemetry.hooks]
+    remedy: Run hawkbell hooks install --scope managed (or user) for this agent.
+    tests:
+      - name: agent with hooks missing
+        event: { type: inventory.asset, asset: { id: a1, kind: agent, name: Codex, catalog_id: codex, telemetry: { hooks: missing, transcript: found } } }
+        expect: match
+      - name: managed hooks
+        event: { type: inventory.asset, asset: { id: a2, kind: agent, name: Codex, catalog_id: codex, telemetry: { hooks: managed } } }
+        expect: no_match
+      - name: agent without hook support
+        event: { type: inventory.asset, asset: { id: a3, kind: agent, name: Aider, catalog_id: aider, telemetry: { hooks: unsupported } } }
+        expect: no_match
+
+  - id: HB-COV-002
+    title: Agent hooks disabled or hawkbell's hook entry modified
+    description: >-
+      A setting switches the agent's hooks off (disableAllHooks and
+      equivalents) or hawkbell's hook entry no longer runs hawkbell. Either
+      silences the hook surface for that user.
+    kind: inventory
+    class: finding
+    severity: high
+    confidence: high
+    maturity: stable
+    category: defense_evasion
+    tags: [attack.t1685.007, owasp.asi10]
+    references:
+      - "research/threats.md section 3 R36"
+    falsepositives:
+      - "A user troubleshooting hooks"
+    when:
+      type: inventory.asset
+    match:
+      any:
+        - asset.telemetry.hooks|in: [disabled, modified]
+        - asset.risk_flags|contains_any: [hooks_disabled, "project:hooks_disabled"]
+    evidence: [asset.catalog_id, asset.owner, asset.telemetry.hooks, asset.risk_flags]
+    remedy: Restore the hook from managed policy and lock hooks with allowManagedHooksOnly where the agent supports it.
+    tests:
+      - name: hooks disabled
+        event: { type: inventory.asset, asset: { id: a4, kind: agent, name: Claude Code, catalog_id: claude-code, telemetry: { hooks: disabled } } }
+        expect: match
+      - name: hook entry modified
+        event: { type: inventory.asset, asset: { id: a5, kind: agent, name: Claude Code, catalog_id: claude-code, telemetry: { hooks: modified } } }
+        expect: match
+      - name: user hooks present
+        event: { type: inventory.asset, asset: { id: a6, kind: agent, name: Claude Code, catalog_id: claude-code, telemetry: { hooks: user } } }
+        expect: no_match
+      - name: hooks managed by policy
+        event: { type: inventory.asset, asset: { id: a7, kind: agent, name: Claude Code, catalog_id: claude-code, telemetry: { hooks: managed }, risk_flags: ["user:hooks_disabled"] } }
+        expect: no_match
+
+  - id: HB-COV-003
+    title: Agent session logs not where hawkbell reads them
+    description: >-
+      The agent's transcripts were relocated (CLAUDE_CONFIG_DIR, CODEX_HOME)
+      or are not written at all (no session persistence, prompt history
+      off). The transcript surface is then missing for that agent.
+    kind: inventory
+    class: signal
+    severity: low
+    confidence: medium
+    maturity: stable
+    category: coverage
+    tags: [atlas.aml.t0138]
+    references:
+      - "internal/transcript package doc (ConfigRoots, relocated configuration directories)"
+    falsepositives:
+      - "Users who relocated their session logs for disk space or privacy, with hawkbell's path configured to follow"
+    when:
+      type: inventory.asset
+    match:
+      any:
+        - asset.telemetry.transcript|in: [relocated, none]
+        - asset.risk_flags|contains_any: [transcript_suppressed, prompt_history_disabled]
+    evidence: [asset.catalog_id, asset.telemetry.transcript, asset.risk_flags]
+    remedy: No action on its own; check that relocated directories are passed to the daemon.
+    tests:
+      - name: relocated transcripts
+        event: { type: inventory.asset, asset: { id: a7, kind: agent, name: Codex, catalog_id: codex, telemetry: { transcript: relocated } } }
+        expect: match
+      - name: transcripts tailed
+        event: { type: inventory.asset, asset: { id: a8, kind: agent, name: Codex, catalog_id: codex, telemetry: { transcript: tailing } } }
+        expect: no_match
+      - name: other kind
+        event: { type: inventory.asset, asset: { id: m1, kind: mcp_server, name: x } }
+        expect: no_match
+
+  - id: HB-COV-004
+    title: Agent run with a flag that skips hook trust
+    description: >-
+      The process monitor saw an agent started in a mode that runs without
+      hooks or with untrusted hooks accepted (Codex
+      --dangerously-bypass-hook-trust). Tool calls of that run reach hawkbell
+      only through the session log, if at all.
+    kind: activity
+    class: finding
+    severity: medium
+    confidence: high
+    maturity: stable
+    category: defense_evasion
+    tags: [attack.t1685.007, owasp.asi10]
+    references:
+      - "research/agent-surfaces-a.md section 3 (codex --dangerously-bypass-hook-trust)"
+    falsepositives:
+      - "Developers running an agent in --bare or similar mode for scripting in a disposable container"
+    when:
+      type: agent.process.start
+    match:
+      labels.hook_free: "true"
+    dedup: [agent.id]
+    evidence: [agent.id, process.flags]
+    remedy: Check why the run needed to skip hooks.
+    tests:
+      - name: hook-free codex run
+        event: { type: agent.process.start, agent: { id: codex }, process: { name: codex, flags: [--dangerously-bypass-hook-trust] }, labels: { hook_free: "true" } }
+        expect: match
+      - name: ordinary run
+        event: { type: agent.process.start, agent: { id: codex }, process: { name: codex }, labels: { headless: "true" } }
+        expect: no_match
+      - name: bare claude run is an attribute
+        event: { type: agent.process.start, agent: { id: claude-code }, process: { name: claude, flags: [--bare] }, labels: { bare: "true" } }
+        expect: no_match
+
+  - id: HB-COV-005
+    title: Agent run without a session log
+    description: >-
+      The process monitor saw an agent started so that it writes no
+      transcript (--no-session-persistence, --ephemeral, a history-off
+      variable). The run is visible to hooks and the process monitor only.
+    kind: activity
+    class: signal
+    severity: low
+    confidence: high
+    maturity: stable
+    category: coverage
+    tags: [atlas.aml.t0138]
+    references:
+      - "research/agent-surfaces-a.md sections 2 and 3"
+    falsepositives:
+      - "Ephemeral or CI runs that disable session logs on purpose"
+    when:
+      type: agent.process.start
+    match:
+      labels.persistence_free: "true"
+    dedup: [agent.id]
+    evidence: [agent.id, process.flags]
+    remedy: No action on its own.
+    tests:
+      - name: ephemeral codex
+        event: { type: agent.process.start, agent: { id: codex }, process: { name: codex, flags: [--ephemeral] }, labels: { persistence_free: "true" } }
+        expect: match
+      - name: persistent run
+        event: { type: agent.process.start, agent: { id: codex }, process: { name: codex } }
+        expect: no_match
+      - name: headless only
+        event: { type: agent.process.start, agent: { id: codex }, process: { name: codex }, labels: { headless: "true" } }
+        expect: no_match
+
+  - id: HB-COV-006
+    title: Managed configuration path or state directory moved
+    description: >-
+      The agent is told to read managed settings from another path, or its
+      state directory is relocated by an environment variable or setting.
+      Managed policy deployed by Fleet then no longer applies, and hawkbell's
+      default roots miss the transcripts.
+    kind: inventory
+    class: finding
+    severity: medium
+    confidence: medium
+    maturity: experimental
+    category: defense_evasion
+    tags: [attack.t1685.007, owasp.asi10]
+    references:
+      - "redteam/platform-parity.md (managed tiers and first-wins precedence)"
+    falsepositives:
+      - "Administrators who moved managed settings or agent state for a documented reason (non-default install prefix)"
+    when:
+      type: inventory.asset
+    match:
+      asset.risk_flags|contains_any: [managed_settings_path_overridden, state_dir_relocated]
+    evidence: [asset.catalog_id, asset.risk_flags]
+    remedy: Remove the override or configure hawkbell and Fleet with the new path.
+    tests:
+      - name: managed path overridden
+        event: { type: inventory.asset, asset: { id: a9, kind: agent, name: Claude Code, catalog_id: claude-code, risk_flags: [managed_settings_path_overridden] } }
+        expect: match
+      - name: state dir relocated
+        event: { type: inventory.asset, asset: { id: a10, kind: agent, name: Codex, catalog_id: codex, risk_flags: [state_dir_relocated] } }
+        expect: match
+      - name: managed policy present
+        event: { type: inventory.asset, asset: { id: a11, kind: agent, name: Claude Code, catalog_id: claude-code, risk_flags: [managed_policy_present] } }
+        expect: no_match
+      - name: other risk flags only
+        event: { type: inventory.asset, asset: { id: a12, kind: agent, name: Codex, catalog_id: codex, risk_flags: [base_url_override, managed_policy_missing] } }
+        expect: no_match
+
+  - id: HB-COV-007
+    title: Managed policy missing or hooks not locked to managed
+    description: >-
+      No managed policy is deployed for an installed agent, or the managed
+      policy does not restrict hooks to the managed ones. User and project
+      settings can then add or remove hooks.
+    kind: inventory
+    class: signal
+    severity: info
+    confidence: high
+    maturity: stable
+    category: coverage
+    tags: [owasp.asi10]
+    references:
+      - "research/threats.md section 5 (managed-settings presence, allowManagedHooksOnly)"
+    falsepositives:
+      - "Personal machines outside managed deployment, where no managed policy is expected"
+    when:
+      type: inventory.asset
+    match:
+      asset.risk_flags|contains_any: [managed_policy_missing, managed_hooks_not_exclusive]
+    evidence: [asset.catalog_id, asset.risk_flags]
+    remedy: Deploy managed settings with allowManagedHooksOnly through Fleet.
+    tests:
+      - name: no managed policy
+        event: { type: inventory.asset, asset: { id: a12, kind: agent, name: Claude Code, catalog_id: claude-code, risk_flags: [managed_policy_missing] } }
+        expect: match
+      - name: managed and exclusive
+        event: { type: inventory.asset, asset: { id: a13, kind: agent, name: Claude Code, catalog_id: claude-code, risk_flags: [managed_policy_present] } }
+        expect: no_match
+      - name: no flags
+        event: { type: inventory.asset, asset: { id: a14, kind: agent, name: Claude Code, catalog_id: claude-code } }
+        expect: no_match

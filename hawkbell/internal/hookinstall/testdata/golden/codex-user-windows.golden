@@ -1,0 +1,130 @@
+# agent: codex
+# scope: user
+# path: /C/Users/dev/.codex/hooks.json
+# action: create
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -x 'C:\\Program Files\\hawkbell\\hawkbell.exe' ] || exit 0; exec 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent codex",
+            "commandWindows": "if (Test-Path -LiteralPath 'C:\\Program Files\\hawkbell\\hawkbell.exe' -PathType Leaf) { & 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent codex; exit $LASTEXITCODE } else { exit 0 }",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -x 'C:\\Program Files\\hawkbell\\hawkbell.exe' ] || exit 0; exec 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent codex",
+            "commandWindows": "if (Test-Path -LiteralPath 'C:\\Program Files\\hawkbell\\hawkbell.exe' -PathType Leaf) { & 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent codex; exit $LASTEXITCODE } else { exit 0 }",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -x 'C:\\Program Files\\hawkbell\\hawkbell.exe' ] || exit 0; exec 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent codex",
+            "commandWindows": "if (Test-Path -LiteralPath 'C:\\Program Files\\hawkbell\\hawkbell.exe' -PathType Leaf) { & 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent codex; exit $LASTEXITCODE } else { exit 0 }",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -x 'C:\\Program Files\\hawkbell\\hawkbell.exe' ] || exit 0; exec 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent codex",
+            "commandWindows": "if (Test-Path -LiteralPath 'C:\\Program Files\\hawkbell\\hawkbell.exe' -PathType Leaf) { & 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent codex; exit $LASTEXITCODE } else { exit 0 }",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -x 'C:\\Program Files\\hawkbell\\hawkbell.exe' ] || exit 0; exec 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent codex",
+            "commandWindows": "if (Test-Path -LiteralPath 'C:\\Program Files\\hawkbell\\hawkbell.exe' -PathType Leaf) { & 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent codex; exit $LASTEXITCODE } else { exit 0 }",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -x 'C:\\Program Files\\hawkbell\\hawkbell.exe' ] || exit 0; exec 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent codex",
+            "commandWindows": "if (Test-Path -LiteralPath 'C:\\Program Files\\hawkbell\\hawkbell.exe' -PathType Leaf) { & 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent codex; exit $LASTEXITCODE } else { exit 0 }",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -x 'C:\\Program Files\\hawkbell\\hawkbell.exe' ] || exit 0; exec 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent codex",
+            "commandWindows": "if (Test-Path -LiteralPath 'C:\\Program Files\\hawkbell\\hawkbell.exe' -PathType Leaf) { & 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent codex; exit $LASTEXITCODE } else { exit 0 }",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -x 'C:\\Program Files\\hawkbell\\hawkbell.exe' ] || exit 0; exec 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent codex",
+            "commandWindows": "if (Test-Path -LiteralPath 'C:\\Program Files\\hawkbell\\hawkbell.exe' -PathType Leaf) { & 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent codex; exit $LASTEXITCODE } else { exit 0 }",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -x 'C:\\Program Files\\hawkbell\\hawkbell.exe' ] || exit 0; exec 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent codex",
+            "commandWindows": "if (Test-Path -LiteralPath 'C:\\Program Files\\hawkbell\\hawkbell.exe' -PathType Leaf) { & 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent codex; exit $LASTEXITCODE } else { exit 0 }",
+            "timeout": 10,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -x 'C:\\Program Files\\hawkbell\\hawkbell.exe' ] || exit 0; exec 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent codex",
+            "commandWindows": "if (Test-Path -LiteralPath 'C:\\Program Files\\hawkbell\\hawkbell.exe' -PathType Leaf) { & 'C:\\Program Files\\hawkbell\\hawkbell.exe' hook --agent codex; exit $LASTEXITCODE } else { exit 0 }",
+            "timeout": 3
+          }
+        ]
+      }
+    ]
+  }
+}
+# ----

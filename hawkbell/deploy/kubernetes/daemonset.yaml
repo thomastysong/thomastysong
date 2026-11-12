@@ -1,0 +1,142 @@
+# hawkbell node sensor: one pod per node that watches the AI agents running in
+# every container on the node, read-only, and writes records to stdout.
+# README.md explains each setting below and what was verified (VERIFIED.md).
+#
+# Supported: runc-class runtimes (containerd, CRI-O, Docker), cgroup v1 and
+# v2. Not supported: microVM runtimes (Kata, Firecracker, gVisor), Fargate /
+# Autopilot-style nodes without host namespaces, Windows nodes.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: hawkbell-node-sensor
+  namespace: hawkbell
+  labels:
+    app.kubernetes.io/name: hawkbell
+    app.kubernetes.io/component: node-sensor
+# The sensor never talks to the API server.
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: hawkbell-node-sensor
+  namespace: hawkbell
+  labels:
+    app.kubernetes.io/name: hawkbell
+    app.kubernetes.io/component: node-sensor
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: hawkbell
+      app.kubernetes.io/component: node-sensor
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 10%
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: hawkbell
+        app.kubernetes.io/component: node-sensor
+    spec:
+      serviceAccountName: hawkbell-node-sensor
+      automountServiceAccountToken: false
+      # The host pid namespace: every process on the node, with its
+      # /proc/<pid>/{cmdline,environ,cgroup,cwd,root}.
+      hostPID: true
+      # Not needed: the process connector (cn_proc) only answers in the host's
+      # network namespace, so the sensor polls /proc instead (200 ms while an
+      # agent runs, 2 s otherwise), and nothing listens.
+      hostNetwork: false
+      hostIPC: false
+      enableServiceLinks: false
+      nodeSelector:
+        kubernetes.io/os: linux
+      tolerations:
+        - operator: Exists
+      # The daemon flushes within 20 s of SIGTERM.
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        # The runtime's default profile lets a process holding CAP_SYS_PTRACE
+        # call ptrace, process_vm_writev and pidfd_getfd on any process it can
+        # see; with hostPID that is every root process on the node, so a
+        # compromised sensor would be root on the node (verified with Docker's
+        # default profile: VERIFIED.md). The sensor needs the capability only
+        # for the kernel's access checks on /proc/<pid>/{environ,root,cwd}
+        # reads, never those calls: this profile is the runtime default
+        # without them (seccomp/node-sensor.json). Install it on every Linux
+        # node as <kubelet root dir>/seccomp/hawkbell/node-sensor.json first
+        # (README.md); a node without it does not start the pod
+        # (CreateContainerError) rather than run the sensor without it.
+        seccompProfile:
+          type: Localhost
+          localhostProfile: hawkbell/node-sensor.json
+        # AppArmor's container default profile lets ptrace-class reads reach
+        # only peers under the same profile, which would hide every other
+        # container's /proc/<pid>/environ (containerd
+        # contrib/apparmor/template.go). UNVERIFIED here: the test host has no
+        # AppArmor or SELinux. appArmorProfile needs Kubernetes 1.30+; older
+        # clusters use the container.apparmor.security.beta.kubernetes.io
+        # annotation.
+        appArmorProfile:
+          type: Unconfined
+        seLinuxOptions:
+          type: spc_t
+      containers:
+        - name: hawkbell
+          # Built from the repository's Dockerfile (`make image`); no image is
+          # published yet. Replace with your registry's copy, pinned by digest.
+          image: registry.example.com/hawkbell:0.1.0
+          imagePullPolicy: IfNotPresent
+          args: ["run", "--config", "/etc/hawkbell/hawkbell.yaml", "--log-format", "json"]
+          env:
+            # Host identity: the container has no machine-id or DMI of its
+            # own, so the node name is the id. host.name in records is the
+            # pod's hostname; the log pipeline adds the node and pod.
+            - name: HAWKBELL_HOST_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            # host.name is otherwise the pod's hostname, not the node's.
+            - name: HAWKBELL_HOST_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          securityContext:
+            privileged: false
+            # Must stay true: the two capabilities come from FILE
+            # capabilities on /usr/bin/hawkbell (cap_dac_read_search,
+            # cap_sys_ptrace=ep), and no_new_privs, which false sets, is meant
+            # to stop exec from granting them. A non-root container gets no
+            # effective capabilities from `add` alone (CapEff 0).
+            allowPrivilegeEscalation: true
+            readOnlyRootFilesystem: true
+            capabilities:
+              # Both must be in the bounding set or the kernel refuses to
+              # execute the binary (EPERM): a misconfigured sensor fails to
+              # start instead of running blind.
+              drop: ["ALL"]
+              add: ["SYS_PTRACE", "DAC_READ_SEARCH"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/hawkbell
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/hawkbell
+      # No hostPath volume: nothing of the node's file system is mounted.
+      volumes:
+        - name: config
+          configMap:
+            name: hawkbell-node-sensor
+        - name: data
+          emptyDir:
+            sizeLimit: 1Gi

@@ -40,6 +40,8 @@ func (c *nctx) finding() []*event.Event {
 		Title:    oneLine(string(r.Title), maxName),
 		Response: "none",
 		Count:    1,
+		// numbat has no class vocabulary; its findings are findings.
+		Class: event.ClassFinding,
 	}
 	if d.Title == "" {
 		d.Title = d.RuleID

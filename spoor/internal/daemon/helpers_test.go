@@ -348,6 +348,7 @@ func (f *fixture) unitDaemon() (*daemon, *captureSink) {
 	d := &daemon{
 		cfg: f.cfg, log: log, env: env, started: time.Now(), layout: l,
 		users: newUserSet(), procs: newProcView(), hooks: newHookView(), board: newBoard(), cat: cat,
+		gate: newKillGate(env.disabled, env.now),
 	}
 	d.users.set([]platform.UserHome{f.user})
 	if d.policy, err = engine.PolicyFromConfig(f.cfg); err != nil {

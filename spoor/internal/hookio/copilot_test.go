@@ -41,9 +41,11 @@ func TestCopilotGolden(t *testing.T) {
 			eq(t, "tool.kind", e.Tool.Kind, event.ToolFileEdit)
 			eq(t, "outcome.status", outcome(e).Status, "error")
 			// The error quotes a secret: it must stay local.
-			if strings.Contains(outcome(e).Error, "hunter2") || !strings.HasPrefix(outcome(e).Error, "tool error fp:") {
+			if strings.Contains(outcome(e).Error, "hunter2") {
 				t.Errorf("outcome.error = %q", outcome(e).Error)
 			}
+			// "String to replace not found: ..." (49 bytes).
+			eq(t, "outcome.error", outcome(e).Error, "tool error class:not_found len:49")
 			if !strings.Contains(e.Content.ToolOutput, "hunter2") {
 				t.Error("raw error text must be available to local detection")
 			}

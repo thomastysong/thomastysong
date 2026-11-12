@@ -1,5 +1,3 @@
-//go:build !spoor_nodaemon
-
 package main
 
 import (

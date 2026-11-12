@@ -65,12 +65,20 @@ func TestTranscriptPriming(t *testing.T) {
 	}
 
 	// Kill switch: what is written while it is on is never collected.
+	// (Tick first: the pipeline drops what is still queued when the switch
+	// is pulled, by design.)
+	d.pipe.Tick(time.Now())
 	f.off.Store(true)
 	r2.step(ctx)
 	appendFile(t, a, claudeLines("sa", cwd, "toolu_a_off", "ls", time.Now()))
 	f.off.Store(false)
-	r2.step(ctx) // reset and prime
+	r2.step(ctx) // reset and prime at the release
 	appendFile(t, a, claudeLines("sa", cwd, "toolu_a_on", "ls", time.Now()))
+	r2.step(ctx) // settling: the pipeline may still drop input
+	if got := out.useIDs(); got["toolu_a_on"] {
+		t.Error("records were handed over while the pipeline could still drop them")
+	}
+	time.Sleep(releaseSettle)
 	r2.step(ctx)
 	r2.commit()
 

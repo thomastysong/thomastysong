@@ -425,22 +425,48 @@ func (c claudeWire) respond(req *Request, d Decision) ([]byte, []byte, int) {
 // respondCodex renders for Codex, whose reply parser is stricter than its
 // Claude-shaped schema suggests: permissionDecision "ask", a bare "allow"
 // and legacy decision "approve" are rejected as invalid and the hook then
-// fails open. Exit code 2 with a non-empty stderr is the block signal every
-// gateable Codex event honours.
+// fails open, as is a deny or block without a non-empty reason. A block is
+// the JSON form Codex honours on exit 0 for each event it gates
+// (openai/codex main, codex-rs/hooks/src/engine/output_parser.rs
+// parse_pre_tool_use, parse_user_prompt_submit, parse_permission_request;
+// schema.rs wire types, read 2026-11-12):
+//
+//	PreToolUse        hookSpecificOutput.permissionDecision "deny" + permissionDecisionReason
+//	UserPromptSubmit  decision "block" + reason
+//	PermissionRequest hookSpecificOutput.decision.behavior "deny" + message
+//
+// Exit code 2 with the reason on stderr also blocks, but it is what the Go
+// runtime exits with on a fatal error, so a crash and a verdict would look
+// alike; the JSON form keeps exit codes meaning "the hook ran". Codex's
+// output types deny unknown fields, so these replies carry nothing else.
 func (c claudeWire) respondCodex(req *Request, d Decision) ([]byte, []byte, int) {
 	msg := reason(d)
 	switch req.EventName {
-	case "PreToolUse", "UserPromptSubmit":
+	case "PreToolUse":
 		switch d.Action {
 		case ActionDeny:
-			return exitBlock(msg)
+			return jsonLine(preToolReply{hookSpecific{
+				HookEventName:            "PreToolUse",
+				PermissionDecision:       ActionDeny,
+				PermissionDecisionReason: msg,
+			}}), nil, 0
+		case ActionAsk:
+			return warn(msg)
+		}
+	case "UserPromptSubmit":
+		switch d.Action {
+		case ActionDeny:
+			return jsonLine(blockReply{Decision: "block", Reason: msg}), nil, 0
 		case ActionAsk:
 			return warn(msg)
 		}
 	case "PermissionRequest":
 		switch d.Action {
 		case ActionDeny:
-			return exitBlock(msg)
+			return jsonLine(preToolReply{hookSpecific{
+				HookEventName: "PermissionRequest",
+				Decision:      &permBehavior{Behavior: "deny", Message: msg},
+			}}), nil, 0
 		case ActionAllow:
 			return jsonLine(preToolReply{hookSpecific{
 				HookEventName: "PermissionRequest",

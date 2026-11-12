@@ -170,6 +170,7 @@ func (r *transcriptRunner) currentRoots() []transcript.Root {
 // prime records the end of every file not yet known (see the type comment).
 func (r *transcriptRunner) prime(ctx context.Context, roots []transcript.Root) {
 	r.mu.Lock()
+	r.roots = roots // the priming tailer reads them through currentRoots
 	if r.t != nil {
 		if err := r.t.Commit(); err != nil {
 			r.d.board.add("transcript.checkpoint_errors", 1)

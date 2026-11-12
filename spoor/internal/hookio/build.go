@@ -1,8 +1,6 @@
 package hookio
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"math"
 	"strconv"
@@ -167,13 +165,12 @@ func forceKind(ev *event.Event, kind event.ToolKind) {
 	setTarget(ev, ev.Content.ToolInput)
 }
 
-func sha256Hex(s string) string {
-	sum := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(sum[:])
-}
-
-// setOutput records tool output for local detection and its size and hash
-// for emission. The text itself is never placed in a serialized field here.
+// setOutput records tool output for local detection and its size for
+// emission. The text itself is never placed in a serialized field here, and
+// neither is a hash of it: an unkeyed SHA-256 of a short output ("ok", a
+// version string, a one-line secret) is recovered with a dictionary, and
+// these records reach the local spool before the privacy stage, which
+// derives Tool.OutputSHA256 from Content.ToolOutput with the tenant key.
 func setOutput(ev *event.Event, v any) {
 	text := outputText(v)
 	if text == "" {
@@ -184,7 +181,6 @@ func setOutput(ev *event.Event, v any) {
 		return
 	}
 	ev.Tool.OutputLen = len(text)
-	ev.Tool.OutputSHA256 = sha256Hex(text)
 }
 
 // outputText flattens the many shapes a tool result takes into text:
@@ -300,8 +296,10 @@ func durationMS(o obj, keys ...string) int64 {
 // failure builds the Outcome for a failed tool call. errText is tool output
 // under the model's influence and may quote file content or credentials, so
 // it is kept only in Content.ToolOutput; the serialized Outcome.Error is a
-// fixed-format summary. Claude Code documents "Exit code N" as the first
-// line for shell failures (hooks reference, PostToolUseFailure input).
+// fixed-format summary: "exit code N", else ErrorSummary's class and byte
+// length (never a hash of the text, see ErrorSummary). Claude Code
+// documents "Exit code N" as the first line for shell failures (hooks
+// reference, PostToolUseFailure input).
 func failure(ev *event.Event, errText string, interrupted bool) *event.Outcome {
 	out := &event.Outcome{Status: "error"}
 	if interrupted {
@@ -314,7 +312,6 @@ func failure(ev *event.Event, errText string, interrupted bool) *event.Outcome {
 		ev.Content.ToolOutput = errText
 		if ev.Tool != nil {
 			ev.Tool.OutputLen = len(errText)
-			ev.Tool.OutputSHA256 = sha256Hex(errText)
 		}
 	}
 	if code, ok := exitCode(errText); ok {
@@ -322,7 +319,7 @@ func failure(ev *event.Event, errText string, interrupted bool) *event.Outcome {
 		out.Error = "exit code " + strconv.Itoa(code)
 		return out
 	}
-	out.Error = "tool error fp:" + sha256Hex(errText)[:8]
+	out.Error = ErrorSummary(errText)
 	return out
 }
 
@@ -404,8 +401,9 @@ func firstNum(a, b obj, keys ...string) (float64, bool) {
 // denialReason normalizes the reason Claude Code's auto mode gives for a
 // denial. A classifier verdict names the matched rule in square brackets
 // ("[Data Exfiltration]"); that label is kept. The documented fixed texts
-// map to codes, and any other text is reduced to a fingerprint because it is
-// free text that may describe the call.
+// map to codes, and any other text, free text that may describe the call,
+// is reduced to "denied class:other len:<bytes>": no hash of it, for the
+// reason given at ErrorSummary.
 func denialReason(s string) string {
 	s = strings.TrimSpace(s)
 	switch {
@@ -431,5 +429,5 @@ func denialReason(s string) string {
 			}
 		}
 	}
-	return "denied fp:" + sha256Hex(s)[:8]
+	return summary("denied", ErrClassOther, len(s))
 }

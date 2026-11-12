@@ -1,3 +1,5 @@
+//go:build spoor_bench
+
 package main
 
 import (

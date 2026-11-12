@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -193,6 +194,13 @@ func (s *scanner) projectWorker(ctx context.Context) error {
 			d.board.add("scan.project_unknown_user", 1)
 			continue
 		}
+		if !ownProjectDir(req.dir, req.uid) {
+			// The directory comes from a user-written record: the sensor
+			// only looks into directories that account owns, never into
+			// /etc or another account's tree on its say-so.
+			d.board.add("scan.project_refused", 1)
+			continue
+		}
 		res, err := discovery.ScanProject(ctx, req.dir, u, discovery.Options{
 			Catalog:  d.cat,
 			Prev:     s.prev(),
@@ -257,6 +265,11 @@ func (s *scanner) run(ctx context.Context) error {
 	var lastFull, lastScan, lastHooks time.Time
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
+	if !d.gate.idle() {
+		// Before the first scan, which can take a minute: the pipeline's
+		// coverage logic needs to know where hooks are installed.
+		s.refreshHooks()
+	}
 	for {
 		now := d.env.now()
 		if s.enabled() && !d.gate.idle() && (lastScan.IsZero() || now.Sub(lastScan) >= interval) {
@@ -450,6 +463,18 @@ func combineHookStates(states []hookinstall.State) map[string]string {
 		}
 	}
 	return out
+}
+
+// ownProjectDir reports whether dir is a real directory (not a link) owned
+// by the account. Where ownership cannot be read (Windows without a SID
+// match) discovery's own per-file owner check still applies.
+func ownProjectDir(dir, uid string) bool {
+	fi, err := os.Lstat(dir)
+	if err != nil || !fi.IsDir() || fi.Mode()&os.ModeSymlink != 0 {
+		return false
+	}
+	owner, ok := platform.PathOwner(dir)
+	return !ok || owner == uid
 }
 
 // scanEnv is discovery.Options.Env: the relocation variables the process

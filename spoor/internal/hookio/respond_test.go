@@ -99,42 +99,77 @@ func TestRespondClaude(t *testing.T) {
 }
 
 func TestRespondCodex(t *testing.T) {
-	// Exit 2 with the reason on stderr is the block; nothing on stdout.
-	for _, f := range []string{"codex/PreToolUse.json", "codex/UserPromptSubmit.json", "codex/PermissionRequest.json"} {
-		m, stderr, code := reply(t, "codex", f, nil, deny)
-		eq(t, f+" exit", code, 2)
-		eq(t, f+" stderr", stderr, denyMsg+"\n")
-		if m != nil {
-			t.Errorf("%s: stdout must be empty on a Codex block, got %v", f, m)
-		}
-	}
+	// A block is the JSON form Codex honours on exit 0 for each gated event
+	// (codex-rs/hooks/src/engine/output_parser.rs), never exit 2.
+	m, stderr, code := reply(t, "codex", "codex/PreToolUse.json", nil, deny)
+	eq(t, "pre exit", code, 0)
+	eq(t, "pre stderr", stderr, "")
+	eq(t, "pre reply", m, map[string]any{"hookSpecificOutput": map[string]any{
+		"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": denyMsg,
+	}})
+
+	m, stderr, code = reply(t, "codex", "codex/UserPromptSubmit.json", nil, deny)
+	eq(t, "prompt exit", code, 0)
+	eq(t, "prompt stderr", stderr, "")
+	eq(t, "prompt reply", m, map[string]any{"decision": "block", "reason": denyMsg})
+
+	m, stderr, code = reply(t, "codex", "codex/PermissionRequest.json", nil, deny)
+	eq(t, "permission exit", code, 0)
+	eq(t, "permission stderr", stderr, "")
+	eq(t, "permission reply", m, map[string]any{"hookSpecificOutput": map[string]any{
+		"hookEventName": "PermissionRequest", "decision": map[string]any{"behavior": "deny", "message": denyMsg},
+	}})
+
 	// Codex rejects permissionDecision "ask": degrade to a warning.
-	m, stderr, code := reply(t, "codex", "codex/PreToolUse.json", nil, ask)
-	eq(t, "ask exit", code, 0)
-	eq(t, "ask stderr", stderr, "")
-	eq(t, "ask warns", m["systemMessage"], askMsg)
-	if len(m) != 1 {
-		t.Errorf("ask reply must carry only systemMessage (anything else is invalid for Codex): %v", m)
+	for _, f := range []string{"codex/PreToolUse.json", "codex/UserPromptSubmit.json"} {
+		m, stderr, code = reply(t, "codex", f, nil, ask)
+		eq(t, f+" ask exit", code, 0)
+		eq(t, f+" ask stderr", stderr, "")
+		// Anything besides systemMessage would be an invalid field for Codex.
+		eq(t, f+" ask reply", m, map[string]any{"systemMessage": askMsg})
 	}
-	// A bare allow is invalid for PreToolUse: print nothing.
-	m, _, code = reply(t, "codex", "codex/PreToolUse.json", nil, allow)
+	// The user is about to be asked anyway.
+	m, _, code = reply(t, "codex", "codex/PermissionRequest.json", nil, ask)
 	if m != nil || code != 0 {
-		t.Errorf("allow on Codex PreToolUse must be silent, got %v exit %d", m, code)
+		t.Errorf("ask on Codex PermissionRequest must be silent, got %v exit %d", m, code)
+	}
+	// A bare allow is invalid for PreToolUse and meaningless for a prompt:
+	// print nothing.
+	for _, f := range []string{"codex/PreToolUse.json", "codex/UserPromptSubmit.json"} {
+		m, _, code = reply(t, "codex", f, nil, allow)
+		if m != nil || code != 0 {
+			t.Errorf("allow on %s must be silent, got %v exit %d", f, m, code)
+		}
 	}
 	// PermissionRequest allow is supported.
 	m, _, _ = reply(t, "codex", "codex/PermissionRequest.json", nil, allow)
-	eq(t, "permission allow", hso(t, m)["decision"].(map[string]any)["behavior"], "allow")
+	eq(t, "permission allow", m, map[string]any{"hookSpecificOutput": map[string]any{
+		"hookEventName": "PermissionRequest", "decision": map[string]any{"behavior": "allow"},
+	}})
 }
 
-// Codex treats exit 2 with empty stderr as a failed hook and lets the call
-// through, so a block must always carry text.
+// Codex treats a deny or block without a non-empty reason as a failed hook
+// and lets the call through, so a block must always carry text.
 func TestRespondCodexBlockAlwaysHasReason(t *testing.T) {
-	_, stderr, code := reply(t, "codex", "codex/PreToolUse.json", nil, Decision{Action: ActionDeny})
-	eq(t, "exit", code, 2)
-	if strings.TrimSpace(stderr) == "" {
-		t.Fatal("empty stderr on a Codex block fails open")
+	const def = "spoor: blocked by policy"
+	for _, rule := range []string{"", "SP-1"} {
+		d := Decision{Action: ActionDeny, RuleID: rule}
+		want := def
+		if rule != "" {
+			want += " [" + rule + "]"
+		}
+		m, stderr, code := reply(t, "codex", "codex/PreToolUse.json", nil, d)
+		eq(t, "exit", code, 0)
+		eq(t, "stderr", stderr, "")
+		eq(t, "pre reason", hso(t, m)["permissionDecisionReason"], want)
+		m, _, _ = reply(t, "codex", "codex/UserPromptSubmit.json", nil, d)
+		eq(t, "prompt reason", m["reason"], want)
+		m, _, _ = reply(t, "codex", "codex/PermissionRequest.json", nil, d)
+		eq(t, "permission message", hso(t, m)["decision"].(map[string]any)["message"], want)
 	}
-	eq(t, "default reason", stderr, "spoor: blocked by policy\n")
+	// Whitespace-only reasons count as empty for Codex too.
+	m, _, _ := reply(t, "codex", "codex/PreToolUse.json", nil, Decision{Action: ActionDeny, Reason: " \t\n "})
+	eq(t, "blank reason", hso(t, m)["permissionDecisionReason"], def)
 }
 
 func TestRespondCopilot(t *testing.T) {
@@ -282,7 +317,9 @@ func TestRespondNonBlockingEventsStaySilent(t *testing.T) {
 }
 
 // A deny on a gateable event must always produce a block signal the agent
-// reads: either a non-zero exit with stderr, or a JSON reply.
+// reads, and every dialect's signal is a JSON reply on exit 0 with nothing
+// on stderr: exit 2 is reserved for Respond's panic fallback, because it is
+// also what the Go runtime exits with on a fatal error.
 func TestRespondDenyAlwaysSignalsOnBlockingEvents(t *testing.T) {
 	n := 0
 	for _, tc := range allFixtures(t) {
@@ -297,8 +334,7 @@ func TestRespondDenyAlwaysSignalsOnBlockingEvents(t *testing.T) {
 		n++
 		stdout, stderr, code := d.Respond(req, deny)
 		switch {
-		case code == 2 && strings.TrimSpace(string(stderr)) != "":
-		case code == 0 && len(stdout) > 0:
+		case code == 0 && len(stdout) > 0 && len(stderr) == 0:
 			decodeReply(t, stdout)
 			if !strings.Contains(string(stdout), "SP-0042") {
 				t.Errorf("%s: deny reply lost the rule id: %s", tc.file, stdout)

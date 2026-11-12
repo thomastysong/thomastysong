@@ -53,9 +53,12 @@ func TestClaudeGolden(t *testing.T) {
 			eq(t, "target.path", target(e).Path, "/path/to/file.txt")
 			eq(t, "content.file_content", e.Content.FileContent, "file content")
 			eq(t, "outcome", outcome(e), event.Outcome{Status: "ok", DurationMS: 12})
-			if e.Content.ToolOutput == "" || e.Tool.OutputLen != len(e.Content.ToolOutput) || len(e.Tool.OutputSHA256) != 64 {
+			if e.Content.ToolOutput == "" || e.Tool.OutputLen != len(e.Content.ToolOutput) {
 				t.Errorf("output not recorded: %q len=%d", e.Content.ToolOutput, e.Tool.OutputLen)
 			}
+			// An unkeyed output hash is a guessing oracle; the privacy
+			// stage derives a keyed one from the content.
+			eq(t, "tool.output_sha256", e.Tool.OutputSHA256, "")
 		}},
 		{"PostToolUse_bash.json", event.TypeToolPost, false, func(t *testing.T, e *event.Event) {
 			eq(t, "session.permission_mode", e.Session.PermissionMode, "bypass")

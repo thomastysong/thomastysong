@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/thomastysong/spoor/internal/config"
 	"github.com/thomastysong/spoor/internal/event"
@@ -114,6 +115,7 @@ func TestAdapterRunnerRefusesLinksAndResets(t *testing.T) {
 	f.off.Store(false)
 	r.step() // reset: starts at the current end
 	appendFile(t, log, numbatLine(t, "numbat_event_hook_network.json", func(m map[string]any) { m["session_id"] = "after-on" }))
+	time.Sleep(releaseSettle)
 	r.step()
 	d.pipe.Close()
 	got := map[string]bool{}

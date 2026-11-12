@@ -40,15 +40,17 @@ func Example() {
 	// {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"spoor: reads an SSH private key [SP-0042]"}}
 }
 
-// The same decision rendered for Codex, which blocks by exit code.
+// The same decision rendered for Codex: the JSON block Codex honours on
+// exit 0, never exit code 2.
 func ExampleDialect_codex() {
 	d, _ := hookio.Get("codex")
 	_, req, _ := d.Parse([]byte(`{"session_id":"t1","turn_id":"turn-1","cwd":"/w","model":"gpt-5.2-codex","permission_mode":"default",
 		"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"cat ~/.ssh/id_rsa"},"tool_use_id":"call_1","transcript_path":null}`), nil)
 	stdout, stderr, exit := d.Respond(req, hookio.Decision{Action: hookio.ActionDeny, Reason: "reads an SSH private key", RuleID: "SP-0042"})
-	fmt.Printf("exit=%d stdout=%q stderr=%q\n", exit, stdout, stderr)
+	fmt.Printf("exit=%d stderr=%q\n%s", exit, stderr, stdout)
 	// Output:
-	// exit=2 stdout="" stderr="spoor: reads an SSH private key [SP-0042]\n"
+	// exit=0 stderr=""
+	// {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"spoor: reads an SSH private key [SP-0042]"}}
 }
 
 // What an installer needs for one agent's hook configuration.

@@ -12,9 +12,9 @@ import (
 const maxReason = 1024
 
 // reason builds the single-line message shown to the user or the model. It
-// is never empty: Codex treats exit 2 without stderr, and a JSON block
-// without a reason, as a failed hook and lets the action through
-// (codex-rs/hooks/src/events/pre_tool_use.rs, engine/output_parser.rs).
+// is never empty: Codex treats a JSON deny or block without a non-empty
+// reason as a failed hook and lets the action through
+// (codex-rs/hooks/src/engine/output_parser.rs).
 func reason(d Decision) string {
 	r := oneLine(d.Reason, maxReason)
 	if r == "" {
@@ -50,13 +50,6 @@ func jsonLine(v any) []byte {
 
 // proceed is the reply that leaves the agent's own flow untouched.
 func proceed() ([]byte, []byte, int) { return nil, nil, 0 }
-
-// exitBlock is the exit-code form of a block: code 2 with the reason on
-// stderr and nothing on stdout, so nothing can be misparsed. It is Codex's
-// documented block for PreToolUse, UserPromptSubmit and PermissionRequest.
-func exitBlock(msg string) ([]byte, []byte, int) {
-	return nil, []byte(msg + "\n"), 2
-}
 
 // warn is the non-blocking degrade for "ask" where an agent cannot ask: the
 // universal systemMessage field, which Claude Code, Codex and Gemini show to

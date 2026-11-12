@@ -31,8 +31,14 @@
 //     enum fields keep only word-shaped values (anything else becomes
 //     "other"); identifier labels are reduced to a fixed alphabet. Tool error
 //     text can quote file content or credentials, so only a normalized
-//     summary ("exit code 1", "tool error fp:1a2b3c4d") is emitted and the
-//     raw text stays in Content.ToolOutput.
+//     summary ("exit code 1", "tool error class:not_found len:57") is
+//     emitted and the raw text stays in Content.ToolOutput.
+//   - No serialized field holds an unkeyed hash of free text (prompt, tool
+//     output, error or denial text). Such a hash is a guessing oracle for
+//     short values, and these events reach the local spool before the
+//     privacy stage, which owns the tenant key and derives the keyed
+//     digests. Error and denial text is summarized by a closed-vocabulary
+//     class (ErrorClass) and its byte length instead.
 //
 // # Events are pre-redaction
 //
@@ -53,7 +59,10 @@
 //     same functions the transcript parsers use, so both surfaces describe
 //     one call identically. A hook that names the action itself (Cursor's
 //     beforeShellExecution, Gemini's mcp_context) overrides the kind.
-//     Tool.OutputSHA256 and Tool.OutputLen describe Content.ToolOutput.
+//     Tool.InputSHA256 is unkeyed because it is the cross-surface join key
+//     toolmap defines; the privacy stage keys it before anything ships.
+//   - Tool.OutputLen is the byte length of Content.ToolOutput. Tool.OutputSHA256
+//     is left empty: the privacy stage derives it, keyed, from the content.
 //   - Tool arguments sent as a JSON-encoded string (Copilot toolArgs, Cursor
 //     MCP tool_input) are decoded first; a string that is not a JSON object
 //     is kept as {"_raw": "<string>"}.
@@ -61,6 +70,11 @@
 //     final message when the hook provides one.
 //   - Prompt.Len is the byte length of the prompt; Prompt.SHA256 is left for
 //     the redaction stage, which owns the tenant key.
+//   - Outcome.Error of a failed tool call is "exit code N" when the text
+//     starts with Claude Code's "Exit code N" line, else
+//     "tool error class:<class> len:<bytes>" (ErrorSummary). A PermissionDenied
+//     reason is the classifier's bracketed rule label, "no_verdict",
+//     "classifier_unavailable", or "denied class:other len:<bytes>".
 //   - Other labels. Enum-valued: session_source, end_reason,
 //     notification_type, config_source, compact_trigger, compact_phase,
 //     mcp_source, memory_type, load_reason, prompt_kind, expansion_type,
@@ -85,8 +99,9 @@
 //	claude   PermissionRequest          hookSpecificOutput.decision.behavior   (nothing)               behavior "allow"
 //	claude   UserPromptSubmit/Expansion decision "block" + reason              systemMessage warning   (nothing)
 //	claude   ConfigChange               decision "block" + reason              (nothing)               (nothing)
-//	codex    PreToolUse, UserPromptSubmit  exit 2 + stderr                     systemMessage warning   (nothing)
-//	codex    PermissionRequest          exit 2 + stderr                        (nothing)               decision.behavior "allow"
+//	codex    PreToolUse                 hookSpecificOutput.permissionDecision  systemMessage warning   (nothing)
+//	codex    UserPromptSubmit           decision "block" + reason              systemMessage warning   (nothing)
+//	codex    PermissionRequest          hookSpecificOutput.decision.behavior   (nothing)               behavior "allow"
 //	copilot  preToolUse / PreToolUse    permissionDecision + reason            same, "ask"             same, "allow"
 //	copilot  permissionRequest          behavior "deny" + message              (nothing)               behavior "allow"
 //	gemini   BeforeTool                 decision "deny" + reason               systemMessage warning   decision "allow"
@@ -96,15 +111,24 @@
 //	cursor   preToolUse                 permission + decision "deny"           permission "ask"        permission + decision "allow"
 //	cursor   beforeSubmitPrompt         continue false + user_message          (nothing)               (nothing)
 //
-// Every reply except Codex's block is one line of JSON on stdout with exit 0.
+// Every reply is one line of JSON on stdout with exit 0 and nothing on
+// stderr, Codex's blocks included. The one exception is Respond's own panic
+// fallback: if rendering a deny on a gateable event panics, it answers exit
+// 2 with a fixed reason on stderr, the closest thing to a universal block.
 // The reason is always non-empty, single-line, at most about 1 KiB, prefixed
 // "spoor: " and suffixed with the rule id in brackets.
 //
 // # Unsupported behaviour (explicit, by agent)
 //
 //   - Codex cannot ask and rejects a bare allow on PreToolUse. Respond turns
-//     "ask" into a non-blocking systemMessage warning and "allow" into no
-//     output. A block is exit code 2 with the reason on stderr.
+//     "ask" into a non-blocking systemMessage warning (nothing on
+//     PermissionRequest, where the user is about to be asked anyway) and
+//     "allow" into no output except on PermissionRequest. A block is the
+//     JSON form Codex honours on exit 0 (table above; openai/codex main,
+//     codex-rs/hooks/src/engine/output_parser.rs, read 2026-11-12), not
+//     exit code 2, which the Go runtime also uses for a fatal error.
+//     UNVERIFIED: the first Codex release that parses these JSON forms; a
+//     Codex too old to parse them fails open on a spoor block.
 //   - Gemini CLI has no ask decision: "ask" becomes a systemMessage warning.
 //   - Copilot CLI drops the output of userPromptSubmitted command hooks, so
 //     prompts cannot be blocked there (Request.Blocking is false).

@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
-	"fmt"
 
 	"gopkg.in/yaml.v3"
 )
@@ -23,7 +22,9 @@ import (
 // exact source bytes it was made from, and LoadEmbedded uses it only when
 // that digest matches the embedded YAML and the cache decodes cleanly;
 // otherwise it parses the YAML (slower, never different). Decoded trees go
-// through the same structural checks and the same compiler as parsed ones.
+// through the same structural checks and the same compiler as parsed ones;
+// the decoder (nodecache_decode.go) leaves the collection-valued fields of
+// each rule other than its stub (lazy.go) undecoded until first use.
 //
 // The cache is embedded in the binary rather than written to a user cache
 // directory at run time: that directory is writable by the agent the guard
@@ -150,177 +151,4 @@ func countNodes(n *yaml.Node) int {
 func putUvarint(w *bytes.Buffer, v uint64) {
 	var b [binary.MaxVarintLen64]byte
 	w.Write(b[:binary.PutUvarint(b[:], v)])
-}
-
-// decodeCache returns the parsed files of a cache made from content whose
-// sourceDigest is want. Every structural property is validated: the cache
-// is embedded and trusted, but a decoder that trusts its input is one bug
-// away from a panic in every hook process.
-func decodeCache(b []byte, want [sha256.Size]byte) (srcs []sourceFile, err error) {
-	defer func() {
-		if recover() != nil {
-			srcs, err = nil, errCache
-		}
-	}()
-	if len(b) > maxCacheBytes || len(b) < len(cacheMagic)+sha256.Size || string(b[:len(cacheMagic)]) != cacheMagic {
-		return nil, errCache
-	}
-	r := &cacheReader{b: b, off: len(cacheMagic)}
-	if !bytes.Equal(r.take(sha256.Size), want[:]) {
-		return nil, fmt.Errorf("%w: made from different content (run go generate ./internal/rules)", errCache)
-	}
-	ns := r.count(maxCacheStrs)
-	lens := make([]int, ns)
-	total := 0
-	for i := range lens {
-		lens[i] = r.count(maxCacheBytes)
-		total += lens[i]
-	}
-	if r.err != nil || total > len(b) {
-		return nil, errCache
-	}
-	// One allocation for every string; nodes share substrings of it.
-	all := string(r.take(total))
-	r.strs = make([]string, ns)
-	off := 0
-	for i, l := range lens {
-		r.strs[i] = all[off : off+l]
-		off += l
-	}
-	nf := r.count(maxCacheFiles)
-	for i := 0; i < nf && r.err == nil; i++ {
-		name := r.str()
-		size := r.count(maxCacheBytes)
-		nodes := r.count(maxYAMLNodes)
-		if r.err != nil || nodes == 0 {
-			return nil, errCache
-		}
-		r.arena = make([]yaml.Node, nodes)
-		r.ptrs = make([]*yaml.Node, nodes-1)
-		r.used, r.pused = 0, 0
-		root := r.node(0)
-		if r.err != nil || r.used != nodes || r.pused != nodes-1 {
-			return nil, errCache
-		}
-		count := 0
-		if err := checkNode(root, 0, &count); err != nil {
-			return nil, errCache
-		}
-		if fileRole(name) == "" {
-			return nil, errCache
-		}
-		srcs = append(srcs, sourceFile{name: name, size: size, root: root, cached: true})
-	}
-	if r.err != nil || r.off != len(b) {
-		return nil, errCache
-	}
-	return srcs, nil
-}
-
-type cacheReader struct {
-	b     []byte
-	off   int
-	err   error
-	strs  []string
-	arena []yaml.Node
-	ptrs  []*yaml.Node
-	used  int
-	pused int
-}
-
-func (r *cacheReader) fail() { r.err = errCache }
-
-func (r *cacheReader) uvarint() uint64 {
-	if r.err != nil {
-		return 0
-	}
-	v, n := binary.Uvarint(r.b[r.off:])
-	if n <= 0 {
-		r.fail()
-		return 0
-	}
-	r.off += n
-	return v
-}
-
-// count reads a non-negative integer no larger than max.
-func (r *cacheReader) count(max int) int {
-	v := r.uvarint()
-	if v > uint64(max) {
-		r.fail()
-		return 0
-	}
-	return int(v)
-}
-
-func (r *cacheReader) take(n int) []byte {
-	if r.err != nil || n < 0 || n > len(r.b)-r.off {
-		r.fail()
-		return nil
-	}
-	out := r.b[r.off : r.off+n]
-	r.off += n
-	return out
-}
-
-func (r *cacheReader) byte1() byte {
-	if p := r.take(1); p != nil {
-		return p[0]
-	}
-	return 0
-}
-
-func (r *cacheReader) str() string {
-	i := r.uvarint()
-	if r.err != nil || i >= uint64(len(r.strs)) {
-		r.fail()
-		return ""
-	}
-	return r.strs[i]
-}
-
-// node decodes one node in pre-order into the arena. The children of a
-// node occupy a contiguous run of r.ptrs reserved before they are decoded,
-// with capacity capped so an append can never overwrite a neighbour.
-func (r *cacheReader) node(depth int) *yaml.Node {
-	if r.err != nil || depth > maxYAMLDepth+1 || r.used >= len(r.arena) {
-		r.fail()
-		return nil
-	}
-	n := &r.arena[r.used]
-	r.used++
-	n.Kind = yaml.Kind(r.byte1())
-	switch n.Kind {
-	case yaml.SequenceNode, yaml.MappingNode, yaml.ScalarNode:
-	default:
-		// Documents are unwrapped before encoding and aliases are
-		// rejected by the parser.
-		r.fail()
-		return nil
-	}
-	n.Style = yaml.Style(r.byte1())
-	n.Tag = r.str()
-	n.Value = r.str()
-	n.Line = r.count(1 << 30)
-	n.Column = r.count(1 << 30)
-	k := r.count(len(r.ptrs) - r.pused)
-	if r.err != nil {
-		return nil
-	}
-	if n.Kind == yaml.ScalarNode && k > 0 || n.Kind == yaml.MappingNode && k%2 != 0 {
-		r.fail()
-		return nil
-	}
-	if k > 0 {
-		kids := r.ptrs[r.pused : r.pused+k : r.pused+k]
-		r.pused += k
-		for i := range kids {
-			kids[i] = r.node(depth + 1)
-			if r.err != nil {
-				return nil
-			}
-		}
-		n.Content = kids
-	}
-	return n
 }

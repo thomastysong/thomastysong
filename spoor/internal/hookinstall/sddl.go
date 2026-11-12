@@ -47,13 +47,20 @@ func sddlProblem(sddl string) string {
 	if dacl == "" {
 		return "has no DACL (everyone has full control)"
 	}
-	for _, ace := range sddlACEs(dacl) {
+	aces, null, ok := parseDACL(dacl)
+	switch {
+	case !ok:
+		return "has a DACL that cannot be parsed"
+	case null:
+		return "has a NULL DACL (everyone has full control)"
+	}
+	for _, ace := range aces {
 		f := strings.Split(ace, ";")
 		if len(f) < 6 {
 			return "has an access control entry that cannot be parsed"
 		}
 		typ, flags, rights, sid := f[0], f[1], f[2], f[5]
-		if typ != "A" && typ != "OA" && typ != "XA" {
+		if typ != "A" && typ != "OA" && typ != "XA" && typ != "ZA" {
 			continue // deny, audit and label entries grant nothing
 		}
 		if adminSIDs[sid] {
@@ -114,30 +121,58 @@ func splitSDDL(s string) (owner, dacl string, ok bool) {
 		return owner, "", true
 	}
 	dacl = s[i+2 : end(i)]
-	if !strings.Contains(dacl, "(") {
-		// "D:" followed only by flags is an empty DACL: nobody but the
-		// owner has access, which is safe.
+	if dacl == "" {
+		// "D:" with neither flags nor entries is an empty DACL: nobody but
+		// the owner has access, which is safe. (A missing "D:" section is
+		// reported by the caller as no DACL at all.)
 		return owner, "()", true
 	}
 	return owner, dacl, true
 }
 
-func sddlACEs(dacl string) []string {
-	var out []string
-	for {
-		i := strings.IndexByte(dacl, '(')
-		if i < 0 {
-			return out
-		}
-		j := strings.IndexByte(dacl[i:], ')')
-		if j < 0 {
-			return append(out, "")
-		}
-		if body := dacl[i+1 : i+j]; body != "" {
-			out = append(out, body)
-		}
-		dacl = dacl[i+j+1:]
+// parseDACL splits the body of a "D:" section into its flags and access
+// control entries. The flags may only be P, AI, AR and NO_ACCESS_CONTROL;
+// null reports NO_ACCESS_CONTROL, the NULL DACL that grants everyone full
+// control. Anything else (unknown flags, text between entries, an
+// unterminated entry) is not ok: an ACL that cannot be read must not pass
+// as a safe one.
+func parseDACL(dacl string) (aces []string, null, ok bool) {
+	i := strings.IndexByte(dacl, '(')
+	flags := dacl
+	if i >= 0 {
+		flags = dacl[:i]
 	}
+	for flags != "" {
+		switch {
+		case strings.HasPrefix(flags, "NO_ACCESS_CONTROL"):
+			null = true
+			flags = flags[len("NO_ACCESS_CONTROL"):]
+		case strings.HasPrefix(flags, "AI"), strings.HasPrefix(flags, "AR"):
+			flags = flags[2:]
+		case strings.HasPrefix(flags, "P"):
+			flags = flags[1:]
+		default:
+			return nil, false, false
+		}
+	}
+	if i < 0 {
+		return nil, null, true
+	}
+	rest := dacl[i:]
+	for rest != "" {
+		if rest[0] != '(' {
+			return nil, false, false
+		}
+		j := strings.IndexByte(rest, ')')
+		if j < 0 {
+			return nil, false, false
+		}
+		if body := rest[1:j]; body != "" {
+			aces = append(aces, body)
+		}
+		rest = rest[j+1:]
+	}
+	return aces, null, true
 }
 
 func sddlMask(rights string) (uint32, bool) {

@@ -21,6 +21,10 @@ import (
 // is not trusted, or when the hook file itself is a link.
 var ErrSymlink = errors.New("refusing to write through a symbolic link")
 
+// errNotDir is returned when a component of the way to a file is not a
+// directory.
+var errNotDir = errors.New("not a directory")
+
 // maxLinkHops bounds how many trusted links one path may traverse.
 const maxLinkHops = 16
 
@@ -178,6 +182,12 @@ func walkOnce(base string, comps []string, confine string, pol dirPolicy) (*os.R
 		}
 		if err != nil {
 			r.Close()
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil, "", fmt.Errorf("%s does not exist: %w", next, fs.ErrNotExist)
+			}
+			if isNotDir(err) {
+				return nil, "", fmt.Errorf("%s: %w", next, errNotDir)
+			}
 			return nil, "", fmt.Errorf("cannot inspect %s (%s)", next, errClass(err))
 		}
 		if fi.Mode()&os.ModeIrregular != 0 {
@@ -198,7 +208,7 @@ func walkOnce(base string, comps []string, confine string, pol dirPolicy) (*os.R
 		}
 		if !fi.IsDir() {
 			r.Close()
-			return nil, "", fmt.Errorf("%s is not a directory", next)
+			return nil, "", fmt.Errorf("%s: %w", next, errNotDir)
 		}
 		if harden[next] {
 			// A standard user may have pre-created this directory (anyone

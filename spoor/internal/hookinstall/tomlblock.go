@@ -214,6 +214,137 @@ type tomlDoc struct {
 	hasOTel     bool
 }
 
+// TOML input bounds. The decoder's time and memory grow with the size of a
+// document times its nesting (a 24 KB file of nested inline tables made
+// it allocate 4 GiB; 128 KiB at nesting 16 costs about 100 MiB and 0.2 s),
+// and the files it reads include the user's own ~/.codex/config.toml, read
+// by a root installer. Codex configuration and requirements files are a
+// few kilobytes with nesting of three or four.
+const (
+	maxTOMLSize  = 128 << 10
+	maxTOMLDepth = 16
+)
+
+var (
+	errTOMLSize  = errors.New("larger than 128 KiB, which spoor does not parse")
+	errTOMLDepth = errors.New("nested more than 16 levels deep, which spoor does not parse")
+)
+
+// tomlBounds refuses a document the decoder should not see. Nesting counts
+// every level a value sits under: open brackets and braces, the parts of a
+// dotted key, and the parts of the table header it falls under. Strings and
+// comments are skipped the way the TOML lexer skips them.
+func tomlBounds(src []byte) error {
+	if len(src) > maxTOMLSize {
+		return errTOMLSize
+	}
+	var stack []int // nesting each open bracket added
+	open := 0       // sum of stack
+	table := 0      // parts of the current table header
+	run := 0        // dots in the key or header being read
+	keyDots := 0    // dots of the key whose value is being read
+	inHeader := false
+	for i := 0; i < len(src); i++ {
+		c := src[i]
+		switch c {
+		case '#':
+			for i < len(src) && src[i] != '\n' {
+				i++
+			}
+			i--
+			continue
+		case '"', '\'':
+			n := quoteRun(src, i, c)
+			multi := n >= 3
+			i += 1
+			if multi {
+				i += 2
+			}
+			for i < len(src) {
+				if c == '"' && src[i] == '\\' {
+					i += 2
+					continue
+				}
+				if src[i] == c {
+					if !multi {
+						break
+					}
+					if k := quoteRun(src, i, c); k >= 3 {
+						i += k - 1
+						break
+					}
+				}
+				if !multi && src[i] == '\n' {
+					break
+				}
+				i++
+			}
+			continue
+		case '.':
+			run++
+		case '=':
+			keyDots, run = run, 0
+		case '[', '{':
+			if open == 0 && c == '[' && !inHeader && keyDots == 0 && run == 0 && lineStart(src, i) {
+				// A table header: what follows it sits under its path.
+				inHeader = true
+				table = 0
+			}
+			lvl := 1 + keyDots
+			stack = append(stack, lvl)
+			open += lvl
+			keyDots, run = 0, 0
+		case ']', '}':
+			if len(stack) > 0 {
+				open -= stack[len(stack)-1]
+				stack = stack[:len(stack)-1]
+			}
+			if inHeader && open == 0 {
+				table = run + 1
+				inHeader = false
+			}
+			if !inHeader {
+				run = 0
+			}
+		case ',', '\n':
+			if !inHeader {
+				run, keyDots = 0, 0
+			}
+		}
+		depth := open + run
+		if !inHeader {
+			depth += table
+		}
+		if depth > maxTOMLDepth {
+			return errTOMLDepth
+		}
+	}
+	return nil
+}
+
+// quoteRun counts the quote characters c starting at i.
+func quoteRun(src []byte, i int, c byte) int {
+	n := 0
+	for i+n < len(src) && src[i+n] == c {
+		n++
+	}
+	return n
+}
+
+// lineStart reports whether only blanks precede position i on its line.
+func lineStart(src []byte, i int) bool {
+	for j := i - 1; j >= 0; j-- {
+		switch src[j] {
+		case ' ', '\t':
+		case '\n':
+			return true
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // parseTOML decodes a Codex configuration or requirements file. The decoder
 // is also the validity check for every file this package is about to write.
 func parseTOML(src []byte) (td tomlDoc, err error) {
@@ -222,6 +353,9 @@ func parseTOML(src []byte) (td tomlDoc, err error) {
 			err = errors.New("TOML parser failed")
 		}
 	}()
+	if err := tomlBounds(src); err != nil {
+		return td, err
+	}
 	var m map[string]any
 	if _, err := toml.Decode(string(src), &m); err != nil {
 		// The library's message quotes the offending line; keep the class.

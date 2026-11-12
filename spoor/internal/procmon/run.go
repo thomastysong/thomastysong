@@ -17,6 +17,10 @@ type runner struct {
 	cnRetryAt  time.Time
 	nextFull   time.Time
 	nextActive time.Time
+	// lastFull and lastTook are when the last full scan ran and how long it
+	// took; they pace the resyncs that overruns ask for.
+	lastFull   time.Time
+	lastTook   time.Duration
 	nextOsq    time.Time
 	noChildren bool
 	disabled   bool
@@ -44,6 +48,7 @@ func (m *Monitor) Run(ctx context.Context) (err error) {
 		return errAlreadyRunning
 	}
 	defer m.running.Store(false)
+	defer m.off.Store(false)
 
 	stopEmit := make(chan struct{})
 	emitDone := make(chan struct{})
@@ -98,6 +103,7 @@ func (r *runner) tick(ctx context.Context) {
 	}
 	if r.disabled {
 		r.disabled = false
+		m.off.Store(false)
 		r.nextFull = time.Time{}
 	}
 	m.refreshIndex(now)
@@ -108,7 +114,7 @@ func (r *runner) tick(ctx context.Context) {
 	// Scan before asking osquery: its rows are attributed through the
 	// table, which must already hold the agents.
 	switch {
-	case m.resyncRq.Swap(false) || !now.Before(r.nextFull):
+	case r.resyncDue(now) || !now.Before(r.nextFull):
 		r.full(now)
 	case r.cn == nil && m.liveRoots() > 0 && !now.Before(r.nextActive):
 		r.active(now)
@@ -141,6 +147,8 @@ func (r *runner) osqInterval() time.Duration {
 // stretches to twenty times the last scan's duration.
 func (r *runner) full(now time.Time) {
 	m := r.m
+	// Cleared first: an overrun during the scan asks again.
+	m.resyncRq.Store(false)
 	start := time.Now()
 	m.fullScan(now)
 	took := time.Since(start)
@@ -151,8 +159,26 @@ func (r *runner) full(now time.Time) {
 	if min := 20 * took; min > interval {
 		interval = min
 	}
+	r.lastFull, r.lastTook = now, took
 	r.nextFull = now.Add(interval)
 	r.nextActive = now.Add(m.o.Active)
+}
+
+// resyncDue reports whether a resync that an overrun asked for may run.
+// Overruns come in storms (a parallel build overflows the socket every few
+// milliseconds), so requests are coalesced: the table stays marked and is
+// rescanned once, no sooner than Idle (or twenty times the last scan's
+// duration, the 5% budget) after the previous full scan.
+func (r *runner) resyncDue(now time.Time) bool {
+	return r.m.resyncRq.Load() && !now.Before(r.resyncAt())
+}
+
+func (r *runner) resyncAt() time.Time {
+	gap := r.m.o.Idle
+	if g := 20 * r.lastTook; g > gap {
+		gap = g
+	}
+	return r.lastFull.Add(gap)
 }
 
 func (r *runner) active(now time.Time) {
@@ -182,6 +208,11 @@ func (r *runner) wait(now time.Time) time.Duration {
 	}
 	if d := until(r.nextFull); d < w {
 		w = d
+	}
+	if m.resyncRq.Load() {
+		if d := until(r.resyncAt()); d < w {
+			w = d
+		}
 	}
 	if r.cn == nil && m.liveRoots() > 0 {
 		if d := until(r.nextActive); d < w {
@@ -273,15 +304,18 @@ func (r *runner) stopCN() {
 }
 
 // enterDisabled idles every provider while the kill switch file exists.
+// Source stays within its vocabulary (poll: nothing better is running);
+// Stats.Disabled carries the switch.
 func (r *runner) enterDisabled() {
 	m := r.m
 	r.disabled = true
+	m.off.Store(true)
 	r.stopCN()
 	m.closeOsquery()
 	m.cnErr.Store("disabled by the kill switch")
 	m.osqLive.Store(false)
 	m.healthy.Store(false)
-	m.provider.Store(SourceDisabled)
+	m.provider.Store(SourcePoll)
 	m.mu.Lock()
 	m.can = canaryState{}
 	m.mu.Unlock()

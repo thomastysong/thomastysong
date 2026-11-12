@@ -15,6 +15,10 @@ import (
 const (
 	FileATC        = "agent-options.atc.yml"
 	FileATCExample = "agent-options.example.yml"
+	// FileBaseExample is the same typical base without spoor's ATC tables:
+	// the agent options of tier 3 (the spoor extension), which must not
+	// carry them.
+	FileBaseExample = "agent-options.base.example.yml"
 	FileContent    = "CONTENT.md"
 	FileOptIn      = "opt-in/exec-events.reports.yml"
 	fileLabels     = "labels.yml"
@@ -67,6 +71,10 @@ func (c *Content) Render() (files map[string][]byte, err error) {
 	}
 	ex, err := c.renderATCExample()
 	if err := put(FileATCExample, ex, err); err != nil {
+		return nil, err
+	}
+	base, err := c.renderBaseExample()
+	if err := put(FileBaseExample, base, err); err != nil {
 		return nil, err
 	}
 	for _, p := range c.Profiles {

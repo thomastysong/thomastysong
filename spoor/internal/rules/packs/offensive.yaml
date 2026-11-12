@@ -115,6 +115,8 @@ rules:
     tags: [attack.t1572, attack.t1090]
     references:
       - "research/threats.md section 3 R45; section 6 (ngrok for webhook testing)"
+    falsepositives:
+      - "Sharing a local development server with a colleague or a webhook provider"
     when:
       type: [tool.pre, process.exec]
     match:
@@ -131,6 +133,9 @@ rules:
         expect: match
       - name: ssh login
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "ssh deploy@build.example uptime" } }
+        expect: no_match
+      - name: ssh local port forward
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "ssh -N -L 5432:localhost:5432 deploy@bastion.example" } }
         expect: no_match
 
   - id: SPR-OFFSEC-004
@@ -185,6 +190,8 @@ rules:
     references:
       - "research/threats.md section 2 row 22: sandbox escapes (Docker socket)"
       - "research/threats.md section 3 R43"
+    falsepositives:
+      - "Docker-in-docker CI setups and local tooling that mounts the Docker socket (Testcontainers)"
     when:
       type: [tool.pre, process.exec]
     match:
@@ -201,6 +208,9 @@ rules:
         expect: match
       - name: network host only
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "docker run --rm --network host fluent/fluent-bit:latest" } }
+        expect: no_match
+      - name: ordinary build container
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "docker run --rm -v \"$PWD\":/src -w /src golang:1.22 go test ./..." } }
         expect: no_match
 
   - id: SPR-OFFSEC-006
@@ -319,6 +329,9 @@ rules:
     tags: [attack.t1082, attack.t1057]
     references:
       - "research/threats.md section 2 row 44"
+    falsepositives:
+      - "Troubleshooting sessions that list users, processes and network state"
+      - "Onboarding scripts that inventory the machine"
     when:
       type: [tool.pre, process.exec]
     match:

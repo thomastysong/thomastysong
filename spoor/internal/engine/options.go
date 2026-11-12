@@ -57,18 +57,21 @@ const (
 )
 
 const (
-	maxSessions     = 4096    // live sessions kept in memory
-	maxExcluded     = 4096    // remembered excluded session keys
-	maxCorrelation  = 1 << 17 // correlation keys remembered
-	corrTTL         = 30 * time.Minute
-	maxHeld         = 8192
-	maxCoverage     = 2000
-	maxProcs        = 4096
-	coverageWindow  = 24 * time.Hour
-	hookStaleAfter  = 10 * time.Minute
-	baselineSaveGap = time.Minute
-	disabledTTL     = time.Second
-	localSuffix     = ".local"
+	maxSessions    = 4096    // live sessions kept in memory
+	maxExcluded    = 4096    // remembered excluded session keys
+	maxCorrelation = 1 << 17 // correlation keys remembered
+	corrTTL        = 30 * time.Minute
+	maxHeld        = 8192
+	maxCoverage    = 2000
+	// maxCoveragePerUser bounds one account's coverage entries, so one
+	// account's records cannot evict another's.
+	maxCoveragePerUser = 64
+	maxProcs           = 4096
+	coverageWindow     = 24 * time.Hour
+	hookStaleAfter     = 10 * time.Minute
+	baselineSaveGap    = time.Minute
+	disabledTTL        = time.Second
+	localSuffix        = ".local"
 )
 
 // Options configures a Pipeline. Fields marked additive are not part of the

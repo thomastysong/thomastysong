@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/thomastysong/spoor/internal/classify"
 	"github.com/thomastysong/spoor/internal/event"
@@ -13,31 +14,146 @@ import (
 
 // Bounds on what one event carries from a command line. A command line is
 // whatever a process chose to exec; the emitted line is capped at 16 KiB
-// downstream, and these keep a process event well inside that.
+// downstream, and these keep a process event well inside that. The bounds
+// apply to the REDACTED text: cutting first would leave half a secret
+// whose closing quote or delimiter is gone, which no redaction rule
+// recognises any more.
 const (
 	maxEventArgs     = 64
 	maxEventArgBytes = 1024
 	maxEventArgsSum  = 8192
+	// maxNameBytes bounds a process name after redaction.
+	maxNameBytes = 255
+	// maxMarkerLen is the longest "[REDACTED:...]" or "[TRUNCATED:...]"
+	// marker a cut looks back for, so that it never splits one.
+	maxMarkerLen = 160
 )
 
-// capArgs bounds an argument list before redaction. cut reports that
-// something was dropped or shortened.
-func capArgs(args []string) (out []string, cut bool) {
+// emitArgs returns the form of an argument vector that may leave the
+// monitor: redacted with classify.RedactArgs, then bounded. A cut argument
+// ends in a "[TRUNCATED:<n>B]" marker; arguments past the bounds are
+// replaced by one final "[TRUNCATED:<n>B]" placeholder counting their
+// bytes. cut reports that anything was shortened or dropped.
+//
+// Redaction runs on the arguments that can be emitted plus one (RedactArgs
+// carries state forward only, and the extra argument gives the last kept
+// one its real successor), so its cost is bounded by the read limits on
+// the command line, not by the argument count.
+func emitArgs(raw []string) (out []string, cut bool) {
+	if len(raw) == 0 {
+		return nil, false
+	}
+	args, dropped := raw, 0
+	if readerCut(raw) {
+		// The reader stopped inside the last argument: whatever secret it
+		// holds may have lost its end. It is never emitted.
+		args, dropped, cut = raw[:len(raw)-1], len(raw[len(raw)-1]), true
+	}
+	keep := len(args)
+	if keep > maxEventArgs {
+		keep = maxEventArgs - 1 // room for the placeholder
+		for _, a := range args[keep:] {
+			dropped += len(a)
+		}
+		cut = true
+	}
+	end := keep + 1
+	if end > len(args) {
+		end = len(args)
+	}
+	red := classify.RedactArgs(args[:end])[:keep]
+	// The placeholder must fit inside the total budget.
+	budget := maxEventArgsSum - len(truncMarker(maxCmdlineBytes))
 	total := 0
-	for i, a := range args {
-		if i >= maxEventArgs {
-			return out, true
-		}
+	for i, a := range red {
 		if len(a) > maxEventArgBytes {
-			a, cut = capString(a, maxEventArgBytes), true
+			a, cut = cutValue(a, maxEventArgBytes), true
 		}
-		if total+len(a) > maxEventArgsSum {
-			return out, true
+		if total+len(a) > budget {
+			for _, b := range red[i:] {
+				dropped += len(b)
+			}
+			cut = true
+			break
 		}
 		total += len(a)
 		out = append(out, a)
 	}
+	if dropped > 0 {
+		out = append(out, truncMarker(dropped))
+	}
 	return out, cut
+}
+
+// readerCut reports that an argument vector filled the command-line read
+// limit, so its last argument is probably incomplete.
+func readerCut(args []string) bool {
+	n := len(args) - 1
+	for _, a := range args {
+		n += len(a)
+		if n >= maxCmdlineBytes-1 {
+			return true
+		}
+	}
+	return false
+}
+
+// emitName returns the form of a process name the monitor keeps and emits.
+// A name is not always the program's: a Node process.title or a
+// setproctitle(3) user writes its whole command line over argv[0], and the
+// name refined from argv[0] (or the kernel's first 15 bytes of it) then
+// carries that command line, credentials included. It gets the same
+// redaction as the arguments, split on white space as the title was
+// written.
+func emitName(name string) string {
+	if name == "" {
+		return ""
+	}
+	var red string
+	if len(name) <= 4*maxNameBytes && strings.ContainsAny(name, " \t") {
+		red = strings.Join(classify.RedactArgs(strings.Fields(name)), " ")
+	} else {
+		red = classify.RedactArgs([]string{name})[0]
+	}
+	return cutValue(red, maxNameBytes)
+}
+
+// truncMarker states how many bytes were cut. Like classify's it carries no
+// digest of the cut text: an unkeyed hash would confirm guesses about it.
+func truncMarker(n int) string { return "[TRUNCATED:" + strconv.Itoa(n) + "B]" }
+
+// cutValue shortens s to at most max bytes, ending in a "[TRUNCATED:<n>B]"
+// marker. A cut never splits a rune or a marker already in s.
+func cutValue(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	h := max - len(truncMarker(len(s)))
+	if h < 0 {
+		h = 0
+	}
+	for h > 0 && !utf8.RuneStart(s[h]) {
+		h--
+	}
+	lo := h - maxMarkerLen
+	if lo < 0 {
+		lo = 0
+	}
+	for j := lo; j < h; j++ {
+		if s[j] != '[' || !(strings.HasPrefix(s[j:], "[REDACTED:") || strings.HasPrefix(s[j:], "[TRUNCATED:")) {
+			continue
+		}
+		if e := strings.IndexByte(s[j:], ']'); e < 0 || j+e >= h {
+			h = j
+			break
+		}
+	}
+	return s[:h] + truncMarker(len(s)-h)
+}
+
+// isCutName reports a name that emitName had to shorten.
+func isCutName(name string) bool {
+	return strings.HasSuffix(name, "B]") && strings.Contains(name, "[TRUNCATED:")
 }
 
 // bucket is a token bucket. Each agent root may report at most `rate`
@@ -147,10 +263,20 @@ func (m *Monitor) startEvent(r *root, now time.Time) *event.Event {
 	}
 	ev.Container = eventContainer(ap.Container)
 	ev.Labels = rootLabels(ap)
-	if r.argsCut {
-		ev.Truncated = []string{"process.args"}
-	}
+	ev.Truncated = truncatedFields(ev.Process, r.argsCut)
 	return ev
+}
+
+// truncatedFields lists the process fields of an event that were cut.
+func truncatedFields(p *event.Process, argsCut bool) []string {
+	var out []string
+	if argsCut {
+		out = append(out, "process.args")
+	}
+	if isCutName(p.Name) {
+		out = append(out, "process.name")
+	}
+	return out
 }
 
 // rootLabels carries the AgentProc attributes that have no field in the
@@ -223,6 +349,7 @@ func (m *Monitor) stopEvent(r *root, at time.Time, exit *exitInfo) *event.Event 
 		}
 	}
 	ev.Outcome = out
+	ev.Truncated = truncatedFields(ev.Process, false)
 	if len(ap.SessionIDs) > 1 {
 		ev.Labels = map[string]string{"sessions": strconv.Itoa(len(ap.SessionIDs))}
 	}
@@ -271,9 +398,12 @@ func (m *Monitor) execEvent(n *node, o *observed, owner *root, marker string, no
 	if ts.IsZero() {
 		ts = rec.Start
 	}
-	args, cut := capArgs(rec.Args)
+	args, cut := emitArgs(rec.Args)
 	ev := m.newEvent(event.TypeProcessExec, ts, now)
-	ev.ID = event.StableID(ev.TS.Time, event.TypeProcessExec, strconv.Itoa(n.pid), strconv.FormatUint(n.key, 10), rec.Exe, argsDigest(args))
+	// The id is an unkeyed hash, so it covers only what the event shows: a
+	// digest of the raw command line would let a reader test guesses about
+	// the credentials redaction removed.
+	ev.ID = event.StableID(ev.TS.Time, event.TypeProcessExec, strconv.Itoa(n.pid), strconv.FormatUint(n.key, 10), n.exe, argsDigest(args))
 	product := marker
 	attribution := "env_marker"
 	if owner != nil {
@@ -294,7 +424,7 @@ func (m *Monitor) execEvent(n *node, o *observed, owner *root, marker string, no
 		PPID:       n.ppid,
 		Name:       n.name,
 		Exe:        n.exe,
-		Args:       classify.RedactArgs(args),
+		Args:       args,
 		User:       n.user,
 		Ancestors:  m.execAncestors(n, owner),
 		EnvMarkers: append([]string(nil), n.env.markers...),
@@ -315,9 +445,7 @@ func (m *Monitor) execEvent(n *node, o *observed, owner *root, marker string, no
 	if sid != "" || o.cwd != "" {
 		ev.Session = &event.Session{ID: sid, CWD: o.cwd}
 	}
-	if cut {
-		ev.Truncated = []string{"process.args"}
-	}
+	ev.Truncated = truncatedFields(p, cut)
 	ev.Labels = map[string]string{"exec_source": o.via, "attribution": attribution}
 	return ev
 }
@@ -337,19 +465,57 @@ func (m *Monitor) execAncestors(n *node, owner *root) []string {
 	return out
 }
 
+// argsDigest summarises emitted (redacted) arguments for an event id. The
+// fingerprints in classify's markers are unkeyed hashes of the secrets
+// (the privacy layer rewrites them before anything leaves), so they are
+// left out: the id would otherwise carry them past that rewrite.
 func argsDigest(args []string) string {
 	h := sha256.New()
 	for _, a := range args {
-		h.Write([]byte(a))
+		h.Write([]byte(stripFingerprints(a)))
 		h.Write([]byte{0})
 	}
 	return hex.EncodeToString(h.Sum(nil)[:8])
 }
 
+// stripFingerprints turns every "[REDACTED:<kind>:<fp>]" in s into
+// "[REDACTED:<kind>]".
+func stripFingerprints(s string) string {
+	const open = "[REDACTED:"
+	if !strings.Contains(s, open) {
+		return s
+	}
+	var b strings.Builder
+	for {
+		i := strings.Index(s, open)
+		if i < 0 {
+			break
+		}
+		e := strings.IndexByte(s[i:], ']')
+		if e < 0 || e > maxMarkerLen {
+			b.WriteString(s[:i+len(open)])
+			s = s[i+len(open):]
+			continue
+		}
+		marker := s[i : i+e]
+		if c := strings.LastIndexByte(marker, ':'); c >= len(open) {
+			marker = marker[:c]
+		}
+		b.WriteString(s[:i])
+		b.WriteString(marker)
+		b.WriteByte(']')
+		s = s[i+e+1:]
+	}
+	b.WriteString(s)
+	return b.String()
+}
+
 // enqueue hands events to the emitter goroutine without blocking: the
 // netlink reader must keep draining its socket whatever Emit does.
 func (m *Monitor) enqueue(evs []*event.Event) {
-	if m.o.Emit == nil {
+	if m.o.Emit == nil || m.off.Load() {
+		// Nothing leaves while the kill switch is on, including what a
+		// reader that was mid-flight when it was pulled still produces.
 		return
 	}
 	for _, ev := range evs {

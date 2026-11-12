@@ -395,7 +395,7 @@ func sampleHits(rule string, hits []hitRef, byID map[string]replayEvent, labels 
 	idx := sortedInts(keep)
 	for _, i := range idx {
 		h := hits[i]
-		s := ReplaySample{EventID: h.hit.EventID, Thread: h.thread, Summary: summarize(h.hit.Evidence, aliases)}
+		s := ReplaySample{EventID: h.hit.EventID, Thread: applyAliases(h.thread, aliases), Summary: summarize(h.hit.Evidence, aliases)}
 		if re, ok := byID[h.hit.EventID]; ok {
 			s.TS = re.ev.TS.UTC().Format(time.RFC3339)
 			if re.ev.Tool != nil {

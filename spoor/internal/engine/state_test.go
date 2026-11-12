@@ -238,6 +238,10 @@ func TestConcurrentIngest(t *testing.T) {
 	h := newHarness(t, func(c *config.Config, o *Options) {
 		c.Privacy.Profile = "standard"
 		o.QueueSize = 1 << 20
+		// One account sends 2,000 records at one (fake) instant; this test
+		// is about concurrency and accounting, the volume limits have
+		// their own tests.
+		c.Limits.ActivityBurst = 1 << 20
 	})
 	const workers, per = 8, 250
 	var wg sync.WaitGroup

@@ -12,6 +12,15 @@ Darwin) BIN=$ROOT/usr/local/bin/spoor EXTDIR=$ROOT/usr/local/lib/spoor LOAD=$ROO
 esac
 EXT=$EXTDIR/spoor.ext
 [ -x "$BIN" ] || { echo "spoor binary missing at $BIN" >&2; exit 1; }
+# When orbit's own autoload file is not empty (Fleet manages extensions on
+# this host), orbit starts osquery with --extensions_autoload pointing at it
+# and osquery ignores $LOAD. Fail, so Fleet reports why (and rolls back).
+for f in "$ROOT/opt/orbit/extensions.load" "$ROOT/var/lib/orbit/extensions.load"; do
+	if [ -s "$f" ]; then
+		echo "orbit loads osquery extensions from $f (Fleet's extensions agent option), so osquery ignores $LOAD. Deliver spoor through that agent option, or deploy tier 2 (ATC) without this script." >&2
+		exit 1
+	fi
+done
 restart=0
 install -d -m 0755 -o 0 -g 0 "$EXTDIR"
 if ! cmp -s "$BIN" "$EXT" 2>/dev/null; then
@@ -20,6 +29,8 @@ if ! cmp -s "$BIN" "$EXT" 2>/dev/null; then
 fi
 install -d -m 0755 "$(dirname "$LOAD")"
 if ! grep -qxF "$EXT" "$LOAD" 2>/dev/null; then
+	# A last line without a newline would be glued to ours.
+	if [ -s "$LOAD" ] && [ -n "$(tail -c 1 "$LOAD")" ]; then echo >>"$LOAD"; fi
 	printf '%s\n' "$EXT" >>"$LOAD"
 	restart=1
 fi

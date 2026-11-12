@@ -29,11 +29,15 @@ type catIndex struct {
 	// When several products list a name, an agent wins over an app, then
 	// catalog order decides.
 	marker map[string]string
-	// strong names are the ones the agent itself sets for its children and
-	// that the catalog has verified: SessionEnv of agents, and EnvMarkers of
-	// agents whose env_markers field is not marked unverified. Only these
-	// can turn an unidentified parent into an agent root; a user-exported
-	// switch such as COPILOT_MODEL appears in every process of a shell.
+	// verified names are set by the product itself and checked by the
+	// catalog: SessionEnv of agents, and EnvMarkers whose env_markers field
+	// is not marked unverified. Only these make a process.exec event or an
+	// osquery row on their own; the rest (user-exported switches such as
+	// COPILOT_MODEL, unverified names) appear in every process of a shell
+	// and only answer Attribute, with Evidence env_marker_weak.
+	verified map[string]bool
+	// strong names are the verified names of agents. Only these can turn an
+	// unidentified parent into an agent root (an app is never a root).
 	strong map[string]bool
 	// keep is every variable name the monitor reads a value or presence
 	// from; the rest of an environment is skipped while parsing.
@@ -42,12 +46,13 @@ type catIndex struct {
 
 func buildIndex(c *catalog.Catalog) *catIndex {
 	ix := &catIndex{
-		version: c.Version(),
-		count:   c.Len(),
-		prods:   map[string]*prodInfo{},
-		marker:  map[string]string{},
-		strong:  map[string]bool{},
-		keep:    map[string]bool{},
+		version:  c.Version(),
+		count:    c.Len(),
+		prods:    map[string]*prodInfo{},
+		marker:   map[string]string{},
+		verified: map[string]bool{},
+		strong:   map[string]bool{},
+		keep:     map[string]bool{},
 	}
 	for _, name := range envAlwaysKept {
 		ix.keep[name] = true
@@ -92,14 +97,20 @@ func buildIndex(c *catalog.Catalog) *catIndex {
 					ix.marker[name] = p.ID
 				}
 			}
-			if !agent {
-				continue
-			}
-			for _, name := range p.SessionEnv {
-				ix.strong[name] = true
+			var names []string
+			if agent {
+				names = append(names, p.SessionEnv...)
 			}
 			if !p.IsUnverified("env_markers") {
-				for _, name := range p.EnvMarkers {
+				names = append(names, p.EnvMarkers...)
+			}
+			for _, name := range names {
+				// A shared name counts for the product that claimed it.
+				if ix.marker[name] != p.ID {
+					continue
+				}
+				ix.verified[name] = true
+				if agent {
 					ix.strong[name] = true
 				}
 			}
@@ -131,9 +142,11 @@ const (
 type envFacts struct {
 	known   bool
 	markers []string // catalog marker names present, sorted
-	// product is the product the markers name ("" none); strong says it was
-	// named by a strong marker.
+	// product is the product the markers name ("" none); verified says it
+	// was named by a verified marker, strong by a verified marker of an
+	// agent (see catIndex).
 	product  string
+	verified bool
 	strong   bool
 	sessions []prodSession
 }
@@ -171,18 +184,23 @@ func (ix *catIndex) scanEnv(env map[string]string) envFacts {
 	}
 	sort.Strings(f.markers)
 	// The product is chosen deterministically: strong names first, then
-	// session variables, then name order.
+	// other verified names, then weak names of agents, then name order.
 	bestRank := 0
 	for _, name := range f.markers {
 		p := ix.marker[name]
 		rank := 1
-		if ix.strong[name] {
+		switch {
+		case ix.strong[name]:
+			rank = 4
+		case ix.verified[name]:
 			rank = 3
-		} else if pi := ix.prods[p]; pi != nil && pi.isAgent() {
-			rank = 2
+		default:
+			if pi := ix.prods[p]; pi != nil && pi.isAgent() {
+				rank = 2
+			}
 		}
 		if rank > bestRank {
-			bestRank, f.product, f.strong = rank, p, rank == 3
+			bestRank, f.product, f.verified, f.strong = rank, p, rank >= 3, rank == 4
 		}
 	}
 	// Session variables are tried in catalog order: the first one listed is

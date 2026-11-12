@@ -378,3 +378,20 @@ func (c *Content) renderATCExample() ([]byte, error) {
 		"# overrides with config. Replace the base part with your own options.\n"
 	return encodeDoc(c.header("agent options example with ATC merged in.", "")+notes, n)
 }
+
+func (c *Content) renderBaseExample() ([]byte, error) {
+	n, err := anyNode(ExampleBaseAgentOptions())
+	if err != nil {
+		return nil, err
+	}
+	notes := "#\n# EXAMPLE for tier 3 (the spoor osquery extension): a typical base\n" +
+		"# configuration (fleetgen.ExampleBaseAgentOptions) WITHOUT spoor's ATC\n" +
+		"# tables. What matters is what is absent: osquery refuses the extension\n" +
+		"# when ATC already provides the spoor_* tables (\"Registry item\n" +
+		"# spoor_agent_processes conflicts with another item of the same name\"),\n" +
+		"# so agent options for hosts that register the extension must not carry\n" +
+		"# them; fleetgen.StripAgentOptions removes them from existing options.\n" +
+		"# " + FileATCExample + " is this base with the ATC fragment merged in\n" +
+		"# (tier 2). Replace the base with your own options.\n"
+	return encodeDoc(c.header("agent options example for the extension tier (no ATC).", "")+notes, n)
+}

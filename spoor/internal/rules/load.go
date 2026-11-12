@@ -36,25 +36,30 @@ var (
 // once per process; each call returns an independent copy.
 func LoadEmbedded() (*Set, error) {
 	embOnce.Do(func() {
-		files, err := readEmbedded()
-		if err != nil {
-			embErr = err
-			return
-		}
-		if c, err := embeddedFS.ReadFile(cacheFileName); err == nil {
-			if srcs, err := decodeCache(c, sourceDigest(files)); err == nil {
-				if s, err := loadSources(srcs, true); err == nil {
-					embSet, embFromCache = s, true
-					return
-				}
-			}
-		}
-		embSet, embErr = load(files, true)
+		embSet, embFromCache, embErr = compileEmbedded()
 	})
 	if embErr != nil {
 		return nil, embErr
 	}
 	return embSet.clone(), nil
+}
+
+// compileEmbedded does the work of the first LoadEmbedded call in a
+// process and reports whether the pre-parsed cache served it.
+func compileEmbedded() (*Set, bool, error) {
+	files, err := readEmbedded()
+	if err != nil {
+		return nil, false, err
+	}
+	if c, err := embeddedFS.ReadFile(cacheFileName); err == nil {
+		if srcs, err := decodeCache(c, sourceDigest(files)); err == nil {
+			if s, err := loadSources(srcs, true); err == nil {
+				return s, true, nil
+			}
+		}
+	}
+	s, err := load(files, true)
+	return s, false, err
 }
 
 // readEmbedded returns the embedded content files: packs/*.yaml and

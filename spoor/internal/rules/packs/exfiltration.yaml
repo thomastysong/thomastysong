@@ -155,6 +155,9 @@ rules:
     tags: [attack.t1567.004, attack.t1572]
     references:
       - "research/threats.md section 3 R27"
+    falsepositives:
+      - "Sharing a snippet or log on a paste site at the user's request"
+      - "Developers testing their own webhook or tunnel"
     when:
       type: [tool.pre, process.exec]
     match:
@@ -192,6 +195,8 @@ rules:
     references:
       - "research/threats.md section 2 row 10: CVE-2025-55284"
       - "research/threats.md section 3 R24"
+    falsepositives:
+      - "Long but ordinary hostnames (CDN or cloud load-balancer names) passed to dig or nslookup"
     when:
       type: [tool.pre, process.exec]
     match:
@@ -278,6 +283,9 @@ rules:
     tags: [attack.t1048, attack.t1567.002, attack.t1537]
     references:
       - "research/threats.md section 3 R23"
+    falsepositives:
+      - "Deploying build output with scp or rsync"
+      - "Uploading artefacts to the team's own bucket"
     when:
       type: [tool.pre, process.exec]
     match:
@@ -405,6 +413,8 @@ rules:
     references:
       - "research/threats.md section 2 row 26: Shai-Hulud self-propagating npm worm"
       - "research/threats.md section 3 R29"
+    falsepositives:
+      - "Releasing a package the user maintains, at the user's request"
     when:
       type: [tool.pre, process.exec]
     match:
@@ -580,6 +590,9 @@ rules:
     references:
       - "research/threats.md section 4 S1"
       - "bench/results/benign-replay.md (SPR-EXFIL-001 before tuning)"
+    falsepositives:
+      - "Paths, URL segments or identifiers read from a configuration file and repeated in a later request"
+      - "Values from environment listings that are not secrets"
     when:
       type: [tool.pre, process.exec]
     match:

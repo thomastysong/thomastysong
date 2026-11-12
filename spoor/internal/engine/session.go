@@ -20,10 +20,18 @@ const (
 	maxSummaryList = 64  // hosts, servers, installs ... per summary
 	maxUnmatched   = 256 // tool-call ids remembered per session
 	maxUses        = 1024
+	maxPromptTexts = 512 // distinct prompt texts remembered per session and surface
+	maxPromptOccs  = 64  // occurrences remembered per prompt text
+	// promptRepeatWindow: two records of one surface with the same prompt
+	// text, no prompt id and no record id in common, are one submission
+	// (a hook registered twice, managed and user settings) when they are
+	// this close in time, and two submissions otherwise.
+	promptRepeatWindow = 2 * time.Second
 )
 
 type session struct {
 	key     string
+	attrKey string // host, agent and session id, for OTel attribution
 	host    *event.Host
 	user    *event.User
 	agent   *event.Agent
@@ -36,6 +44,9 @@ type session struct {
 	created     time.Time
 	dirty       bool
 	ended       bool
+	finalDue    bool // ended; the final summary waits for held records
+	finalSent   bool
+	heldN       int // records of the session waiting for their hook twin
 	sumN        int
 
 	events, prompts, subagents, denied, blocked, suppressed int
@@ -47,8 +58,7 @@ type session struct {
 	maxSev                                                  string
 	surfaces                                                map[event.Source]bool
 
-	tokens float64
-	refill time.Time
+	bkt bucket // activity token bucket
 
 	ring []*event.Event
 
@@ -59,6 +69,19 @@ type session struct {
 	otelLast      time.Time
 	bypassSignal  bool
 	bypassFinding bool
+
+	promptSeen  map[string]*promptList // surface + prompt digest -> occurrences
+	promptOrder []string
+}
+
+type promptOcc struct {
+	id, turn string
+	ts       time.Time
+}
+
+type promptList struct {
+	occ   []promptOcc
+	extra int
 }
 
 type orderedSet struct {
@@ -109,6 +132,7 @@ func newSession(ev *event.Event, key string, now time.Time) *session {
 		unmatched:   map[string]string{},
 		hookRecords: map[string]int{},
 		otelRuns:    map[string]int{},
+		promptSeen:  map[string]*promptList{},
 	}
 	if ev.Host != nil {
 		h := *ev.Host
@@ -138,6 +162,7 @@ func (p *Pipeline) sessionFor(ev *event.Event, key string, now time.Time) *sessi
 	}
 	s := newSession(ev, key, now)
 	p.sessions[key] = p.lru.PushFront(s)
+	p.indexSession(s)
 	for len(p.sessions) > maxSessions {
 		el := p.lru.Back()
 		old := el.Value.(*session)
@@ -190,6 +215,7 @@ func (p *Pipeline) synthesizeStart(ev *event.Event, s *session, now time.Time) {
 
 func (p *Pipeline) removeSession(key string) {
 	if el, ok := p.sessions[key]; ok {
+		p.unindexSession(el.Value.(*session))
 		p.lru.Remove(el)
 		delete(p.sessions, key)
 	}
@@ -308,20 +334,58 @@ func (s *session) addDetection(d *event.Detection) {
 	s.dirty = true
 }
 
-// allow takes one token from the session's activity bucket.
-func (s *session) allow(at time.Time, rate, burst float64) bool {
-	if s.refill.IsZero() {
-		s.tokens, s.refill = burst, at
+// promptDedupe gives a prompt with text the Dedupe of its occurrence.
+//
+// The prompt text is the only natural key every surface shares (the hook
+// and OTel carry a prompt id, Claude Code's transcript does not), but the
+// same text is often submitted twice ("continue", "yes"). Each surface's
+// records with one text are therefore numbered in order of submission
+// within the session, and the k-th hook record pairs with the k-th
+// transcript record. A record is the same submission as an earlier one of
+// its surface when it has the same record id (a replay), the same prompt
+// id, or, with no prompt id on either, a time within promptRepeatWindow.
+func (p *Pipeline) promptDedupe(ev *event.Event, s *session) {
+	nat := naturalKey(ev)
+	if nat == "" {
+		return
 	}
-	if d := at.Sub(s.refill).Seconds(); d > 0 {
-		s.tokens = min(burst, s.tokens+d*rate)
-		s.refill = at
+	turn := ""
+	if ev.Session != nil {
+		turn = ev.Session.TurnID
 	}
-	if s.tokens < 1 {
-		return false
+	n := s.promptOccurrence(ev.Source, nat, ev.ID, turn, ev.TS.Time)
+	host, user, agent, sid := idParts(ev)
+	ev.Dedupe = event.DedupeKey(host, user, agent, sid, nat+"#"+strconv.Itoa(n), ev.Type)
+}
+
+func (s *session) promptOccurrence(src event.Source, nat, id, turn string, ts time.Time) int {
+	k := string(src) + "\x00" + nat
+	l := s.promptSeen[k]
+	if l == nil {
+		if len(s.promptOrder) >= maxPromptTexts {
+			delete(s.promptSeen, s.promptOrder[0])
+			s.promptOrder = s.promptOrder[1:]
+		}
+		l = &promptList{}
+		s.promptSeen[k] = l
+		s.promptOrder = append(s.promptOrder, k)
 	}
-	s.tokens--
-	return true
+	for i, o := range l.occ {
+		switch {
+		case id != "" && o.id == id, turn != "" && o.turn == turn:
+			return i
+		case turn == "" && o.turn == "" && ts.Sub(o.ts).Abs() <= promptRepeatWindow:
+			return i
+		}
+	}
+	if len(l.occ) < maxPromptOccs {
+		l.occ = append(l.occ, promptOcc{id: id, turn: turn, ts: ts})
+		return len(l.occ) - 1
+	}
+	// Past the cap a record is always a new occurrence: a replay is then
+	// written twice rather than a new prompt dropped.
+	l.extra++
+	return maxPromptOccs - 1 + l.extra
 }
 
 // push adds a processed record to the context ring.
@@ -471,6 +535,9 @@ func (p *Pipeline) summary(s *session, now time.Time, final bool, reason string)
 	p.emit(ev, now, true)
 	s.lastSummary = now
 	s.dirty = false
+	if final {
+		s.finalSent, s.finalDue = true, false
+	}
 }
 
 // coverageState is the session's coverage: covered (hook and another
@@ -504,7 +571,7 @@ func (p *Pipeline) sweepSessions(now time.Time, closing bool) {
 		case closing:
 			// A daemon restart does not end anyone's session.
 			final := p.mode != ModeDaemon || s.ended
-			if s.dirty {
+			if s.dirty || s.finalDue {
 				p.summary(s, now, final, "close")
 			}
 		case now.Sub(s.lastWall) >= SessionIdle:
@@ -514,9 +581,14 @@ func (p *Pipeline) sweepSessions(now time.Time, closing bool) {
 		}
 	}
 	for _, s := range idle {
-		if s.dirty {
+		if s.dirty || s.finalDue {
 			reason := "idle"
-			if s.ended {
+			switch {
+			case s.finalSent:
+				// Records processed after the final summary (a collector
+				// that delivered late): this one supersedes it.
+				reason = "late_records"
+			case s.ended:
 				reason = "session_end"
 			}
 			p.summary(s, now, true, reason)

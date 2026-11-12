@@ -210,7 +210,7 @@ func (c *computer) shell() {
 
 	kinds := secretKinds(cmd)
 	f["shell.has_secret"] = len(kinds) > 0
-	c.setList("shell.secret_kinds", kinds)
+	c.setDerived("shell.secret_kinds", kinds, partial)
 }
 
 // argv stores shell.argv: every literal argument of every command, the

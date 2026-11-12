@@ -9,6 +9,13 @@ $Exe  = Join-Path $Dir 'spoor.exe'
 $Ext  = Join-Path $Dir 'spoor.ext.exe'
 $Load = Join-Path $env:ProgramFiles 'osquery\extensions.load'
 if (-not (Test-Path $Exe)) { throw "spoor binary missing at $Exe" }
+# When orbit's own autoload file is not empty (Fleet manages extensions on
+# this host), orbit starts osquery with --extensions_autoload pointing at it
+# and osquery ignores $Load. Fail, so Fleet reports why (and rolls back).
+$OrbitLoad = Join-Path $env:ProgramFiles 'Orbit\extensions.load'
+if ((Test-Path $OrbitLoad) -and (Get-Item -Force $OrbitLoad).Length -gt 0) {
+  throw "orbit loads osquery extensions from $OrbitLoad (Fleet's extensions agent option), so osquery ignores $Load. Deliver spoor through that agent option, or deploy tier 2 (ATC) without this script."
+}
 $restart = $false
 Remove-Item -Force -ErrorAction SilentlyContinue -Path "$Ext.old"
 if (-not (Test-Path $Ext) -or (Get-FileHash $Exe).Hash -ne (Get-FileHash $Ext).Hash) {

@@ -64,6 +64,14 @@ var execSources = []execSource{
 // agent root processes recorded in spoor_agent_processes. The agent table
 // is read once (MATERIALIZED): ATC re-reads its file for every row of a
 // join's outer loop, measured at 2.6 s against 0.2 s for a 10,000-row table.
+//
+// A scheduled query over an evented table only sees the events since its
+// previous run, so the exec event of a grandchild's parent (an agent's
+// long-lived shell, say) is usually in an earlier batch. Depth 2 therefore
+// also looks the parent up in the live processes table, accepting it only
+// when it started no later than the grandchild (a reused pid started after
+// it). What remains invisible is a grandchild whose parent both started
+// before the previous run and exited before this one.
 func (g *gen) optIn() []Report {
 	agents := "SELECT CAST(pid AS INTEGER) AS pid, agent_id, user, session_ref\n" +
 		"    FROM " + tbl("agent_processes") + "\n" +
@@ -76,18 +84,25 @@ func (g *gen) optIn() []Report {
 		}
 		cols := "e.time, e.pid, e.parent, e.path, e.cmdline, e.cwd, e.uid, a.agent_id, a.user AS agent_user, a.session_ref"
 		q := "WITH agents AS MATERIALIZED (\n    " + agents + "),\n" +
-			"  ev AS MATERIALIZED (" + ev + ")\n" +
+			"  ev AS MATERIALIZED (" + ev + "),\n" +
+			"  live AS MATERIALIZED (SELECT pid, parent, start_time FROM processes WHERE pid IN (SELECT parent FROM ev))\n" +
 			"SELECT " + cols + ", 1 AS depth\n" +
 			"FROM ev e JOIN agents a ON e.parent = a.pid\n" +
-			"UNION ALL\n" +
+			"UNION\n" +
 			"SELECT " + cols + ", 2 AS depth\n" +
-			"FROM ev e JOIN ev c ON e.parent = c.pid JOIN agents a ON c.parent = a.pid;"
+			"FROM ev e JOIN ev c ON e.parent = c.pid JOIN agents a ON c.parent = a.pid\n" +
+			"UNION\n" +
+			"SELECT " + cols + ", 2 AS depth\n" +
+			"FROM ev e JOIN live c ON e.parent = c.pid AND c.start_time <= e.time JOIN agents a ON c.parent = a.pid;"
 		out = append(out, Report{
 			Key:  "exec_" + s.platform,
 			Name: "spoor opt-in - agent child processes (" + s.title + ")",
 			Description: "OPT-IN, sends raw command lines to Fleet: processes started by an AI agent's " +
 				"root process (depth 1) or by its direct children (depth 2), from " + s.table +
-				" joined to spoor_agent_processes. Needs " + s.flags + ". A pid reused within " +
+				" joined to spoor_agent_processes. Needs " + s.flags + ". osquery returns only the events " +
+				"since the previous run, so a depth-2 parent from an earlier run is looked up in the " +
+				"processes table; a grandchild whose parent started before the previous run and has " +
+				"exited is not attributed (join earlier depth-1 rows on pid downstream). A pid reused within " +
 				human(execAgentWindow) + " of the agent exiting can be misattributed.",
 			Query:    q,
 			Platform: s.platform,

@@ -280,6 +280,8 @@ rules:
     tags: [attack.t1222.002]
     references:
       - "redteam/detection-quality.md section 1 (chmod 777 on docker bind mounts)"
+    falsepositives:
+      - "chmod -R 777 on a build or cache directory inside a container"
     when:
       type: [tool.pre, process.exec]
     match:

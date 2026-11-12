@@ -42,9 +42,12 @@ var traitsByAgent = map[string]agentTraits{
 	},
 	// research/agent-surfaces-a.md section 3 (openai/codex main source):
 	// headless "codex exec", --ephemeral ("Run without persisting session
-	// files to disk"), --dangerously-bypass-hook-trust.
+	// files to disk"), --dangerously-bypass-hook-trust. codex-rs/cli/src/
+	// main.rs (re-read 2026-11-12): Exec has `visible_alias = "e"` ("Run
+	// Codex non-interactively") and Review is "Run a code review
+	// non-interactively" (it runs through the exec path).
 	"codex": {
-		headlessSub:   []string{"exec"},
+		headlessSub:   []string{"exec", "e", "review"},
 		hookFreeFlags: []string{"--dangerously-bypass-hook-trust"},
 		persistFlags:  []string{"--ephemeral"},
 		valueFlags: []string{"-c", "--config", "-m", "--model", "-p", "--profile", "-C", "--cd", "-s", "--sandbox",

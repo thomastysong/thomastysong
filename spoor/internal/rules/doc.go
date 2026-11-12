@@ -49,6 +49,15 @@
 // missing field never matches, except "|exists: false"; empty strings and
 // empty lists count as missing.
 //
+// Incomplete lists fail closed. features.Compute names every feature whose
+// value lost entries to a size cap in content.truncated_fields (and sets
+// shell.truncated for shell features). in_list on such a list is false,
+// also inside any_command / any_install when the quantified feature is
+// incomplete, because "every element is listed" cannot be shown for
+// elements nobody saw: padding a command with listed hosts cannot push an
+// unlisted one out of view. Rules can score the truncation itself through
+// shell.truncated and content.truncated_fields.
+//
 // Two quantifiers bind several conditions to ONE item, which flat
 // predicates over feature arrays cannot (measured: 3.3x to 3.6x
 // over-matching on real sessions):
@@ -80,7 +89,9 @@
 //
 // threshold {count, window, by} fires when count matches fall inside the
 // window (0 = no window), counted per session, user or host, and then
-// restarts the count. Detections are deduplicated per (rule, session,
+// restarts the count. Per-user and per-host counters a session fed travel
+// with its export, bound on import to the user or host of the session's
+// next event (never to an identity read from the state file). Detections are deduplicated per (rule, session,
 // dedup fields): repeats inside Options.SuppressFor (default 1h) are
 // counted, and the next emission carries the count. For class alert the
 // window is capped at 10 minutes and the key always includes the
@@ -110,9 +121,24 @@
 // fingerprints of credential values read from credential-class paths
 // (session.secret_flow is set when one of those values, raw, URL-encoded,
 // base64 or hex, appears in a later outbound command, URL or MCP argument).
-// ExportSession and ImportSession move this state through a one-shot hook
-// process; imported state is validated as hostile input and capped at
-// 64 KiB.
+// The outbound scan is bounded but not blind to padding: strings are
+// scanned shortest first, a string over 64 KiB on its head and tail, only
+// distinct candidates of a remembered value's length are fingerprinted, and
+// whenever a bound is hit session.secret_flow_truncated is set so a rule
+// can treat the request as opaque. ExportSession and ImportSession move
+// this state through a one-shot hook process; imported state is validated
+// as hostile input and capped at 64 KiB. Ids the state keeps (tool-use ids,
+// subagent ids, event ids) are stored verbatim only when they are valid
+// UTF-8 of at most 64 bytes and as a digest otherwise, so the engine never
+// exports state it would refuse to import.
+//
+// # Operator suppressions
+//
+// A suppression applies when its rule glob matches and every match entry
+// holds. On a list field every element must match the glob ("field|any"
+// accepts one matching element), so an exception written for a trusted
+// destination does not silence the same rule when an untrusted destination
+// rides along; a list named in content.truncated_fields never matches.
 //
 // # Known gaps
 //
@@ -133,7 +159,9 @@
 // Lint reports what the loader accepts but review must not: unknown field
 // names (validated against features.Registry), literals outside a closed
 // vocabulary, type mismatches, unknown lists, text matching
-// (re/contains/icontains/startswith/endswith) on target.command, alert
+// (re/contains/icontains/startswith/endswith, their any_* forms, and
+// in_list/any_in_list, whose entries may be prefix globs) on
+// target.command, alert
 // rules with fewer than two negative tests, responses on non-blockable
 // types, response: block in an embedded pack, duplicate ids and rules with
 // no effect.

@@ -37,17 +37,18 @@
 #   EXT_BIN          an extension binary (*.ext) serving $WORK/data/state.db
 #   OSQUERY_RESTART  shell command that restarts the host's osqueryd
 #   FLEET_URL        server URL for the dry run (default: https://localhost:8412)
+#   POLL             seconds between polls of the host (default: 3)
+#   SPOOR_VERIFY_LIB=1 with `source`: define the functions only (unit tests)
 set -euo pipefail
 
 FLEETCTL=${FLEETCTL:-fleetctl}
 FLEET_HOST=${FLEET_HOST:-vm}
 PREFIX=${PREFIX:-spoor-c5-}
+POLL=${POLL:-3}
 WORK=${WORK:-$(mktemp -d)}
-REPO=$(cd "$(dirname "$0")/../.." && pwd)
+REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 DB=$WORK/data/state.db
 BIN=$WORK/bin/spoor
-mkdir -p "$WORK/data" "$WORK/bin"
-exec > >(tee "$WORK/verify.log") 2>&1
 
 ts() { date -u +%H:%M:%S; }
 log() { echo "[$(ts)] $*"; }
@@ -67,9 +68,22 @@ check() { # check NAME GOT WANT
 	fi
 }
 
-# live SQL -> prints the JSON result line ({"host","rows","error"}).
+# live SQL -> prints the JSON result line ({"host","rows","error"}). A poll
+# that returns nothing (host slow to answer, fleetctl error) prints an error
+# line instead of failing, so pipefail and set -e do not end the run.
 live() {
-	fc report --hosts "$FLEET_HOST" --query "$1" --exit --quiet --timeout 90s 2>/dev/null | grep '^{' | head -n 1
+	local out
+	out=$(fc report --hosts "$FLEET_HOST" --query "$1" --exit --quiet --timeout 90s 2>/dev/null | grep '^{' | head -n 1) || true
+	if [ -z "$out" ]; then out='{"rows":[],"error":"no result from the host"}'; fi
+	printf '%s\n' "$out"
+}
+
+# append_line FILE LINE: add LINE unless present, never gluing it to a last
+# line that has no newline.
+append_line() {
+	if grep -qxF "$2" "$1" 2>/dev/null; then return 0; fi
+	if [ -s "$1" ] && [ -n "$(tail -c 1 "$1")" ]; then echo >>"$1"; fi
+	printf '%s\n' "$2" >>"$1"
 }
 
 harness() { # harness TEST [SCENARIO]
@@ -92,18 +106,6 @@ build_db() { # build_db SCENARIO
 		harness TestFleetStateDB "$1"
 	fi
 }
-
-HOST_ID=$(api /api/v1/fleet/hosts | jq -r --arg h "$FLEET_HOST" '.hosts[] | select(.hostname == $h) | .id')
-[ -n "$HOST_ID" ] || die "host $FLEET_HOST not enrolled"
-log "Fleet $(api /api/v1/fleet/version | jq -r .version), host $FLEET_HOST (id $HOST_ID), work dir $WORK"
-log "osquery $(live 'SELECT version FROM osquery_info' | jq -r '.rows[0].version')"
-
-# ---- save state, and restore it whatever happens ----
-fc get config --yaml >"$WORK/config.before.yml"
-fc get config --json | jq '.spec.agent_options' >"$WORK/agent-options.before.json"
-jq '{apiVersion: "v1", kind: "config", spec: {agent_options: .}}' "$WORK/agent-options.before.json" >"$WORK/agent-options.restore.yml"
-log "saved agent options ($(wc -c <"$WORK/agent-options.before.json") bytes) to $WORK/agent-options.before.json"
-EXT_REGISTERED=0
 
 prefixed_policy_ids() {
 	api /api/v1/fleet/global/policies | jq -r --arg p "$PREFIX" '[.policies // [] | .[] | select(.name | startswith($p)) | .id] | join(",")'
@@ -135,37 +137,28 @@ cleanup() {
 	log "objects named $PREFIX* left on the server: labels $left_labels, reports $left_reports, policies [${left_policies}]"
 	log "done: $FAILURES failed checks"
 }
-trap cleanup EXIT
-
-# ---- GitOps files: validation only ----
-log "fleetctl gitops --dry-run deploy/fleet/gitops/default.yml"
-(cd "$REPO/deploy/fleet/gitops" && FLEET_URL=${FLEET_URL:-https://localhost:8412} \
-	FLEET_GLOBAL_ENROLL_SECRET=dry-run-only-not-a-secret fc gitops --dry-run -f default.yml) | sed 's/^/  /'
-
-# ---- generated content for this host's paths ----
-harness TestFleetContent
-log "harness wrote specs, merged agent options and expectations for DB $DB"
-fc apply -f "$WORK/atc-apply.yml" | sed 's/^/  /'
-fc apply -f "$WORK/specs.yml" | sed 's/^/  /'
 
 wait_tables() { # wait_tables N: until N spoor tables are registered
+	local n=0
 	for _ in $(seq 1 40); do
-		n=$(live "SELECT count(*) AS n FROM osquery_registry WHERE registry = 'table' AND name LIKE 'spoor\_%' ESCAPE '\\' AND active = 1" | jq -r '.rows[0].n // 0')
-		[ "$n" = "$1" ] && return 0
-		sleep 3
+		n=$(live "SELECT count(*) AS n FROM osquery_registry WHERE registry = 'table' AND name LIKE 'spoor\_%' ESCAPE '\\' AND active = 1" | jq -r '.rows[0].n // 0' 2>/dev/null) || n=0
+		if [ "$n" = "$1" ]; then return 0; fi
+		sleep "$POLL"
 	done
 	die "spoor tables registered: $n, want $1"
 }
 
 refetch() { # refetch: wait until Fleet has fresh policy and label results
+	local t0 h p l
 	t0=$(date -u +%s)
 	api -X POST "/api/v1/fleet/hosts/$HOST_ID/refetch" >/dev/null
 	for _ in $(seq 1 60); do
-		sleep 3
-		h=$(api "/api/v1/fleet/hosts/$HOST_ID")
-		p=$(echo "$h" | jq -r '.host.policy_updated_at | sub("\\.[0-9]+"; "") | fromdateiso8601')
-		l=$(echo "$h" | jq -r '.host.label_updated_at | sub("\\.[0-9]+"; "") | fromdateiso8601')
-		if [ "$p" -gt "$t0" ] && [ "$l" -gt "$t0" ]; then
+		sleep "$POLL"
+		# A failed or partial poll is retried, not fatal.
+		h=$(api "/api/v1/fleet/hosts/$HOST_ID" 2>/dev/null) || continue
+		p=$(echo "$h" | jq -r '(.host.policy_updated_at // "1970-01-01T00:00:00Z") | sub("\\.[0-9]+"; "") | fromdateiso8601' 2>/dev/null) || p=0
+		l=$(echo "$h" | jq -r '(.host.label_updated_at // "1970-01-01T00:00:00Z") | sub("\\.[0-9]+"; "") | fromdateiso8601' 2>/dev/null) || l=0
+		if [ "${p:-0}" -gt "$t0" ] && [ "${l:-0}" -gt "$t0" ]; then
 			echo "$h" >"$WORK/host.json"
 			return 0
 		fi
@@ -217,6 +210,36 @@ scenario() { # scenario NAME TIER
 	done < <(jq -r --arg s "$sc" '.[$s].labels | keys[]' "$WORK/expected.json")
 }
 
+if [ "${SPOOR_VERIFY_LIB:-}" = 1 ]; then return 0; fi
+
+# ---- main ----
+mkdir -p "$WORK/data" "$WORK/bin"
+exec > >(tee "$WORK/verify.log") 2>&1
+
+HOST_ID=$(api /api/v1/fleet/hosts | jq -r --arg h "$FLEET_HOST" '.hosts[] | select(.hostname == $h) | .id')
+[ -n "$HOST_ID" ] || die "host $FLEET_HOST not enrolled"
+log "Fleet $(api /api/v1/fleet/version | jq -r .version), host $FLEET_HOST (id $HOST_ID), work dir $WORK"
+log "osquery $(live 'SELECT version FROM osquery_info' | jq -r '.rows[0].version')"
+
+# ---- save state, and restore it whatever happens ----
+fc get config --yaml >"$WORK/config.before.yml"
+fc get config --json | jq '.spec.agent_options' >"$WORK/agent-options.before.json"
+jq '{apiVersion: "v1", kind: "config", spec: {agent_options: .}}' "$WORK/agent-options.before.json" >"$WORK/agent-options.restore.yml"
+log "saved agent options ($(wc -c <"$WORK/agent-options.before.json") bytes) to $WORK/agent-options.before.json"
+EXT_REGISTERED=0
+trap cleanup EXIT
+
+# ---- GitOps files: validation only ----
+log "fleetctl gitops --dry-run deploy/fleet/gitops/default.yml"
+(cd "$REPO/deploy/fleet/gitops" && FLEET_URL=${FLEET_URL:-https://localhost:8412} \
+	FLEET_GLOBAL_ENROLL_SECRET=dry-run-only-not-a-secret fc gitops --dry-run -f default.yml) | sed 's/^/  /'
+
+# ---- generated content for this host's paths ----
+harness TestFleetContent
+log "harness wrote specs, merged agent options and expectations for DB $DB"
+fc apply -f "$WORK/atc-apply.yml" | sed 's/^/  /'
+fc apply -f "$WORK/specs.yml" | sed 's/^/  /'
+
 log "== tier 2: ATC"
 wait_tables "$(wc -l <"$WORK/tables.txt")"
 log "all $(wc -l <"$WORK/tables.txt") spoor tables registered through ATC"
@@ -238,7 +261,7 @@ if [ -n "${EXT_LOAD:-}" ] && [ -n "${EXT_BIN:-}" ] && [ -n "${OSQUERY_RESTART:-}
 	fc apply -f "$WORK/agent-options.restore.yml" | sed 's/^/  /'
 	wait_tables 0
 	log "ATC tables gone; registering the extension in $EXT_LOAD"
-	grep -qxF "$EXT_BIN" "$EXT_LOAD" 2>/dev/null || printf '%s\n' "$EXT_BIN" >>"$EXT_LOAD"
+	append_line "$EXT_LOAD" "$EXT_BIN"
 	EXT_REGISTERED=1
 	sh -c "$OSQUERY_RESTART"
 	wait_tables "$(wc -l <"$WORK/tables.txt")"

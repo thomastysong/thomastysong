@@ -28,7 +28,10 @@ const (
 	// (shellx keeps 512 entries per list, 2048 commands per analysis and
 	// 1024 arguments per command), so a list is cut here only when several
 	// analyses were merged (head, tail and tail rescan of an oversized
-	// command line) or an analyzer already stopped. A cut keeps the first
+	// command line) or an analyzer already stopped; shell.argv, the
+	// flattened arguments of every command, is the exception (shell.cmds
+	// keeps the structured form, which is what rules should use). A cut
+	// keeps the first
 	// and the last half, because a payload appended after padding sits at
 	// the end, and it is never silent: the field is named in
 	// content.truncated_fields (and shell.truncated is set for shell

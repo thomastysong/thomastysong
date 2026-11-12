@@ -4,8 +4,11 @@
 # Set the URL and SHA-256 of each build below. A value may name a Fleet
 # custom variable (FLEET_SECRET_* with a leading dollar sign): Fleet fills it
 # in before the script runs, and fleetctl gitops then requires it to be set,
-# even in a comment. SPOOR_TIER=atc skips the extension (tier 2: osquery
-# reads the state DB through ATC agent options).
+# even in a comment. TIER must match the agent options: extension (tier 3,
+# agent options without spoor's ATC tables) or atc (tier 2, ATC agent
+# options; the extension is not registered). Fleet runs scripts without
+# environment variables, so edit the defaults here; the SPOOR_* variables
+# are for running the script by hand.
 set -eu
 umask 022
 
@@ -17,7 +20,7 @@ URL_DARWIN_AMD64=${SPOOR_URL_DARWIN_AMD64:-https://downloads.example.com/spoor/0
 SHA_DARWIN_AMD64=${SPOOR_SHA256_DARWIN_AMD64:-REPLACE_WITH_SHA256}
 URL_DARWIN_ARM64=${SPOOR_URL_DARWIN_ARM64:-https://downloads.example.com/spoor/0.1.0/spoor_darwin_arm64}
 SHA_DARWIN_ARM64=${SPOOR_SHA256_DARWIN_ARM64:-REPLACE_WITH_SHA256}
-TIER=${SPOOR_TIER:-extension}
+TIER=${SPOOR_TIER:-extension} # or atc
 ROOT=${SPOOR_ROOT:-} # test prefix; empty on real hosts
 
 die() { echo "spoor install: $*" >&2; exit 1; }
@@ -46,6 +49,16 @@ esac
 EXT=$EXTDIR/spoor.ext
 # orbit rewrites its own autoload file; osquery's default one is ours to use.
 case $LOAD in */orbit/*) die "refusing to write orbit's extensions.load" ;; esac
+# But when orbit's file is not empty (Fleet manages extensions here, the
+# `extensions` agent option), orbit starts osquery with --extensions_autoload
+# pointing at it, osquery ignores $LOAD, and spoor would never load.
+if [ "$TIER" = extension ]; then
+	for f in "$ROOT/opt/orbit/extensions.load" "$ROOT/var/lib/orbit/extensions.load"; do
+		if [ -s "$f" ]; then
+			die "orbit loads osquery extensions from $f (Fleet's extensions agent option), so osquery ignores $LOAD. Deliver spoor through that agent option, or use TIER=atc with the ATC agent options."
+		fi
+	done
+fi
 
 eval "url=\$URL_$(echo "${os}_$arch" | tr a-z A-Z)"
 eval "want=\$SHA_$(echo "${os}_$arch" | tr a-z A-Z)"
@@ -204,6 +217,8 @@ if [ "$TIER" = extension ]; then
 	put "$BIN" "$EXT" 0755
 	install -d -m 0755 "$(dirname "$LOAD")"
 	if ! grep -qxF "$EXT" "$LOAD" 2>/dev/null; then
+		# A last line without a newline would be glued to ours.
+		if [ -s "$LOAD" ] && [ -n "$(tail -c 1 "$LOAD")" ]; then echo >>"$LOAD"; fi
 		printf '%s\n' "$EXT" >>"$LOAD"
 		load_changed=1
 	fi

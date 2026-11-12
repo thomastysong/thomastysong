@@ -41,7 +41,7 @@ const (
 const (
 	flowTextScan = 64 << 10 // longer strings: head and tail flowTextScan/2 each
 	maxFlowBytes = 1 << 20  // bytes scanned per event
-	maxFlowCands = 1 << 17  // distinct candidate strings per event
+	maxFlowCands = 1 << 15  // distinct candidates fingerprinted or decoded per event
 	maxFlowTexts = 1024     // MCP argument strings per event
 )
 
@@ -230,6 +230,14 @@ func inputStrings(ev *event.Event, limit int) ([]string, bool) {
 				}
 				walk(x, depth+1)
 			}
+		case []string:
+			for _, x := range t {
+				if len(out) >= limit {
+					cut = true
+					return
+				}
+				out = append(out, x)
+			}
 		}
 	}
 	walk(ev.Content.ToolInput, 0)
@@ -320,10 +328,47 @@ func cutTail(s string, n int) string {
 
 const coarseSep = " \t\r\n'\"`;|&<>(){}[],"
 
+// Separator sets as byte tables (every separator is ASCII, so a byte scan
+// never splits a multi-byte rune): coarse words, words split at key/value
+// and URL punctuation, the same plus '/', and decoded text.
+var (
+	sepCoarse  = sepTable(coarseSep)
+	sepKV      = sepTable("=:&?@#")
+	sepKVPath  = sepTable("=:&?@#/")
+	sepDecoded = sepTable(coarseSep + "=:")
+)
+
+func sepTable(seps string) *[256]bool {
+	var t [256]bool
+	for i := 0; i < len(seps); i++ {
+		t[seps[i]] = true
+	}
+	return &t
+}
+
+// fields calls f with each maximal run of s that holds no separator byte.
+func fields(s string, sep *[256]bool, f func(string)) {
+	start := -1
+	for i := 0; i < len(s); i++ {
+		if sep[s[i]] {
+			if start >= 0 {
+				f(s[start:i])
+				start = -1
+			}
+		} else if start < 0 {
+			start = i
+		}
+	}
+	if start >= 0 {
+		f(s[start:])
+	}
+}
+
 // flowScan carries the candidate budget of one event. A candidate is
 // fingerprinted only when its length is the length of a remembered value,
-// and each distinct candidate is considered once, so repeated or
-// wrong-length padding costs no fingerprints.
+// each distinct candidate is considered once, and a candidate that can be
+// neither fingerprinted nor decoded costs nothing, so repeated or
+// wrong-length padding spends no budget.
 type flowScan struct {
 	budget    int
 	seen      map[string]bool // candidate -> its decodings were tried
@@ -344,31 +389,35 @@ func flowCandidates(text string, sc *flowScan) {
 		}
 	}
 	for _, v := range versions {
-		for _, tok := range strings.FieldsFunc(v, func(r rune) bool { return strings.ContainsRune(coarseSep, r) }) {
-			sc.consider(tok, true)
-			for _, sub := range splitAny(tok, "=:&?@#") {
-				sc.consider(sub, true)
-			}
-			for _, sub := range splitAny(tok, "=:&?@#/") {
-				sc.consider(sub, true)
-			}
+		fields(v, sepCoarse, func(tok string) {
 			if sc.exhausted {
 				return
 			}
+			sc.consider(tok, true)
+			fields(tok, sepKV, func(sub string) {
+				if sub != tok {
+					sc.consider(sub, true)
+				}
+			})
+			fields(tok, sepKVPath, func(sub string) {
+				if sub != tok {
+					sc.consider(sub, true)
+				}
+			})
+		})
+		if sc.exhausted {
+			return
 		}
 	}
-}
-
-func splitAny(s, seps string) []string {
-	if !strings.ContainsAny(s, seps) {
-		return nil
-	}
-	return strings.FieldsFunc(s, func(r rune) bool { return strings.ContainsRune(seps, r) })
 }
 
 func (sc *flowScan) consider(c string, decode bool) {
 	if len(c) < minSecretValue || len(c) > maxSecretValue {
 		return
+	}
+	fingerprint := sc.anyLen || sc.lens[len(c)]
+	if !fingerprint && (!decode || len(c) < 12) {
+		return // neither a possible value nor decodable (decodings need 12+ bytes)
 	}
 	tried, ok := sc.seen[c]
 	if ok && (tried || !decode) {
@@ -380,7 +429,7 @@ func (sc *flowScan) consider(c string, decode bool) {
 			return
 		}
 		sc.budget--
-		if sc.anyLen || sc.lens[len(c)] {
+		if fingerprint {
 			sc.match(c)
 		}
 	}
@@ -390,9 +439,7 @@ func (sc *flowScan) consider(c string, decode bool) {
 	}
 	for _, d := range decodings(c) {
 		sc.consider(strings.TrimSpace(d), false)
-		for _, tok := range strings.FieldsFunc(d, func(r rune) bool { return strings.ContainsRune(coarseSep+"=:", r) }) {
-			sc.consider(tok, false)
-		}
+		fields(d, sepDecoded, func(tok string) { sc.consider(tok, false) })
 	}
 }
 

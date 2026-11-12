@@ -154,6 +154,9 @@ rules:
       - name: managed policy present
         event: { type: inventory.asset, asset: { id: a2, kind: agent, name: Claude Code, catalog_id: claude-code, risk_flags: [managed_policy_present] } }
         expect: no_match
+      - name: user-scope bypass default
+        event: { type: inventory.asset, asset: { id: a3, kind: agent, name: Claude Code, catalog_id: claude-code, risk_flags: [bypass_permissions_default] } }
+        expect: no_match
 
   - id: SPR-POST-005
     title: Model endpoint overridden in configuration
@@ -188,6 +191,9 @@ rules:
         expect: match
       - name: no override
         event: { type: inventory.asset, asset: { id: a4, kind: agent, name: Codex, catalog_id: codex } }
+        expect: no_match
+      - name: MCP server over plaintext
+        event: { type: inventory.asset, asset: { id: m5, kind: mcp_server, name: docs, risk_flags: [plaintext_transport] } }
         expect: no_match
 
   - id: SPR-POST-006
@@ -349,6 +355,9 @@ rules:
     references:
       - "research/threats.md section 2 row 35: postmark-mcp"
       - "research/threats.md section 6 (npx -y servers are the default)"
+    falsepositives:
+      - "Servers launched with npx or uvx while a user evaluates them"
+      - "Vendor documentation that recommends @latest"
     when:
       type: inventory.asset
     match:
@@ -379,6 +388,8 @@ rules:
     tags: [owasp.mcp07]
     references:
       - "research/threats.md section 1 (ADR Discovery plaintext/SSE transport check)"
+    falsepositives:
+      - "MCP servers on localhost or a private network segment over plain HTTP"
     when:
       type: inventory.asset
     match:
@@ -409,6 +420,8 @@ rules:
     tags: [attack.t1611, owasp.mcp02]
     references:
       - "research/threats.md section 2 row 22: sandbox escapes (Docker socket)"
+    falsepositives:
+      - "MCP servers that manage containers and need the Docker socket by design"
     when:
       type: inventory.asset
     match:
@@ -443,6 +456,8 @@ rules:
     references:
       - "research/threats.md section 2 row 11: CVE-2026-35603"
       - "research/threats.md section 3 R52"
+    falsepositives:
+      - "Single-user machines where the only user is also the administrator"
     when:
       type: inventory.asset
     match:
@@ -546,6 +561,8 @@ rules:
     references:
       - "research/threats.md section 2 row 33"
       - "research/threats.md section 3 R19"
+    falsepositives:
+      - "Instruction files a user downloaded from a trusted colleague or vendor"
     when:
       type: inventory.asset
     match:
@@ -616,6 +633,8 @@ rules:
     tags: [owasp.asi10]
     references:
       - "research/threats.md section 3 R02, R36"
+    falsepositives:
+      - "Sandboxed or disposable environments where approvals are turned off on purpose"
     when:
       type: inventory.asset
     match:
@@ -654,6 +673,9 @@ rules:
       - "research/threats.md section 2 row 19: CVE-2026-12537"
       - "research/threats.md section 2 row 20: CVE-2026-10591"
       - "research/threats.md section 3 R51"
+    falsepositives:
+      - "Hosts where the old version is installed but unused"
+      - "Vendor backports that fix the issue without changing the version number"
     when:
       type: inventory.asset
     match:
@@ -706,6 +728,8 @@ rules:
     references:
       - "research/threats.md section 2 row 4: MCPoison CVE-2025-54136; row 36: rug pulls"
       - "research/threats.md section 3 R10, R16; section 4 S5"
+    falsepositives:
+      - "Routine updates of an MCP server, skill or plugin by its owner"
     when:
       type: inventory.asset
     match:

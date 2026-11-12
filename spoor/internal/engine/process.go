@@ -3,10 +3,8 @@ package engine
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"net/url"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/thomastysong/spoor/internal/event"
@@ -26,12 +24,40 @@ func (p *Pipeline) processSafe(ev *event.Event, now time.Time) {
 	p.process(ev, now)
 }
 
-// process runs one record through the pipeline; pmu is held.
+// process runs one arriving record through the pipeline; pmu is held.
 func (p *Pipeline) process(ev *event.Event, now time.Time) {
 	if ev == nil {
 		return
 	}
 	p.ctr.processed++
+	// Surface health counts arrivals, whatever becomes of the record.
+	p.observeSurface(ev, now)
+	p.processAs(ev, now, attrOwn)
+	p.adoptPending(now)
+}
+
+// processAsSafe is processAs behind a recover, for records processed after
+// a wait (attribution).
+func (p *Pipeline) processAsSafe(ev *event.Event, now time.Time, how attribution) {
+	defer func() {
+		if r := recover(); r != nil {
+			p.ctr.panics++
+			p.ctr.errors++
+		}
+	}()
+	p.processAs(ev, now, how)
+}
+
+// processAs processes a record whose account came from how.
+func (p *Pipeline) processAs(ev *event.Event, now time.Time, how attribution) {
+	// 0. A record without an account (OTel) takes the account of the one
+	// live session it belongs to, or waits for it (attribution.go).
+	if how == attrOwn && needsAccount(ev) {
+		var ok bool
+		if how, ok = p.attribute(ev, now, false); !ok {
+			return
+		}
+	}
 	// 1. Exclusions first, before any content is looked at. An excluded
 	// session stays excluded even for its later records that lack the
 	// identity fields the exclusion matched on.
@@ -52,17 +78,17 @@ func (p *Pipeline) process(ev *event.Event, now time.Time) {
 				clear(p.excluded)
 			}
 			p.excluded[skey] = struct{}{}
+			p.excludeAttr(p.attrKeyOf(ev))
 			p.dropSession(skey)
 		}
 		return
 	}
 	// 2. Identity.
 	p.normalize(ev, now)
-	p.observeSurface(ev)
 
 	switch ev.Kind {
 	case event.KindActivity:
-		p.activity(ev, skey, now)
+		p.activity(ev, skey, now, how)
 	case event.KindInventory:
 		p.inventory(ev, now)
 	case event.KindDetection:
@@ -85,7 +111,28 @@ func userSurface(s event.Source) bool {
 	return false
 }
 
-// normalize sets V, kind, ts, host, integrity, Dedupe and ID.
+// knownSource reports a Source of the closed vocabulary.
+func knownSource(s event.Source) bool {
+	switch s {
+	case event.SourceHook, event.SourceTranscript, event.SourceProcess, event.SourceScan,
+		event.SourceOTel, event.SourceOsquery, event.SourceAdapter, event.SourceSensor:
+		return true
+	}
+	return false
+}
+
+// knownToolKind reports a ToolKind of the closed vocabulary.
+func knownToolKind(k event.ToolKind) bool {
+	switch k {
+	case event.ToolShell, event.ToolFileRead, event.ToolFileWrite, event.ToolFileEdit, event.ToolFileList,
+		event.ToolWebFetch, event.ToolWebSearch, event.ToolMCP, event.ToolSubagent, event.ToolBrowser, event.ToolOther:
+		return true
+	}
+	return false
+}
+
+// normalize sets V, kind, ts, host, integrity, Dedupe and ID, and clears
+// what only the pipeline may set.
 func (p *Pipeline) normalize(ev *event.Event, now time.Time) {
 	if ev.V == 0 {
 		ev.V = event.SchemaVersion
@@ -96,6 +143,22 @@ func (p *Pipeline) normalize(ev *event.Event, now time.Time) {
 		// Closed vocabulary: anything else is treated as activity, which
 		// is also what the privacy stage does with unknown kinds.
 		ev.Kind = event.KindActivity
+	}
+	// Emitted is the time this pipeline writes the record (SIEM rules
+	// schedule on it) and Sources the surfaces this pipeline correlated; a
+	// value a (user-writable) source carries would move the record out of
+	// detection windows or claim corroboration that never happened. Detect
+	// mode re-evaluates records an earlier pipeline correlated, so it keeps
+	// their Sources.
+	ev.Emitted = event.Time{}
+	if p.mode != ModeDetect {
+		ev.Sources = nil
+	}
+	// Tool.Kind keys per-session counters and the summary: an unknown kind
+	// from a user-written record becomes "other" instead of a new key.
+	if ev.Tool != nil && ev.Tool.Kind != "" && !knownToolKind(ev.Tool.Kind) {
+		ev.Tool.Kind = event.ToolOther
+		p.ctr.unknownVocab++
 	}
 	if ev.TS.IsZero() {
 		ev.TS = event.At(now)
@@ -226,27 +289,38 @@ func contentKey(ev *event.Event) string {
 }
 
 // activity handles one activity record.
-func (p *Pipeline) activity(ev *event.Event, skey string, now time.Time) {
+func (p *Pipeline) activity(ev *event.Event, skey string, now time.Time, how attribution) {
 	var s *session
 	if skey != "" {
 		s = p.sessionFor(ev, skey, now)
 	}
+	if s != nil && ev.Type == event.TypePromptSubmit {
+		p.promptDedupe(ev, s)
+	}
 	p.observeCoverage(ev, s, now)
 	if s != nil {
-		s.surfaces[ev.Source] = true
+		// Source is a free string in a user-written record: only the
+		// closed vocabulary becomes a key of the session's surfaces.
+		if knownSource(ev.Source) {
+			s.surfaces[ev.Source] = true
+		}
 		s.lastWall = now
 	}
 	if hookEvent, runs, ok := hookRun(ev); ok && s != nil {
 		s.noteOTelHookRun(hookEvent, runs, now)
 	}
-	if ev.Source == event.SourceHook && s != nil {
+	if ev.Source == event.SourceHook && s != nil && toolRecord(ev) {
+		// Only tool hooks are compared with OTel hook-run counts.
 		s.hookRecords[ev.Type]++
 	}
-	switch p.corr.decide(p, ev, s, now) {
+	switch p.corr.decide(p, ev, s, now, how) {
 	case corrHeld, corrDuplicate:
 		return
 	}
 	p.evaluate(ev, s, now)
+	if s != nil {
+		p.maybeFinal(s, now)
+	}
 }
 
 // evaluate computes features, runs the rules and writes the activity record
@@ -263,23 +337,24 @@ func (p *Pipeline) evaluate(ev *event.Event, s *session, now time.Time) {
 	// Compute is idempotent: the rules engine's own call becomes a no-op,
 	// so features see this account's home rather than one engine-wide home.
 	features.Compute(ev, ctx)
+	p.firstSeen(ev)
 	res := p.eng.Eval(ev)
 	if res.Timeout {
 		p.ctr.ruleTimeouts++
 	}
-	if s != nil {
-		s.add(ev)
-	}
 	if flow, _ := ev.Feat["session.secret_flow"].(bool); flow {
 		// This record carries a credential value read earlier in the
 		// session, in some encoding (base64, hex, URL) the redactor cannot
-		// recognise on its own. Detection is done; what is written must
-		// not carry the value.
+		// recognise on its own. Detection is done; nothing written from it
+		// (record, detections, context, summary) may carry the value.
 		p.ctr.flowScrubbed++
 		scrubFlow(ev)
 		for _, d := range res.Detections {
 			scrubFlow(d)
 		}
+	}
+	if s != nil {
+		s.add(ev)
 	}
 	if ev.Kind == event.KindActivity {
 		p.emitActivity(ev, s, now)
@@ -291,26 +366,39 @@ func (p *Pipeline) evaluate(ev *event.Event, s *session, now time.Time) {
 		s.push(ev, p.contextN)
 		if ev.Type == event.TypeSessionEnd {
 			s.ended = true
-			p.summary(s, now, true, "session_end")
+			// Records of the session still waiting for their hook twin
+			// belong in its final summary: it is written when the last of
+			// them has been processed (maybeFinal).
+			s.finalDue = true
 		}
 	}
 }
 
-// emitActivity writes an activity record unless the session's token
-// bucket is empty: detection has already run on it either way, so the
-// limit only bounds volume, never what is detected.
+// maybeFinal writes the final summary of an ended session once none of its
+// records is held.
+func (p *Pipeline) maybeFinal(s *session, now time.Time) {
+	if !s.finalDue || s.heldN > 0 {
+		return
+	}
+	s.finalDue = false
+	p.summary(s, now, true, "session_end")
+}
+
+// emitActivity writes an activity record unless a token bucket is empty
+// (limits.go): detection has already run on it either way, so the limit
+// only bounds volume, never what is detected.
 func (p *Pipeline) emitActivity(ev *event.Event, s *session, now time.Time) {
-	if s != nil {
-		at := now
-		if p.mode == ModeDetect || p.mode == ModeScan {
-			// Replays run at disk speed; their rate is the recorded one.
-			at = ev.TS.Time
-		}
-		if !s.allow(at, p.rate, p.burst) {
+	at := now
+	if p.mode == ModeDetect || p.mode == ModeScan {
+		// Replays run at disk speed; their rate is the recorded one.
+		at = ev.TS.Time
+	}
+	if !p.allowActivity(ev, s, at) {
+		if s != nil {
 			s.suppressed++
-			p.ctr.activitySuppressed++
-			return
 		}
+		p.ctr.activitySuppressed++
+		return
 	}
 	p.emit(ev, now, false)
 }
@@ -320,6 +408,7 @@ func (p *Pipeline) emitActivity(ev *event.Event, s *session, now time.Time) {
 func (p *Pipeline) inventory(ev *event.Event, now time.Time) {
 	p.observeInventory(ev, now)
 	features.Compute(ev, features.Context{})
+	p.firstSeenAsset(ev)
 	res := p.eng.Eval(ev)
 	p.emit(ev, now, true)
 	for _, d := range res.Detections {
@@ -421,93 +510,4 @@ func (p *Pipeline) detection(d *event.Event, s *session, now time.Time) {
 		p.ctr.contextRecords++
 		p.write(c, true, now)
 	}
-}
-
-// flowMarker replaces values that carried a session secret.
-const flowMarker = "[REDACTED:secret_flow]"
-
-// rawFeatures are features that hold raw substrings of the command line or
-// tool input; they are dropped from a flow record's feature view so no
-// evidence can be rendered from them.
-var rawFeatures = []string{
-	"shell.argv", "shell.cmds", "shell.urls", "shell.decoded", "shell.install_sources",
-	"shell.env_assign", "shell.reads", "shell.writes", "shell.deletes", "shell.executes_paths",
-	"mcp.arg_paths", "session.written_exec_path",
-}
-
-// scrubFlow reduces the outbound parts of a record that carried a session
-// secret to their skeleton: the command to its program names, URLs to
-// scheme and host, tool input and content dropped. The record keeps
-// hosts, classes and ids, which is what the finding needs.
-func scrubFlow(e *event.Event) {
-	if e == nil {
-		return
-	}
-	if e.Target != nil {
-		t := *e.Target
-		if t.Command != "" {
-			names, _ := e.Feat["shell.commands"].([]string)
-			t.Command = strings.TrimSpace(strings.Join(names, " ") + " " + flowMarker)
-		}
-		if t.URL != "" {
-			t.URL = urlSkeleton(t.URL)
-		}
-		t.Query = ""
-		t.Paths = append([]string(nil), t.Paths...)
-		t.Hosts = append([]string(nil), t.Hosts...)
-		e.Target = &t
-	}
-	if e.Tool != nil {
-		tt := *e.Tool
-		tt.Input = nil
-		tt.InputKeys = append([]string(nil), e.Tool.InputKeys...)
-		e.Tool = &tt
-	}
-	if e.Process != nil && len(e.Process.Args) > 0 {
-		pr := *e.Process
-		pr.Args = []string{flowMarker}
-		pr.Ancestors = append([]string(nil), e.Process.Ancestors...)
-		pr.EnvMarkers = append([]string(nil), e.Process.EnvMarkers...)
-		pr.Flags = append([]string(nil), e.Process.Flags...)
-		e.Process = &pr
-	}
-	e.Content = nil
-	if e.Feat != nil {
-		f := make(map[string]any, len(e.Feat))
-		for k, v := range e.Feat {
-			f[k] = v
-		}
-		for _, k := range rawFeatures {
-			delete(f, k)
-		}
-		e.Feat = f
-	}
-	if e.Labels == nil {
-		e.Labels = map[string]string{}
-	} else {
-		l := make(map[string]string, len(e.Labels)+1)
-		for k, v := range e.Labels {
-			l[k] = v
-		}
-		e.Labels = l
-	}
-	e.Labels["redacted"] = "secret_flow"
-	if e.Detection != nil && len(e.Detection.Evidence) > 0 {
-		ev := make(map[string]string, len(e.Detection.Evidence))
-		for k, v := range e.Detection.Evidence {
-			ev[k] = v
-		}
-		if _, ok := ev["target.command"]; ok {
-			ev["target.command"] = e.Target.Command
-		}
-		e.Detection.Evidence = ev
-	}
-}
-
-func urlSkeleton(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
-		return flowMarker
-	}
-	return u.Scheme + "://" + u.Host + "/" + flowMarker
 }

@@ -49,6 +49,8 @@ var osqueryStubs = map[string][]string{
 	"process_events":     {"pid", "parent", "path", "cmdline", "cwd", "uid", "time"},
 	"es_process_events":  {"pid", "parent", "path", "cmdline", "cwd", "uid", "time", "event_type"},
 	"process_etw_events": {"pid", "ppid", "path", "cmdline", "username", "time", "type"},
+	"processes":          {"pid", "parent", "start_time"},
+	"os_version":         {"platform", "platform_like", "name"},
 }
 
 type emu struct {

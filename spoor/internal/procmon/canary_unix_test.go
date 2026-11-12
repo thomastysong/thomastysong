@@ -48,10 +48,53 @@ func TestRootOnlyExecutable(t *testing.T) {
 	if err := os.WriteFile(inOpen, nil, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// A chain through a directory anyone can write: the middle link can be
+	// repointed between the check and os.StartProcess, which resolves the
+	// path again.
+	hop := filepath.Join(openDir, "hop")
+	if err := os.Symlink(good, hop); err != nil {
+		t.Fatal(err)
+	}
+	// Directory links: one in a root-only directory (merged /usr's
+	// /bin -> usr/bin) is followed; one in a world-writable directory is not.
+	binDir := filepath.Join(dir, "usr-bin")
+	if err := os.Mkdir(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	inBin := filepath.Join(binDir, "true")
+	if err := os.WriteFile(inBin, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link("bin", binDir)
+	if err := os.Symlink(binDir, filepath.Join(openDir, "bin")); err != nil {
+		t.Fatal(err)
+	}
+	// A sticky world-writable directory holding a root-owned directory
+	// (/tmp style): only root can replace root's entries in it.
+	sticky := filepath.Join(dir, "sticky")
+	if err := os.Mkdir(sticky, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(sticky, 0o777|os.ModeSticky); err != nil {
+		t.Fatal(err)
+	}
+	stickyBin := filepath.Join(sticky, "bin")
+	if err := os.Mkdir(stickyBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stickyBin, "true"), nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	tests := []struct {
 		name, path string
 		want       bool
 	}{
+		{"link chain through a world-writable directory", link("true5", hop), false},
+		{"link to a link", link("true6", link("true7", good)), false},
+		{"directory link in a root-only directory", filepath.Join(dir, "bin", "true"), true},
+		{"directory link in a world-writable directory", filepath.Join(openDir, "bin", "true"), false},
+		{"root-owned directory in a sticky directory", filepath.Join(stickyBin, "true"), true},
+		{"relative path", "true", false},
 		{"root-owned 0755", good, true},
 		{"group-writable", shared, false},
 		{"not executable", noexec, false},

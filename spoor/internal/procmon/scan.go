@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/thomastysong/spoor/internal/catalog"
-	"github.com/thomastysong/spoor/internal/classify"
 	"github.com/thomastysong/spoor/internal/event"
 	"github.com/thomastysong/spoor/internal/platform"
 )
@@ -44,7 +43,7 @@ func (m *Monitor) prepare(id ident, rec *platform.Proc, via string, ts time.Time
 	if id.pid != m.self {
 		o.cand = m.candidate(rec, env, o.envF)
 	}
-	if o.cand == nil && (o.envF.product != "" || m.parentAttributed(id.ppid)) {
+	if o.cand == nil && (o.envF.verified || m.parentAttributed(id.ppid)) {
 		o.cwd = m.src.cwd(id.pid)
 	}
 	return o
@@ -59,7 +58,7 @@ func (m *Monitor) parentAttributed(ppid int) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	p := m.nodes[ppid]
-	return p != nil && (p.root != nil || p.owner != nil || p.env.product != "" || m.enclosing(p) != nil)
+	return p != nil && (p.root != nil || p.owner != nil || p.env.verified || m.enclosing(p) != nil)
 }
 
 // candidate identifies an agent root from the catalog. Only products of
@@ -87,16 +86,16 @@ func (m *Monitor) buildCand(rec *platform.Proc, env map[string]string, ef envFac
 	}
 	ops := operands(expandTitle(rec.Args))
 	t := traitsByAgent[p.ID]
-	args, cut := capArgs(rec.Args)
+	args, cut := emitArgs(rec.Args)
 	ap := AgentProc{
 		PID:             rec.PID,
 		PPID:            rec.PPID,
 		Start:           rec.Start,
 		AgentID:         p.ID,
-		Name:            capString(rec.Name, 255),
+		Name:            emitName(rec.Name),
 		Exe:             capString(rec.Exe, 4096),
 		User:            event.User{Name: capString(rec.User, 256), ID: capString(rec.UID, 128)},
-		Args:            classify.RedactArgs(args),
+		Args:            args,
 		Flags:           p.RiskyArgs(ops),
 		Headless:        t.headless(ops),
 		Bare:            t.bare(ops, env),
@@ -108,7 +107,10 @@ func (m *Monitor) buildCand(rec *platform.Proc, env map[string]string, ef envFac
 	}
 	anc := m.ancestry(rec.PPID)
 	for _, a := range anc {
-		ap.Ancestors = append(ap.Ancestors, capString(a.name, 255))
+		// The raw names stay in anc for the lifecycle check; what is kept
+		// and emitted is redacted (a parent's process title is a command
+		// line).
+		ap.Ancestors = append(ap.Ancestors, emitName(a.name))
 	}
 	ap.LifecycleParent = lifecycleParent(env, anc)
 	id, rt, pod := m.src.workload(rec.PID)
@@ -224,6 +226,7 @@ func (m *Monitor) fullScan(now time.Time) {
 	present := make(map[int]struct{}, len(ids))
 	var need []ident
 	var execd []bool
+	var changed []nameChange
 	var evs []*event.Event
 	m.mu.Lock()
 	for _, id := range ids {
@@ -234,20 +237,18 @@ func (m *Monitor) fullScan(now time.Time) {
 			if mk, ok := m.exitMark[id.pid]; !ok || mk.seq <= seq0 {
 				need, execd = append(need, id), append(execd, false)
 			}
-		case n.key == 0 && n.comm != "" && id.comm != "" && n.comm != id.comm:
-			// A fork the connector reported, whose exec it then lost.
-			need, execd = append(need, id), append(execd, true)
+		case n.key != 0 && n.key != id.key:
+			need, execd = append(need, id), append(execd, false)
+		case id.comm != "" && n.comm != "" && n.comm != id.comm:
+			// A new name: an exec the connector did not report (or a
+			// fork whose exec it lost), or the process renaming itself.
+			changed = append(changed, nameChange{id: id, exe: n.exe})
 		case n.key == 0:
 			// A fork the connector reported; the image is the parent's.
 			n.key, n.comm = id.key, id.comm
 			if n.ppid <= 0 {
 				n.ppid = id.ppid
 			}
-		case n.key != id.key:
-			need, execd = append(need, id), append(execd, false)
-		case id.comm != "" && n.comm != "" && n.comm != id.comm:
-			// The process ran exec without the connector telling us.
-			need, execd = append(need, id), append(execd, true)
 		default:
 			if id.ppid > 0 && n.ppid != id.ppid {
 				n.ppid = id.ppid // re-parented; attribution is kept
@@ -266,7 +267,7 @@ func (m *Monitor) fullScan(now time.Time) {
 	m.mu.Unlock()
 	m.enqueue(evs)
 
-	obs := make([]*observed, 0, len(need))
+	obs := make([]*observed, 0, len(need)+len(changed))
 	for i, id := range need {
 		o := m.prepare(id, recs[id.pid], viaPoll, time.Time{})
 		if o == nil {
@@ -275,7 +276,59 @@ func (m *Monitor) fullScan(now time.Time) {
 		o.exec = execd[i]
 		obs = append(obs, o)
 	}
+	obs = append(obs, m.observeChanges(changed, recs)...)
 	m.commit(obs, seq0, now)
+}
+
+// nameChange is a known process whose kernel name changed, with the
+// executable the table recorded for it.
+type nameChange struct {
+	id  ident
+	exe string
+}
+
+// observeChanges re-reads processes whose name changed and says which of
+// them ran exec. Must be called without m.mu.
+func (m *Monitor) observeChanges(changed []nameChange, recs map[int]*platform.Proc) []*observed {
+	var out []*observed
+	for _, c := range changed {
+		o := m.prepare(c.id, recs[c.id.pid], viaPoll, time.Time{})
+		if o == nil {
+			continue
+		}
+		cur, args := "", []string(nil)
+		if o.rec != nil {
+			cur, args = o.rec.Exe, o.rec.Args
+		}
+		if ranExec(c.id.comm, args, c.exe, cur) {
+			o.exec = true
+		} else {
+			o.rename = true
+		}
+		out = append(out, o)
+	}
+	return out
+}
+
+// ranExec decides what a new kernel name means. npm, yarn, pnpm and every
+// setproctitle(3) user rename themselves after exec (a Node process.title
+// rewrites the kernel name too), so a name change alone is not an exec:
+// that would report the same process a second time at the next resync.
+// A different executable is an exec. With the same executable the change
+// is an exec only when the new name is one the kernel gives on exec: the
+// base name of the file (the same program run again), or of the script an
+// interpreter was started on (argv [interpreter, script, ...]; a title
+// written over argv is a single string). When either executable is
+// unknown (an unreadable link) the change counts as an exec.
+func ranExec(comm string, args []string, oldExe, curExe string) bool {
+	oldExe, curExe = trimDeleted(oldExe), trimDeleted(curExe)
+	if oldExe == "" || curExe == "" || oldExe != curExe {
+		return true
+	}
+	if comm == capString(baseAny(curExe), commMax) {
+		return true
+	}
+	return len(args) >= 2 && comm == capString(baseAny(args[1]), commMax)
 }
 
 // commit ingests observations, emits their events and runs any marker
@@ -343,6 +396,7 @@ func (m *Monitor) activeScan(now time.Time) bool {
 	}
 	m.mu.Unlock()
 	m.enqueue(evs)
+	var changed []nameChange
 	for pid := range seen {
 		id, ok := m.src.identOf(pid)
 		if !ok {
@@ -350,18 +404,21 @@ func (m *Monitor) activeScan(now time.Time) bool {
 		}
 		m.mu.Lock()
 		n := m.nodes[pid]
-		known := n != nil && (n.key == id.key || n.key == 0) && (n.comm == id.comm || n.comm == "")
-		m.mu.Unlock()
-		if !known {
+		switch {
+		case n == nil || (n.key != 0 && n.key != id.key):
 			need = append(need, id)
+		case id.comm != "" && n.comm != "" && n.comm != id.comm:
+			changed = append(changed, nameChange{id: id, exe: n.exe})
 		}
+		m.mu.Unlock()
 	}
-	obs := make([]*observed, 0, len(need))
+	obs := make([]*observed, 0, len(need)+len(changed))
 	for _, id := range need {
 		if o := m.prepare(id, nil, viaPoll, time.Time{}); o != nil {
 			obs = append(obs, o)
 		}
 	}
+	obs = append(obs, m.observeChanges(changed, nil)...)
 	m.commit(obs, seq0, now)
 	return true
 }
@@ -430,6 +487,19 @@ func (m *Monitor) Attribute(pid int) (ap AgentProc, ok bool) {
 	if pid <= 0 || pid > maxPID || m.src == nil {
 		return AgentProc{}, false
 	}
+	if m.killSwitch() {
+		// Every collector idles: answer from what the table already
+		// holds, with no reads and nothing queued.
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if n := m.nodes[pid]; n != nil && n.resolved {
+			return m.attributionOf(n)
+		}
+		if t := m.tomb[pid]; t != nil {
+			return m.attributionOf(t)
+		}
+		return AgentProc{}, false
+	}
 	m.mu.Lock()
 	if n := m.nodes[pid]; n != nil && n.resolved {
 		ap, ok = m.attributionOf(n)
@@ -455,6 +525,15 @@ func (m *Monitor) Attribute(pid int) (ap AgentProc, ok bool) {
 		return m.attributionOf(n)
 	}
 	return AgentProc{}, false
+}
+
+// killSwitch reports the kill switch: as Run last saw it while Run is
+// running, else from the file itself.
+func (m *Monitor) killSwitch() bool {
+	if m.running.Load() {
+		return m.off.Load()
+	}
+	return m.disabled != nil && m.disabled()
 }
 
 // loadChain reads a process and the ancestors the table does not know yet.

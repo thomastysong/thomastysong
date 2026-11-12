@@ -40,7 +40,7 @@ func TestGenerateDeterministic(t *testing.T) {
 			t.Errorf("%s differs between two runs", k)
 		}
 	}
-	want := []string{FileATC, FileATCExample, FileContent, FileOptIn}
+	want := []string{FileATC, FileATCExample, FileBaseExample, FileContent, FileOptIn}
 	for _, p := range []string{ProfileStock, ProfileFleetd, ProfileBuiltin} {
 		for _, k := range []string{"labels", "policies", "reports"} {
 			want = append(want, ProfileFile(p, k))

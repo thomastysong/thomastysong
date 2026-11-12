@@ -2,7 +2,9 @@
 # Keyed by rule and transcript event id (deterministic: the same logs give the
 # same ids). Labels: false_positive (ordinary work), red_team (a deliberate
 # security experiment or lab operation: a true positive without malice),
-# rule_bug (the rule matched something it was not written to match).
+# rule_bug (the rule matched something it was not written to match),
+# true_positive (the behaviour the rule describes, done for real, here with
+# a benign intent).
 # Each was decided by reading the full command in the transcript and the role
 # of the agent thread (from the workflow journal labels).
 labels:
@@ -294,3 +296,107 @@ labels:
     event: 01a1cb8b-171a-7630-a1d3-e538e0e1a742
     label: false_positive
     reason: "research:adr-detection: same event as SPR-EXEC-001: injection markers came from ADR benchmark data the agent was analysing"
+  - rule: SPR-AGENT-012
+    event: 01a1cdb1-f8f1-7b33-a2e9-9ec5fe40982a
+    label: false_positive
+    reason: "main session: the orchestrator reads its own subagents' workflow journals and scripts to monitor them"
+  - rule: SPR-AGENT-012
+    event: 01a1cddb-3014-7a62-81e8-b830e73dd6d0
+    label: false_positive
+    reason: "main session: the orchestrator reads its own subagents' workflow journals and scripts to monitor them"
+  - rule: SPR-AGENT-012
+    event: 01a1cdde-9a64-70fd-8f25-3ab1be362f03
+    label: false_positive
+    reason: "subagent of the main session: the orchestrator reads its own subagents' workflow journals and scripts to monitor them"
+  - rule: SPR-AGENT-012
+    event: 01a1ce0d-e99c-7936-b9fb-46f2c7619fb6
+    label: false_positive
+    reason: "main session: the orchestrator reads its own subagents' workflow journals and scripts to monitor them"
+  - rule: SPR-CRED-002
+    event: 01a1cb9e-1095-7e85-83a4-a12ce0b5564e
+    label: red_team
+    reason: "attack:fleet-operator: red-team experiment reads a test token or planted secret it created (true positive, not malicious)"
+  - rule: SPR-CRED-002
+    event: 01a1cba0-5e79-7c17-b87a-11519e75c59c
+    label: red_team
+    reason: "verify:containers-k8s: red-team experiment reads a test token or planted secret it created (true positive, not malicious)"
+  - rule: SPR-CRED-005
+    event: 01a1ce21-753c-7bf1-95f3-cff64abc1b97
+    label: false_positive
+    reason: "review:fleet: env -u ... wrapper around osqueryd read as a token print by the analyser"
+  - rule: SPR-CRED-012
+    event: 01a1cbb9-a0e6-72aa-9852-5289a7d3dc1a
+    label: false_positive
+    reason: "build:transcript: synthetic credentials in test sources written through a heredoc or a Python edit"
+  - rule: SPR-CRED-012
+    event: 01a1cbca-23e8-7672-84a9-d7b28535676e
+    label: false_positive
+    reason: "build:classify: synthetic credentials in test sources written through a heredoc or a Python edit"
+  - rule: SPR-CRED-012
+    event: 01a1cdcf-e65a-7761-a418-9ab8f149a8f3
+    label: false_positive
+    reason: "build:procmon: synthetic credentials in test sources written through a heredoc or a Python edit"
+  - rule: SPR-CRED-012
+    event: 01a1cdf6-6afd-70f7-9c96-e9e6e25a777e
+    label: false_positive
+    reason: "review:privacy: synthetic credentials in test sources written through a heredoc or a Python edit"
+  - rule: SPR-DESTR-007
+    event: 01a1cb85-f6aa-7b2f-ad40-ad794d5a770f
+    label: false_positive
+    reason: "research:fluentbit: chmod -R 777 on scratch directories used as container bind mounts (red-team workflow 16)"
+  - rule: SPR-DESTR-007
+    event: 01a1cb87-7ad6-7bcd-aecf-2289ce70d592
+    label: false_positive
+    reason: "research:fluentbit: chmod -R 777 on scratch directories used as container bind mounts (red-team workflow 16)"
+  - rule: SPR-DESTR-007
+    event: 01a1cdc5-1465-7ecb-b1de-59d2ce5ede5a
+    label: false_positive
+    reason: "main session: chmod -R 777 on scratch directories used as container bind mounts (red-team workflow 16)"
+  - rule: SPR-DESTR-007
+    event: 01a1cdc8-a180-79c3-96b5-4f881fcd78e8
+    label: false_positive
+    reason: "main session: chmod -R 777 on scratch directories used as container bind mounts (red-team workflow 16)"
+  - rule: SPR-EVADE-002
+    event: 01a1ce17-6c9a-74fa-bb7f-a8a64bc15849
+    label: true_positive
+    reason: "build:hookcmd: the hook builder deletes the per-user spool its own hook tests wrote into root's real state directory; that is the sensor's spool, so the alert is correct, the intent benign"
+  - rule: SPR-EXEC-007
+    event: 01a1cb96-6df0-70a1-9062-f95084008869
+    label: false_positive
+    reason: "attack:containers-k8s: a command name taken from a variable after locating a downloaded binary, or  in a heredoc: routine scripting"
+  - rule: SPR-EXEC-007
+    event: 01a1cb9e-0c9c-7b2e-9448-f584290b4446
+    label: false_positive
+    reason: "attack:platform-parity: a command name taken from a variable after locating a downloaded binary, or  in a heredoc: routine scripting"
+  - rule: SPR-EXEC-007
+    event: 01a1cba1-de01-7e68-b42a-e101e9db5ded
+    label: false_positive
+    reason: "verify:containers-k8s: a command name taken from a variable after locating a downloaded binary, or  in a heredoc: routine scripting"
+  - rule: SPR-EXEC-007
+    event: 01a1cbc1-58a0-757d-9716-92bf0f2cd071
+    label: false_positive
+    reason: "build:mcpconf: a command name taken from a variable after locating a downloaded binary, or  in a heredoc: routine scripting"
+  - rule: SPR-EXFIL-013
+    event: 01a1cbbe-6655-7fd4-88d8-f66caed7e85d
+    label: false_positive
+    reason: "build:platform: a value captured from an earlier broad read (a glob or a listing) recurs in a download URL; not a credential"
+  - rule: SPR-EXFIL-013
+    event: 01a1cbc9-1f28-7fcd-bf6b-104d5f097a80
+    label: false_positive
+    reason: "review:hookio: a value captured from an earlier broad read (a glob or a listing) recurs in a download URL; not a credential"
+  - rule: SPR-EXFIL-013
+    event: 01a1cdb5-f0ac-755d-8fd3-3854f6e94c77
+    label: false_positive
+    reason: "build:hookinstall: a value captured from an earlier broad read (a glob or a listing) recurs in a download URL; not a credential"
+  - rule: SPR-OFFSEC-008
+    event: 01a1cba5-e9b2-7048-bb2c-cc454d3eb442
+    label: false_positive
+    reason: "verify:privacy-sensor-security: ps, id and uname while inspecting the lab stack"
+  - rule: SPR-OFFSEC-008
+    event: 01a1cbb6-5a37-7d7b-aab1-93cb73dcefc3
+    label: false_positive
+    reason: "build:procmon-osqexec: ps, id and uname while inspecting the lab stack"
+  - rule: SPR-SEQ-006
+    event: 01a1ce21-753c-7bf1-95f3-cff64abc1b97
+    label: false_positive
+    reason: "review:fleet: env -u ... wrapper read as a token print after a research page with injection markers; nothing was read or sent"

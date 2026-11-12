@@ -134,7 +134,7 @@ func embeddedFiles(tb testing.TB) map[string][]byte {
 // so it is meaningful on a loaded CI machine; the benchmarks give the
 // actual numbers.
 func TestPerformanceBudgets(t *testing.T) {
-	if testing.Short() {
+	if testing.Short() || raceEnabled {
 		t.Skip("timing test")
 	}
 	e := NewEngine(benchSet(t, 100), Options{Home: "/home/u", OS: "linux"})
@@ -150,20 +150,34 @@ func TestPerformanceBudgets(t *testing.T) {
 	if per > 3*time.Millisecond {
 		t.Errorf("Eval %v per event is over 10x the 300µs budget", per)
 	}
-	files := embeddedFiles(t)
+	// What a guard-mode hook actually pays: the first LoadEmbedded of a
+	// process (served from the pre-parsed cache when it is fresh;
+	// TestEmbeddedCacheFresh is the gate for that), guard subset, engine.
 	start = time.Now()
+	fromCache := false
 	for i := 0; i < 20; i++ {
-		s, err := load(files, true)
+		s, cached, err := compileEmbedded()
 		if err != nil {
 			t.Fatal(err)
 		}
+		fromCache = cached
 		NewEngine(s.GuardSubset(), Options{})
 	}
 	per = time.Since(start) / 20
-	t.Logf("hook start-up from YAML (embedded parse + guard subset + engine): %v (budget 15ms)", per)
+	t.Logf("hook start-up (embedded content + guard subset + engine, cache used: %v): %v (budget 15ms)", fromCache, per)
 	if per > 150*time.Millisecond {
 		t.Errorf("hook start-up %v is over 10x the 15ms budget", per)
 	}
+	// The YAML fallback is reported, not judged: with the real packs it is
+	// the reason the cache exists.
+	files := embeddedFiles(t)
+	start = time.Now()
+	for i := 0; i < 5; i++ {
+		if _, err := load(files, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Logf("embedded YAML parse without the cache: %v", time.Since(start)/5)
 	// The same with 300 rules served from the pre-parsed cache, which is
 	// what LoadEmbedded does once the real packs land.
 	big := map[string][]byte{"packs/bench.yaml": []byte("pack: bench\nversion: \"1\"\nrules:\n" + benchRules(300))}

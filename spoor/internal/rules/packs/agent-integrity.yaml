@@ -234,6 +234,9 @@ rules:
     tags: [atlas.aml.t0083]
     references:
       - "research/threats.md section 3 R07"
+    falsepositives:
+      - "Pointing a client at a corporate LLM gateway or a local proxy for one command"
+      - "Running an SDK's tests against a mock server"
     when:
       type: [tool.pre, process.exec]
     match:
@@ -488,6 +491,8 @@ rules:
     tags: [owasp.asi10]
     references:
       - "research/threats.md section 3 R02"
+    falsepositives:
+      - "A user who chose bypass mode for a sandboxed or throwaway workspace"
     when:
       session.first_event: true
     match:
@@ -520,6 +525,9 @@ rules:
     tags: [atlas.aml.t0085.002, owasp.asi03]
     references:
       - "research/threats.md section 2 row 31: infostealers collect transcripts"
+    falsepositives:
+      - "A user asking the agent to search or summarise their own earlier sessions"
+      - "Tools that export or back up session logs"
     when:
       type: [tool.pre, process.exec]
     match:
@@ -558,6 +566,8 @@ rules:
     references:
       - "research/threats.md section 2 row 33"
       - "research/threats.md section 3 R19"
+    falsepositives:
+      - "A user who saved a project's CLAUDE.md or AGENTS.md to Downloads and asked the agent to read it"
     when:
       type: tool.pre
     match:

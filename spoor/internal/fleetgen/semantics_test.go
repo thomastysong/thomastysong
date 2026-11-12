@@ -472,6 +472,55 @@ func TestPackedReportBounded(t *testing.T) {
 	}
 }
 
+// TestOptInExecReportsAcrossRuns: osquery hands a scheduled query only the
+// events since its previous run, so the agent's shell (depth 1) usually
+// started in an earlier batch than the command it runs (depth 2). The
+// report must still attribute that command, through the live processes
+// table, and must not trust a reused pid that started after the command.
+func TestOptInExecReportsAcrossRuns(t *testing.T) {
+	c := mustBuild(t, Options{})
+	f := newFixture(t)
+	f.healthy() // agent root pid 4242 running
+	path := f.close()
+	for _, fl := range []flavour{atcFlavour, typedFlavour} {
+		e := newEmu(t, path, fl)
+		// This run's batch: 5001 (parent 5000, the shell from an earlier
+		// run), 5101 (parent 5100, a pid reused after the event) and 5201
+		// (parent 5200, gone from the process table).
+		e.exec(`INSERT INTO process_events (pid, parent, path, cmdline, cwd, uid, time) VALUES
+			(5001, 5000, '/usr/bin/curl', 'curl x', '/home/ana/src', 1000, 2000),
+			(5101, 5100, '/usr/bin/id', 'id', '/', 1000, 2000),
+			(5201, 5200, '/usr/bin/env', 'env', '/', 1000, 2000)`)
+		e.exec(`INSERT INTO es_process_events (pid, parent, path, cmdline, cwd, uid, time, event_type) VALUES
+			(5001, 5000, '/usr/bin/curl', 'curl x', '/', 501, 2000, 'exec')`)
+		e.exec(`INSERT INTO process_etw_events (pid, ppid, path, cmdline, username, time, type) VALUES
+			(5001, 5000, 'C:\Windows\System32\curl.exe', 'curl x', 'ana', 2000, 'ProcessStart')`)
+		e.exec(`INSERT INTO processes (pid, parent, start_time) VALUES
+			(5000, 4242, 1000), (5100, 4242, 2500), (6000, 1, 10)`)
+		for _, r := range c.OptIn {
+			rows := e.rows(r.Query)
+			if len(rows) != 1 {
+				t.Fatalf("%s/%s: %d rows, want the grandchild 5001 only: %v", fl, r.Key, len(rows), rows)
+			}
+			if row := rows[0]; row["pid"] != "5001" || row["depth"] != "2" || row["agent_id"] != "claude-code" {
+				t.Errorf("%s/%s: row %v, want pid 5001 at depth 2 attributed to claude-code", fl, r.Key, row)
+			}
+		}
+		// The parent's exec event in the same batch and the parent in the
+		// process table give one row, not two.
+		e.exec(`INSERT INTO process_events (pid, parent, path, cmdline, cwd, uid, time) VALUES
+			(5000, 4242, '/bin/bash', 'bash', '/home/ana/src', 1000, 1000)`)
+		for _, r := range c.OptIn {
+			if r.Key != "exec_linux" {
+				continue
+			}
+			if rows := e.rows(r.Query); len(rows) != 2 {
+				t.Errorf("%s/%s: %d rows, want the shell (depth 1) and curl (depth 2) once each: %v", fl, r.Key, len(rows), rows)
+			}
+		}
+	}
+}
+
 func TestOptInExecReports(t *testing.T) {
 	c := mustBuild(t, Options{})
 	f := newFixture(t)

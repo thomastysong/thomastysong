@@ -14,19 +14,23 @@ import (
 	"github.com/thomastysong/spoor/internal/platform"
 )
 
-// Exec provider names reported by Monitor.Source.
+// Exec provider names reported by Monitor.Source. The kill switch is not a
+// provider: while it is on Source reports poll and Stats.Disabled is set.
 const (
 	SourceCNProc  = "cn_proc"
 	SourceOsquery = "osquery"
 	SourcePoll    = "poll"
-	// SourceDisabled is reported while the kill switch is on: no provider is
-	// running.
-	SourceDisabled = "disabled"
 )
 
 // Evidence class used when an agent was recognised from the marker
 // variables its children carry rather than from the catalog fingerprints.
 const EvidenceEnvMarker = "env_marker"
+
+// EvidenceEnvMarkerWeak is the Evidence of an Attribute answer that rests
+// only on a weak marker: a name the catalog has not verified, or one a user
+// can export for every process of a shell (COPILOT_MODEL). Such processes
+// are never reported as process.exec on that ground.
+const EvidenceEnvMarkerWeak = "env_marker_weak"
 
 // AgentProc is one running (or recently seen) agent root process.
 type AgentProc struct {
@@ -201,6 +205,9 @@ type Monitor struct {
 	initErr   error
 	self      int
 	integrity event.Integrity
+	// canaryParent is the pid of this process, the parent of every
+	// self-test process it starts (m.self can differ in tests).
+	canaryParent int
 
 	// Injection points; New sets the real ones.
 	now      func() time.Time
@@ -227,6 +234,8 @@ type Monitor struct {
 	osqLive  atomic.Bool
 	healthy  atomic.Bool
 	resyncRq atomic.Bool
+	// off is set while Run sees the kill switch.
+	off atomic.Bool
 
 	idx   atomic.Pointer[catIndex]
 	idxAt atomic.Int64
@@ -264,27 +273,28 @@ func New(o Options) *Monitor {
 		o.Active = defaultActive
 	}
 	m := &Monitor{
-		o:           o,
-		cat:         o.Catalog,
-		self:        os.Getpid(),
-		integrity:   event.IntegrityUser,
-		now:         time.Now,
-		disabled:    platform.Disabled,
-		openCN:      openCNProc,
-		canaryFn:    canaryCommand,
-		monoWall:    monotonicToWall,
-		resync:      resyncEvery,
-		canaryEvery: canaryEvery,
-		canaryFirst: canaryFirst,
-		rate:        execRate,
-		burst:       execRate,
-		queue:       make(chan *event.Event, queueCap),
-		nudge:       make(chan struct{}, 1),
-		nodes:       map[int]*node{},
-		roots:       map[procKey]*root{},
-		tomb:        map[int]*node{},
-		exitMark:    map[int]exitMark{},
-		markerB:     map[string]*bucket{},
+		o:            o,
+		cat:          o.Catalog,
+		self:         os.Getpid(),
+		canaryParent: os.Getpid(),
+		integrity:    event.IntegrityUser,
+		now:          time.Now,
+		disabled:     platform.Disabled,
+		openCN:       openCNProc,
+		canaryFn:     canaryCommand,
+		monoWall:     monotonicToWall,
+		resync:       resyncEvery,
+		canaryEvery:  canaryEvery,
+		canaryFirst:  canaryFirst,
+		rate:         execRate,
+		burst:        execRate,
+		queue:        make(chan *event.Event, queueCap),
+		nudge:        make(chan struct{}, 1),
+		nodes:        map[int]*node{},
+		roots:        map[procKey]*root{},
+		tomb:         map[int]*node{},
+		exitMark:     map[int]exitMark{},
+		markerB:      map[string]*bucket{},
 	}
 	if platform.IsPrivileged() {
 		m.integrity = event.IntegrityRoot
@@ -337,8 +347,8 @@ func (m *Monitor) refreshIndex(now time.Time) {
 	m.idxAt.Store(now.UnixNano())
 }
 
-// Source reports the exec provider in use: cn_proc, osquery or poll
-// ("disabled" while the kill switch is on).
+// Source reports the exec provider in use: cn_proc, osquery or poll (poll
+// also while the kill switch is on; Stats.Disabled says so).
 func (m *Monitor) Source() string {
 	if s, _ := m.provider.Load().(string); s != "" {
 		return s
@@ -371,7 +381,7 @@ func (m *Monitor) Stats() Stats {
 	s := Stats{
 		Source:       m.Source(),
 		ExecHealthy:  m.ExecHealthy(),
-		Disabled:     m.Source() == SourceDisabled,
+		Disabled:     m.off.Load(),
 		Scans:        m.st.scans.Load(),
 		ActiveScans:  m.st.activeScans.Load(),
 		Execs:        m.st.execs.Load(),

@@ -282,7 +282,7 @@ func TestOsqueryClosed(t *testing.T) {
 	})
 	off.Store(true)
 	m.wake()
-	waitFor(t, 5*time.Second, "the kill switch", func() bool { return m.Source() == SourceDisabled })
+	waitFor(t, 5*time.Second, "the kill switch", func() bool { return m.Stats().Disabled })
 	fo.mu.Lock()
 	closed := fo.closed
 	fo.mu.Unlock()

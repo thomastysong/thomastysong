@@ -105,15 +105,15 @@ func (m *Monitor) cnFork(ppid, pid int) {
 // cnExec reads the new image at once and ingests it.
 func (m *Monitor) cnExec(pid int, at time.Time) {
 	m.st.execs.Add(1)
-	if m.canarySeen(pid) {
-		return
-	}
+	seen := m.canarySeen(pid)
 	m.mu.Lock()
 	seq0 := m.seq
 	m.mu.Unlock()
 	o := m.prepare(ident{pid: pid}, nil, viaCNProc, at)
 	if o == nil {
-		m.st.readMisses.Add(1)
+		if !seen { // the canary (true(1)) is usually gone already
+			m.st.readMisses.Add(1)
+		}
 		return
 	}
 	if o.canary {
@@ -137,9 +137,13 @@ func (m *Monitor) cnExit(pid int, exit *exitInfo) {
 	m.enqueue(evs)
 }
 
+// requestResync marks the table for a rescan. Only the first request wakes
+// the loop; the rest of a storm finds the mark already set (see
+// runner.resyncDue for when the rescan runs).
 func (m *Monitor) requestResync() {
-	m.resyncRq.Store(true)
-	m.wake()
+	if !m.resyncRq.Swap(true) {
+		m.wake()
+	}
 }
 
 func (m *Monitor) wake() {

@@ -3,6 +3,7 @@ package fleetgen
 import (
 	"errors"
 	"fmt"
+	pathpkg "path"
 	"sort"
 	"strings"
 	"time"
@@ -179,11 +180,20 @@ func isPlatform(p string) bool {
 	return false
 }
 
-// checkHostPath accepts an absolute path for the target OS. The path ends
-// up in YAML, in an SQL string literal and in osquery's ATC loader, so
+// globMeta are the characters osquery expands in an ATC "path": % is
+// osquery's own wildcard, and the rest is resolved with glob(3) and
+// GLOB_BRACE (checked with osquery 5.19: "spoor?", "spoor[AB]" and
+// "spoor{A,B}" each read several databases). The "installed" label compares
+// paths exactly, so a pattern would make the two disagree.
+const globMeta = "%*?[]{}"
+
+// checkHostPath accepts an absolute, clean path for the target OS. The path
+// ends up in YAML, in an SQL string literal and in osquery's ATC loader, so
 // control and invisible formatting characters and invalid UTF-8 are refused
-// outright, and so is %, which ATC and osquery's file table treat as a
-// wildcard while the "installed" label compares paths exactly.
+// outright, and so are osquery's wildcard and glob characters. It must be
+// clean (no empty, "." or ".." element, no trailing separator) because ATC
+// reports a canonical path while osquery's file table, which the
+// "installed" label reads, reports the path exactly as written.
 func checkHostPath(what, platform, path string) error {
 	if path == "" {
 		return fmt.Errorf("fleetgen: empty %s path for %s", what, platform)
@@ -199,36 +209,60 @@ func checkHostPath(what, platform, path string) error {
 			return fmt.Errorf("fleetgen: %s path for %s contains a control or formatting character", what, platform)
 		}
 	}
-	if strings.ContainsRune(path, '%') {
-		return fmt.Errorf("fleetgen: %s path for %s contains %%, which osquery treats as a wildcard", what, platform)
+	if i := strings.IndexAny(path, globMeta); i >= 0 {
+		return fmt.Errorf("fleetgen: %s path for %s contains %q, which osquery treats as a wildcard or glob pattern",
+			what, platform, path[i])
 	}
 	if platform == PlatformWindows {
 		if !windowsAbs(path) {
 			return fmt.Errorf("fleetgen: %s path %q is not an absolute Windows path", what, path)
+		}
+		if !windowsClean(path) {
+			return fmt.Errorf("fleetgen: %s path %q is not clean for Windows (backslashes only, one between "+
+				"elements, no trailing backslash, no . or ..)", what, path)
 		}
 		return nil
 	}
 	if !strings.HasPrefix(path, "/") || strings.ContainsRune(path, '\\') {
 		return fmt.Errorf("fleetgen: %s path %q is not an absolute POSIX path", what, path)
 	}
-	for _, el := range strings.Split(path, "/") {
-		if el == ".." || el == "." {
-			return fmt.Errorf("fleetgen: %s path %q is not clean", what, path)
-		}
+	if path == "/" || pathpkg.Clean(path) != path {
+		return fmt.Errorf("fleetgen: %s path %q is not clean (no //, . or .. element, no trailing /)", what, path)
 	}
 	return nil
 }
 
-// windowsAbs accepts C:\dir\file and \\server\share\file.
+// windowsAbs accepts C:\dir\file and \\server\share\file shapes.
 func windowsAbs(p string) bool {
 	switch {
 	case len(p) >= 3 && isLetter(p[0]) && p[1] == ':' && (p[2] == '\\' || p[2] == '/'):
+		return true
 	case strings.HasPrefix(p, `\\`) && len(p) > 2:
-	default:
+		return true
+	}
+	return false
+}
+
+// windowsClean reports whether an absolute Windows path is in the form
+// osquery's file table reports: backslash separators, no empty, "." or ".."
+// element and no trailing separator. A UNC path needs a server and a share.
+func windowsClean(p string) bool {
+	if strings.ContainsRune(p, '/') {
 		return false
 	}
-	for _, el := range strings.FieldsFunc(p, func(r rune) bool { return r == '\\' || r == '/' }) {
-		if el == ".." || el == "." {
+	var rest string
+	minElems := 1
+	if strings.HasPrefix(p, `\\`) {
+		rest, minElems = p[2:], 3
+	} else {
+		rest = p[3:]
+	}
+	els := strings.Split(rest, `\`)
+	if len(els) < minElems {
+		return false
+	}
+	for _, el := range els {
+		if el == "" || el == "." || el == ".." {
 			return false
 		}
 	}

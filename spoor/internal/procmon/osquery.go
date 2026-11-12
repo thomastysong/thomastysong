@@ -28,7 +28,7 @@ const canaryAgent = "\x00spoor-canary"
 // agent root itself is not a process.exec of that agent (its start is
 // reported separately); it counts only for an enclosing agent.
 func (m *Monitor) osqAttribute(pid, ppid int) (agentID, sessionID string, ok bool) {
-	if pid > 0 && pid == m.canaryPID() {
+	if pid > 0 && pid == m.canaryPID() && ppid == m.canaryParent {
 		return canaryAgent, "", true
 	}
 	m.mu.Lock()
@@ -79,7 +79,7 @@ func (m *Monitor) agentOf(n *node) (string, string, bool) {
 		}
 		return owner.ap.AgentID, sid, true
 	}
-	if p := n.env.product; p != "" {
+	if p := n.env.product; p != "" && n.env.verified {
 		return p, n.env.session(p), true
 	}
 	return "", "", false

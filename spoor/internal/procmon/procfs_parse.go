@@ -22,6 +22,8 @@ const (
 	maxThreads       = 4096
 	maxPasswdBytes   = 4 << 20
 	maxPID           = 1 << 30
+	// commMax is the longest kernel command name (TASK_COMM_LEN - 1).
+	commMax = 15
 )
 
 // parseStat parses /proc/<pid>/stat. The command name sits between the first
@@ -198,7 +200,6 @@ func parsePasswd(b []byte) map[string]string {
 // argv[0] visibly carries the full name. Both values are chosen by the
 // process, so this adds legibility, not trust.
 func refineName(comm string, args []string) string {
-	const commMax = 15
 	if len(comm) < commMax || len(args) == 0 {
 		return comm
 	}

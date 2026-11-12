@@ -12,10 +12,14 @@ org_settings:
     org_name: Example
   secrets:
     - secret: $FLEET_GLOBAL_ENROLL_SECRET
-# Your own agent options with the ATC fragment merged in (tier 2). For tier 3
-# (spoor extension) use your agent options WITHOUT the spoor_* ATC tables.
+# Your own agent options. This example is tier 3: the install scripts below
+# register the spoor osquery extension (their default tier), so the agent
+# options must NOT carry spoor's ATC tables, or osquery refuses the
+# extension. For tier 2 use ../lib/agent-options.example.yml (the ATC
+# fragment merged in) and set TIER=atc in both install scripts; Fleet runs
+# scripts without environment variables (README, "Three tiers").
 agent_options:
-  path: ../lib/agent-options.example.yml
+  path: ../lib/agent-options.base.example.yml
 controls:
   scripts:
     - path: ../scripts/install-spoor.sh

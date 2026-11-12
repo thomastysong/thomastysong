@@ -102,6 +102,9 @@ type observed struct {
 	exec   bool      // the process just ran exec (report it even if known)
 	cwd    string
 	canary bool
+	// rename: a re-read of a known process that changed its own name
+	// (setproctitle, a Node process.title) without running exec.
+	rename bool
 	isNew  bool // first full sighting (set by ingest)
 }
 
@@ -121,7 +124,7 @@ func (n *node) update(o *observed) {
 		n.ppid = o.id.ppid
 	}
 	if r := o.rec; r != nil {
-		n.name = capString(r.Name, 255)
+		n.name = emitName(r.Name)
 		n.exe = capString(r.Exe, 4096)
 		n.start = r.Start
 		n.uid = capString(r.UID, 128)
@@ -136,7 +139,7 @@ func (n *node) update(o *observed) {
 	}
 }
 
-func (n *node) attributed() bool { return n.root != nil || n.owner != nil || n.env.product != "" }
+func (n *node) attributed() bool { return n.root != nil || n.owner != nil || n.env.verified }
 
 // ingest merges observations into the table and returns the events they
 // cause plus the pids of parents that the marker logic wants promoted to
@@ -175,7 +178,9 @@ func (m *Monitor) ingest(obs []*observed, seq0 uint64, now time.Time) (evs []*ev
 			n = &node{pid: o.id.pid, added: m.seq}
 			m.nodes[n.pid] = n
 		}
-		o.isNew = !n.full && o.rec != nil
+		// A fork the connector reported and that only renamed itself is
+		// not new: it never ran exec.
+		o.isNew = !n.full && o.rec != nil && !o.rename
 		n.update(o)
 		fresh[i] = n
 	}
@@ -202,6 +207,12 @@ func (m *Monitor) resolve(n *node, o *observed, now time.Time) (evs []*event.Eve
 	}
 	enc := m.enclosing(n)
 	was := n.root
+	if was != nil && was.alive && !o.exec && !o.isNew {
+		// Read again without an exec (the agent renamed itself): it is
+		// still the agent it was. Only an exec can end a live root.
+		n.resolved = true
+		return nil, 0
+	}
 	if c := o.cand; c != nil {
 		if was != nil && was.alive && was.prod.id == c.prod.id {
 			// The agent ran exec on itself (a self-update or relaunch).
@@ -237,7 +248,10 @@ func (m *Monitor) resolve(n *node, o *observed, now time.Time) (evs []*event.Eve
 	}
 	n.resolved = true
 	owner, marker := n.owner, ""
-	if owner == nil {
+	if owner == nil && n.env.verified {
+		// Only a verified marker reports a process on its own; a weak one
+		// (a user-exported switch, an unverified name) is in every process
+		// of the shell that exported it and only answers Attribute.
 		marker = n.env.product
 	}
 	if owner == nil && marker == "" {
@@ -431,10 +445,14 @@ func (m *Monitor) markerProc(n *node) AgentProc {
 	if p := m.parentOf(top); p != nil && p.pid > 1 && p.full {
 		b = p
 	}
+	evidence := EvidenceEnvMarker
+	if !n.env.verified {
+		evidence = EvidenceEnvMarkerWeak
+	}
 	ap := AgentProc{
 		PID: b.pid, PPID: b.ppid, Start: b.start, AgentID: product, Name: b.name, Exe: b.exe,
 		User:     event.User{Name: b.user, ID: b.uid},
-		Evidence: []string{EvidenceEnvMarker},
+		Evidence: []string{evidence},
 	}
 	if pi := ix.prod(product); pi == nil || pi.dialect == "" {
 		ap.HookFree = true

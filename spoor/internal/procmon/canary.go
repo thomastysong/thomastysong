@@ -35,17 +35,21 @@ type canaryState struct {
 	recentAt int
 }
 
-// isCanary reports whether a process is the pending self-test.
+// isCanary reports whether a process is the pending self-test. Being taken
+// for the canary means not being ingested at all, so the test is narrow: a
+// test must be pending, the process must be a child of this monitor, carry
+// the nonce in its arguments and, once StartProcess has returned, have the
+// canary's pid. The nonce is readable by every local user while the canary
+// runs; none of them can make their process a child of the monitor.
 func (m *Monitor) isCanary(rec *platform.Proc) bool {
 	m.mu.Lock()
-	nonce := m.can.nonce
-	pid := m.can.pid
+	pending, nonce, pid := m.can.pending, m.can.nonce, m.can.pid
 	m.mu.Unlock()
-	if nonce == "" {
+	if !pending || nonce == "" || rec.PPID <= 0 || rec.PPID != m.canaryParent {
 		return false
 	}
-	if pid != 0 && rec.PID == pid {
-		return true
+	if pid != 0 && rec.PID != pid {
+		return false
 	}
 	for _, a := range rec.Args {
 		if a == nonce {
@@ -57,7 +61,9 @@ func (m *Monitor) isCanary(rec *platform.Proc) bool {
 
 // canarySeen is called for every exec the connector reports. It records the
 // pid (the canary's exec can arrive before StartProcess returns its pid) and
-// reports whether it is the pending canary.
+// reports whether it is the pending canary's pid, which proves the
+// provider delivered that exec. Whether the process is skipped is decided
+// on its record (isCanary), never on the pid alone.
 func (m *Monitor) canarySeen(pid int) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -69,6 +75,14 @@ func (m *Monitor) canarySeen(pid int) bool {
 		return true
 	}
 	return false
+}
+
+// settle ends the pending self-test and forgets its nonce and pid, so that
+// neither can be used afterwards to have a process skipped. Caller holds
+// m.mu.
+func (c *canaryState) settle(next time.Time) {
+	c.pending, c.hit, c.pid, c.nonce = false, false, 0, ""
+	c.next = next
 }
 
 func (m *Monitor) canaryHit() {
@@ -102,15 +116,13 @@ func (m *Monitor) canaryTick(now time.Time, provider string) {
 		}
 		switch {
 		case c.hit:
-			c.pending = false
+			c.settle(now.Add(m.canaryEvery))
 			m.healthy.Store(true)
 			m.st.canaryHits.Add(1)
 			m.st.lastCanary.Store(now.UnixNano())
-			c.next = now.Add(m.canaryEvery)
 		case now.Sub(c.started) > wait || now.Before(c.started):
-			c.pending = false
+			c.settle(now.Add(m.canaryEvery))
 			m.healthy.Store(false)
-			c.next = now.Add(m.canaryEvery)
 		}
 		if c.pending || now.Before(c.next) {
 			m.mu.Unlock()
@@ -131,8 +143,7 @@ func (m *Monitor) canaryTick(now time.Time, provider string) {
 	path, args, ok := m.canaryFn()
 	if !ok {
 		m.mu.Lock()
-		c.pending = false
-		c.next = now.Add(m.canaryEvery)
+		c.settle(now.Add(m.canaryEvery))
 		m.mu.Unlock()
 		m.healthy.Store(false)
 		return
@@ -142,8 +153,7 @@ func (m *Monitor) canaryTick(now time.Time, provider string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err != nil {
-		c.pending = false
-		c.next = now.Add(m.canaryEvery)
+		c.settle(now.Add(m.canaryEvery))
 		m.healthy.Store(false)
 		return
 	}

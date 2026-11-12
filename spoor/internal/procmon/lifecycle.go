@@ -52,11 +52,17 @@ const (
 // an editor extension host, or a URL/protocol handler. The agent's own
 // environment is checked first because it is explicit: npm, yarn, pnpm and
 // bun all export npm_lifecycle_event to the scripts they run, and every
-// process below inherits it. Ancestors are checked nearest first. Last, the
-// agent's inherited VS Code process type covers an extension host whose own
-// environment could not be read.
+// process below inherits it. The exception is "npx": npm exec and npx run
+// their command through the same script runner under that event name
+// (libnpmexec lib/run-script.js, `event: 'npx'`; @npmcli/run-script
+// make-spawn-args.js sets npm_lifecycle_event from it, checked 2026-11-12
+// in npm 10). A person or a program running npx chose to run the agent, so
+// that value is not a verdict: the ancestors decide, and a package script
+// that itself ran npx is still found above the npm exec process. Ancestors
+// are checked nearest first. Last, the agent's inherited VS Code process
+// type covers an extension host whose own environment could not be read.
 func lifecycleParent(env map[string]string, ancestors []ancestor) string {
-	if ev := strings.TrimSpace(env["npm_lifecycle_event"]); ev != "" {
+	if ev := strings.TrimSpace(env["npm_lifecycle_event"]); ev != "" && ev != npxEvent {
 		return managerFromEnv(env)
 	}
 	for _, a := range ancestors {
@@ -104,6 +110,9 @@ func managerFromEnv(env map[string]string) string {
 	}
 	return LifecycleNPM
 }
+
+// npxEvent is the npm_lifecycle_event of everything npm exec / npx runs.
+const npxEvent = "npx"
 
 // Package-manager subcommands that only launch a package (npx-style) are
 // not lifecycle parents: a person running "npx @openai/codex" chose to run

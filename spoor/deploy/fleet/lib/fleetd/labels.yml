@@ -40,7 +40,7 @@
     LIMIT 1;
   label_membership_type: dynamic
 - name: spoor tables unavailable
-  description: 'spoor is installed but osquery has no spoor_health table: the extension is not loaded or the ATC agent options did not reach the host. Every spoor policy shows no response (neither pass nor fail) on such a host.'
+  description: 'spoor is installed but osquery has no spoor_health table: the extension is not loaded or the ATC agent options did not reach the host. On fleetd hosts this includes hosts where Fleet manages osquery extensions (the extensions agent option): orbit then points osquery at its own extensions.load, and an extension registered in osquery''s default file is not loaded. Every spoor policy shows no response (neither pass nor fail) on such a host.'
   query: |-
     SELECT 1 FROM file
     WHERE path IN ('/usr/bin/spoor', '/var/lib/spoor/state.db', '/usr/local/bin/spoor', '/Library/Application Support/spoor/state.db', 'C:\Program Files\spoor\spoor.exe', 'C:\ProgramData\spoor\state.db')

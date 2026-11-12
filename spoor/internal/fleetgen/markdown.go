@@ -29,7 +29,8 @@ func (c *Content) renderMarkdown() []byte {
 
 	w("## Files\n\n| file | content |\n|---|---|\n")
 	w("| `%s` | ATC fragment to merge into agent options (all %d spoor tables, one block per OS) |\n", FileATC, len(c.ATC[PlatformLinux]))
-	w("| `%s` | the fragment merged into a typical base configuration |\n", FileATCExample)
+	w("| `%s` | the fragment merged into a typical base configuration (tier 2) |\n", FileATCExample)
+	w("| `%s` | the same base without spoor's ATC tables (tier 3, the extension) |\n", FileBaseExample)
 	for _, p := range c.Profiles {
 		w("| `%s/` | %s: %s, %s, %s |\n", p.Name, p.Title, plural(len(p.Labels), "label"),
 			plural(len(p.Policies), "policy"), plural(len(p.Reports), "report"))

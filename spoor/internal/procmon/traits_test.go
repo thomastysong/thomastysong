@@ -33,6 +33,12 @@ func TestTraits(t *testing.T) {
 		{"codex", []string{"npx", "@openai/codex", "exec"}, nil, true, false, false, false},
 		{"codex", []string{"codex", "please exec the tests"}, nil, false, false, false, false},
 		{"codex", []string{"codex", "--dangerously-bypass-hook-trust"}, nil, false, false, true, false},
+		// codex-rs/cli/src/main.rs: Exec has visible_alias "e"; Review runs
+		// a code review non-interactively.
+		{"codex", []string{"codex", "e", "--dangerously-bypass-approvals-and-sandbox", "fix the build"}, nil, true, false, false, false},
+		{"codex", []string{"codex", "--yolo", "e", "fix"}, nil, true, false, false, false},
+		{"codex", []string{"codex", "review", "--uncommitted"}, nil, true, false, false, false},
+		{"codex", []string{"codex", "resume", "--last"}, nil, false, false, false, false},
 		{"gemini-cli", []string{"gemini", "-p", "x"}, nil, true, false, false, false},
 		{"gemini-cli", []string{"gemini", "--output-format", "json"}, nil, true, false, false, false},
 		{"gemini-cli", []string{"gemini"}, nil, false, false, false, false},
@@ -104,6 +110,13 @@ func TestLifecycleParent(t *testing.T) {
 		{"process.title", nil, []ancestor{{name: "npm install left-pad", args: []string{"npm install left-pad"}}}, LifecycleNPM},
 		{"node npm-cli.js", nil, []ancestor{{name: "node", exe: "/usr/bin/node", args: []string{"node", "/usr/lib/node_modules/npm/bin/npm-cli.js", "ci"}}}, LifecycleNPM},
 		{"npx is a runner", nil, []ancestor{anc("npm", "exec", "@openai/codex"), anc("bash")}, ""},
+		// npm exec / npx export npm_lifecycle_event=npx (libnpmexec
+		// run-script.js `event: 'npx'`): a runner, not a verdict.
+		{"npx env", map[string]string{"npm_lifecycle_event": "npx", "npm_config_user_agent": "npm/10.9.2 node/v22.11.0 linux x64 workspaces/false", "npm_command": "exec"},
+			[]ancestor{anc("sh", "-c", "claude --dangerously-skip-permissions"), {name: "npm exec claude", args: []string{"npm exec claude-flow@alpha swarm"}}, anc("bash", "-l")}, ""},
+		{"npx env under a package script", map[string]string{"npm_lifecycle_event": "npx"},
+			[]ancestor{{name: "npm exec claude", args: []string{"npm exec claude"}}, anc("sh", "-c", "npx claude"), {name: "npm run build", args: []string{"npm run build"}}}, LifecycleNPM},
+		{"install script of a package npx fetched", map[string]string{"npm_lifecycle_event": "postinstall", "npm_command": "exec"}, nil, LifecycleNPM},
 		{"pnpm dlx is a runner", nil, []ancestor{anc("pnpm", "dlx", "x")}, ""},
 		{"yarn add", nil, []ancestor{anc("yarn", "add", "x")}, LifecycleYarn},
 		{"bun run is not install", nil, []ancestor{anc("bun", "run", "dev")}, ""},

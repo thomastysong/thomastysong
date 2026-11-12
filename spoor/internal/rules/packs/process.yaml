@@ -101,6 +101,8 @@ rules:
     tags: [owasp.asi10]
     references:
       - "research/threats.md section 3 R02"
+    falsepositives:
+      - "Users who run agents with approvals off inside a disposable container or VM"
     when:
       type: agent.process.start
     match:
@@ -214,6 +216,8 @@ rules:
     tags: [atlas.aml.t0081]
     references:
       - "research/threats.md section 3 R46"
+    falsepositives:
+      - "Wrapper scripts and IDE integrations that pass settings inline"
     when:
       type: [agent.process.start, process.exec]
     match:

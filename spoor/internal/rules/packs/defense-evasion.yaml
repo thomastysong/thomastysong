@@ -287,6 +287,8 @@ rules:
     references:
       - "research/threats.md section 2 row 24 (dangerouslyDisableSandbox after a deny)"
       - "research/threats.md section 3 R36"
+    falsepositives:
+      - "Commands that legitimately need network or file access outside the sandbox (package installs, docker)"
     when:
       type: tool.pre
     match:
@@ -408,6 +410,8 @@ rules:
     tags: [owasp.asi02]
     references:
       - "research/threats.md section 3 R38"
+    falsepositives:
+      - "Work-in-progress commits on a local branch where hooks are slow or broken"
     when:
       type: [tool.pre, process.exec]
     match:

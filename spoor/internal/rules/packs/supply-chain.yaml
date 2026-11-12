@@ -73,6 +73,8 @@ rules:
       - "research/threats.md section 2 row 33: AGENTS.md tells Codex to install function-color"
       - "research/threats.md section 2 row 35: postmark-mcp 1.0.16"
       - "research/threats.md section 3 R33"
+    falsepositives:
+      - "Security researchers installing a known-malicious package in an isolated lab (tag the host offsec)"
     when:
       type: [tool.pre, process.exec]
     match:
@@ -151,6 +153,9 @@ rules:
     tags: [attack.t1195.001, owasp.asi04]
     references:
       - "research/threats.md section 3 R33"
+    falsepositives:
+      - "Installing a fork or an unreleased fix from git at the user's request"
+      - "Internal packages hosted on the org's own git server"
     when:
       type: [tool.pre, process.exec]
     match:
@@ -185,6 +190,8 @@ rules:
     tags: [attack.t1195.002, owasp.asi04]
     references:
       - "research/threats.md section 6 (npx -y MCP servers are the ecosystem default)"
+    falsepositives:
+      - "npx, uvx or pipx running a well-known CLI"
     when:
       type: [tool.pre, process.exec]
     match:

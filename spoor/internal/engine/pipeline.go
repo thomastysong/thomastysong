@@ -45,6 +45,7 @@ type Pipeline struct {
 	qmu      sync.Mutex
 	queue    []queued
 	qcap     int
+	qclosed  bool // set under qmu by Close before its final drain
 	wake     chan struct{}
 	done     chan struct{}
 	wg       sync.WaitGroup
@@ -65,12 +66,22 @@ type Pipeline struct {
 	rulesHash string
 	bundleVer string
 
-	sessions map[string]*list.Element // of *session, LRU by wall time
-	lru      *list.List
-	excluded map[string]struct{}
-	corr     *correlator
-	cov      map[covKey]*covEntry
-	procs    map[string]*proc
+	sessions   map[string]*list.Element // of *session, LRU by wall time
+	lru        *list.List
+	excluded   map[string]struct{}
+	corr       *correlator
+	cov        map[covKey]*covEntry
+	covPerUser map[string]int
+	procs      map[string]*proc
+	buckets    map[string]*bucket // activity buckets without a session, and per account
+	mcpDefs    map[mcpDefKey]string
+
+	// OTel attribution (attribution.go)
+	attrIdx     map[string]map[string]struct{} // attribution key -> live session keys
+	attrExcl    map[string]struct{}
+	pending     []*pendingRec
+	pendingKeys map[string]int
+	adopt       []string
 
 	outbox   []*event.Event
 	local    []*event.Event
@@ -148,27 +159,33 @@ func New(o Options) (*Pipeline, error) {
 
 	p := &Pipeline{
 		o: o, cfg: cfg, mode: o.Mode, integrity: o.Integrity,
-		forceHost: o.Host.ID != "" || o.Host.Name != "",
-		started:   o.Now(),
-		minRank:   event.ClassRank(minClass),
-		contextN:  min(max(cfg.Privacy.ContextEvents, 0), privacy.MaxContext),
-		rate:      float64(cfg.Limits.ActivityPerSecond),
-		burst:     float64(cfg.Limits.ActivityBurst),
-		async:     o.Mode == ModeDaemon,
-		disabled:  o.Disabled,
-		bundleVer: o.BundleVersion,
-		sessions:  map[string]*list.Element{},
-		lru:       list.New(),
-		excluded:  map[string]struct{}{},
-		corr:      newCorrelator(),
-		cov:       map[covKey]*covEntry{},
-		procs:     map[string]*proc{},
-		streams:   map[string]*streamStat{},
-		seq:       map[string]uint64{},
-		lseq:      map[string]uint64{},
-		surfaces:  map[event.Source]*surfaceStat{},
-		wake:      make(chan struct{}, 1),
-		done:      make(chan struct{}),
+		forceHost:   o.Host.ID != "" || o.Host.Name != "",
+		started:     o.Now(),
+		minRank:     event.ClassRank(minClass),
+		contextN:    min(max(cfg.Privacy.ContextEvents, 0), privacy.MaxContext),
+		rate:        float64(cfg.Limits.ActivityPerSecond),
+		burst:       float64(cfg.Limits.ActivityBurst),
+		async:       o.Mode == ModeDaemon,
+		disabled:    o.Disabled,
+		bundleVer:   o.BundleVersion,
+		sessions:    map[string]*list.Element{},
+		lru:         list.New(),
+		excluded:    map[string]struct{}{},
+		corr:        newCorrelator(),
+		cov:         map[covKey]*covEntry{},
+		procs:       map[string]*proc{},
+		covPerUser:  map[string]int{},
+		buckets:     map[string]*bucket{},
+		mcpDefs:     map[mcpDefKey]string{},
+		attrIdx:     map[string]map[string]struct{}{},
+		attrExcl:    map[string]struct{}{},
+		pendingKeys: map[string]int{},
+		streams:     map[string]*streamStat{},
+		seq:         map[string]uint64{},
+		lseq:        map[string]uint64{},
+		surfaces:    map[event.Source]*surfaceStat{},
+		wake:        make(chan struct{}, 1),
+		done:        make(chan struct{}),
 	}
 	if p.disabled == nil {
 		p.disabled = defaultDisabled
@@ -299,6 +316,11 @@ func (p *Pipeline) Ingest(evs ...*event.Event) {
 	if !p.async {
 		p.pmu.Lock()
 		defer p.pmu.Unlock()
+		if p.closed.Load() {
+			// Close ran while this call waited for the lock.
+			p.closedDropped.Add(n)
+			return
+		}
 		now := p.o.Now()
 		for _, ev := range evs {
 			p.processSafe(ev, now)
@@ -311,6 +333,13 @@ func (p *Pipeline) Ingest(evs ...*event.Event) {
 	// reached the pipeline, not from when the worker got to it.
 	at := p.o.Now()
 	p.qmu.Lock()
+	if p.qclosed {
+		// Close has drained the queue for the last time: this call passed
+		// the closed check before Close started and must still be counted.
+		p.qmu.Unlock()
+		p.closedDropped.Add(n)
+		return
+	}
 	room := p.qcap - len(p.queue)
 	if room < len(evs) {
 		if room < 0 {
@@ -353,10 +382,25 @@ func (p *Pipeline) worker() {
 		// pmu is taken before the queue is swapped, so a Tick that holds
 		// pmu has seen every event queued before it started.
 		p.pmu.Lock()
-		p.drainLocked()
+		if p.disabledNow(true) {
+			// Pulled after these records were queued: they are dropped and
+			// counted like any input that arrives while the switch is on.
+			p.dropQueued()
+		} else {
+			p.drainLocked()
+		}
 		p.flushWrites()
 		p.pmu.Unlock()
 	}
+}
+
+// dropQueued discards the queue and counts it (kill switch).
+func (p *Pipeline) dropQueued() {
+	p.qmu.Lock()
+	n := len(p.queue)
+	p.queue = nil
+	p.qmu.Unlock()
+	p.disabledDropped.Add(uint64(n))
 }
 
 // drainLocked processes everything queued; pmu must be held.
@@ -407,19 +451,18 @@ func (p *Pipeline) tickLocked(now time.Time, closing bool) {
 	if disabled {
 		// Collectors idle: queued input is dropped and counted like any
 		// input that arrives while the switch is on.
-		p.qmu.Lock()
-		n := len(p.queue)
-		p.queue = nil
-		p.qmu.Unlock()
+		p.dropQueued()
 		if closing {
-			// Held records and session rollups end with the process.
+			// Held and waiting records and session rollups end with the
+			// process.
+			n := len(p.pending)
 			for _, h := range p.corr.held {
 				if !h.done {
 					n++
 				}
 			}
+			p.disabledDropped.Add(uint64(n))
 		}
-		p.disabledDropped.Add(uint64(n))
 		if p.heartbeatDue(now) || closing {
 			p.heartbeat(now, true)
 		}
@@ -427,6 +470,8 @@ func (p *Pipeline) tickLocked(now time.Time, closing bool) {
 		return
 	}
 	p.drainLocked()
+	p.releasePending(now, closing)
+	p.adoptPending(now)
 	p.releaseHeld(now, closing)
 	p.checkBypass(now)
 	p.sweepSessions(now, closing)
@@ -478,6 +523,9 @@ func (p *Pipeline) Writer() string { return p.writer }
 func (p *Pipeline) Close() error {
 	p.once.Do(func() {
 		p.closed.Store(true)
+		p.qmu.Lock()
+		p.qclosed = true
+		p.qmu.Unlock()
 		close(p.done)
 		p.wg.Wait()
 		p.pmu.Lock()

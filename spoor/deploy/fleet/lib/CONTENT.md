@@ -17,7 +17,8 @@ Heartbeat windows: the sensor policy and the "spoor sensor unhealthy" label acce
 | file | content |
 |---|---|
 | `agent-options.atc.yml` | ATC fragment to merge into agent options (all 9 spoor tables, one block per OS) |
-| `agent-options.example.yml` | the fragment merged into a typical base configuration |
+| `agent-options.example.yml` | the fragment merged into a typical base configuration (tier 2) |
+| `agent-options.base.example.yml` | the same base without spoor's ATC tables (tier 3, the extension) |
 | `stock/` | spoor on plain osquery: 4 labels, 10 policies, 4 reports |
 | `fleetd/` | spoor on fleetd: 4 labels, 10 policies, 4 reports |
 | `builtin/` | No spoor binary: Fleet's built-in ai_tools table: 1 label, 2 policies, 1 report |
@@ -34,7 +35,7 @@ For any osquery 5 host (fleetd or not) with the spoor sensor, reading spoor's ta
 - **spoor installed**: The spoor binary or its state database exists at the path a system install uses (binary or state database; exact paths, no wildcards). Uses only osquery's file table, so it works before any spoor table is available and can scope the rollout.
 - **AI agents present**: spoor's inventory lists at least one AI agent, AI app or IDE extension, AI browser or local model runtime that has not been removed.
 - **spoor sensor unhealthy**: spoor is installed but its heartbeat is older than 30 minutes or missing. A host whose spoor tables are not loaded at all cannot answer this query; it appears in "spoor tables unavailable" instead.
-- **spoor tables unavailable**: spoor is installed but osquery has no spoor_health table: the extension is not loaded or the ATC agent options did not reach the host. Every spoor policy shows no response (neither pass nor fail) on such a host.
+- **spoor tables unavailable**: spoor is installed but osquery has no spoor_health table: the extension is not loaded or the ATC agent options did not reach the host. On fleetd hosts this includes hosts where Fleet manages osquery extensions (the extensions agent option): orbit then points osquery at its own extensions.load, and an extension registered in osquery's default file is not loaded. Every spoor policy shows no response (neither pass nor fail) on such a host.
 
 ### Policies
 
@@ -69,7 +70,7 @@ For hosts running Fleet's agent (fleetd 1.59.0 or later): inventory questions al
 - **spoor installed**: The spoor binary or its state database exists at the path a system install uses (binary or state database; exact paths, no wildcards). Uses only osquery's file table, so it works before any spoor table is available and can scope the rollout.
 - **AI agents present**: Fleet's ai_tools table (fleetd 1.59.0 or later) lists an AI agent, app, IDE plugin, MCP server or browser extension. Needs no spoor table, so it can scope the spoor rollout.
 - **spoor sensor unhealthy**: spoor is installed but its heartbeat is older than 30 minutes or missing. A host whose spoor tables are not loaded at all cannot answer this query; it appears in "spoor tables unavailable" instead.
-- **spoor tables unavailable**: spoor is installed but osquery has no spoor_health table: the extension is not loaded or the ATC agent options did not reach the host. Every spoor policy shows no response (neither pass nor fail) on such a host.
+- **spoor tables unavailable**: spoor is installed but osquery has no spoor_health table: the extension is not loaded or the ATC agent options did not reach the host. On fleetd hosts this includes hosts where Fleet manages osquery extensions (the extensions agent option): orbit then points osquery at its own extensions.load, and an extension registered in osquery's default file is not loaded. Every spoor policy shows no response (neither pass nor fail) on such a host.
 
 ### Policies
 
@@ -132,6 +133,6 @@ purpose, a retention limit at the log destination and, where it applies,
 your works council's or DPO's agreement.
 ```
 
-- **spoor opt-in - agent child processes (Linux, audit)** (`linux`, every 10 minutes): OPT-IN, sends raw command lines to Fleet: processes started by an AI agent's root process (depth 1) or by its direct children (depth 2), from process_events joined to spoor_agent_processes. Needs disable_events: false, disable_audit: false, audit_allow_process_events: true, audit_persist: true (command_line_flags; orbit restarts osquery when they change). A pid reused within 1 hour of the agent exiting can be misattributed.
-- **spoor opt-in - agent child processes (macOS, EndpointSecurity)** (`darwin`, every 10 minutes): OPT-IN, sends raw command lines to Fleet: processes started by an AI agent's root process (depth 1) or by its direct children (depth 2), from es_process_events joined to spoor_agent_processes. Needs disable_events: false, disable_endpointsecurity: false; osquery needs Full Disk Access (PPPC profile). A pid reused within 1 hour of the agent exiting can be misattributed.
-- **spoor opt-in - agent child processes (Windows, ETW)** (`windows`, every 10 minutes): OPT-IN, sends raw command lines to Fleet: processes started by an AI agent's root process (depth 1) or by its direct children (depth 2), from process_etw_events joined to spoor_agent_processes. Needs disable_events: false, enable_process_etw_events: true. A pid reused within 1 hour of the agent exiting can be misattributed.
+- **spoor opt-in - agent child processes (Linux, audit)** (`linux`, every 10 minutes): OPT-IN, sends raw command lines to Fleet: processes started by an AI agent's root process (depth 1) or by its direct children (depth 2), from process_events joined to spoor_agent_processes. Needs disable_events: false, disable_audit: false, audit_allow_process_events: true, audit_persist: true (command_line_flags; orbit restarts osquery when they change). osquery returns only the events since the previous run, so a depth-2 parent from an earlier run is looked up in the processes table; a grandchild whose parent started before the previous run and has exited is not attributed (join earlier depth-1 rows on pid downstream). A pid reused within 1 hour of the agent exiting can be misattributed.
+- **spoor opt-in - agent child processes (macOS, EndpointSecurity)** (`darwin`, every 10 minutes): OPT-IN, sends raw command lines to Fleet: processes started by an AI agent's root process (depth 1) or by its direct children (depth 2), from es_process_events joined to spoor_agent_processes. Needs disable_events: false, disable_endpointsecurity: false; osquery needs Full Disk Access (PPPC profile). osquery returns only the events since the previous run, so a depth-2 parent from an earlier run is looked up in the processes table; a grandchild whose parent started before the previous run and has exited is not attributed (join earlier depth-1 rows on pid downstream). A pid reused within 1 hour of the agent exiting can be misattributed.
+- **spoor opt-in - agent child processes (Windows, ETW)** (`windows`, every 10 minutes): OPT-IN, sends raw command lines to Fleet: processes started by an AI agent's root process (depth 1) or by its direct children (depth 2), from process_etw_events joined to spoor_agent_processes. Needs disable_events: false, enable_process_etw_events: true. osquery returns only the events since the previous run, so a depth-2 parent from an earlier run is looked up in the processes table; a grandchild whose parent started before the previous run and has exited is not attributed (join earlier depth-1 rows on pid downstream). A pid reused within 1 hour of the agent exiting can be misattributed.

@@ -154,6 +154,9 @@ rules:
     tags: [owasp.asi05]
     references:
       - "research/threats.md section 3 R38, R39"
+    falsepositives:
+      - "Installing hooks with husky, pre-commit or lefthook"
+      - "Removing a stale hook at the user's request"
     when:
       type: [tool.pre, process.exec]
     match:

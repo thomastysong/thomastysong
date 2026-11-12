@@ -28,6 +28,8 @@ rules:
     references:
       - "research/threats.md section 4 S1"
       - "redteam/detection-quality.md section 2 (untrusted_input in 68% of benign threads)"
+    falsepositives:
+      - "Any web fetch, search or MCP result: the marker records that untrusted content arrived, not that it was hostile"
     when:
       type: tool.post
     match:
@@ -40,6 +42,7 @@ rules:
       set: [untrusted_input]
       ttl: 30m
     emit: false
+    remedy: "Nothing to do: a marker records context for other rules and raises no detection itself."
     tests:
       - name: web fetch result
         event: { type: tool.post, tool: { kind: web_fetch, name: WebFetch }, target: { url: "https://blog.example/post", host: blog.example } }
@@ -69,14 +72,26 @@ rules:
     tags: [attack.t1552.001, atlas.aml.t0055]
     references:
       - "research/threats.md section 4 S1 and S8"
+    falsepositives:
+      - "Reading .env, kubeconfig or cloud credentials for ordinary debugging"
     when:
       type: [tool.pre, process.exec]
     match:
       any:
-        - path.sensitive_read: true
+        - all:
+            - path.sensitive_read: true
+            - path.classes|contains_any: [secret_env, ssh_private_key, cloud_credentials, kube_config, docker_config, git_credentials, netrc, npm_token, pypi_token, gpg_keyring, password_store, keychain, browser_data, crypto_wallet, cert_private_key, proc_environ]
+        - all:
+            - path.sensitive_read: true
+            - path.classes: token_file
+            - path.outside_cwd: true
         - shell.cred_access|contains_any: [secret_file_read, ssh_key_read, keychain_dump, browser_cred, password_store, token_print, proc_environ_read, cloud_metadata]
         - all:
-            - shell.read_classes|contains_any: [secret_env, ssh_private_key, cloud_credentials, kube_config, docker_config, git_credentials, netrc, npm_token, pypi_token, gpg_keyring, password_store, keychain, browser_data, crypto_wallet, token_file, cert_private_key, proc_environ]
+            - shell.read_classes|contains_any: [secret_env, ssh_private_key, cloud_credentials, kube_config, docker_config, git_credentials, netrc, npm_token, pypi_token, gpg_keyring, password_store, keychain, browser_data, crypto_wallet, cert_private_key, proc_environ]
+            - not:
+                shell.reads|any_contains: ["*", "?", "[", "{"]
+        - all:
+            - shell.read_classes|contains_all: [token_file, outside_cwd]
             - not:
                 shell.reads|any_contains: ["*", "?", "[", "{"]
         - mcp.arg_path_classes|contains_any: [secret_env, ssh_private_key, cloud_credentials, kube_config, docker_config, git_credentials, netrc, npm_token, pypi_token, password_store, keychain, browser_data, crypto_wallet, token_file, cert_private_key]
@@ -84,6 +99,7 @@ rules:
       set: [secret_read]
       ttl: 30m
     emit: false
+    remedy: "Nothing to do: a marker records context for other rules and raises no detection itself."
     tests:
       - name: aws credentials via cat
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cat ~/.aws/credentials" } }
@@ -112,6 +128,8 @@ rules:
     tags: [owasp.asi10]
     references:
       - "research/threats.md section 4 S7"
+    falsepositives:
+      - "A user declining a tool call for any reason"
     when:
       type: [tool.post, permission.decision]
     match:
@@ -122,6 +140,7 @@ rules:
       set: [permission_denied]
       ttl: 15m
     emit: false
+    remedy: "Nothing to do: a marker records context for other rules and raises no detection itself."
     tests:
       - name: denied tool result
         event: { type: tool.post, tool: { kind: shell, name: Bash }, target: { command: "rm -rf build" }, outcome: { status: denied, decision: deny } }
@@ -145,6 +164,8 @@ rules:
     tags: [attack.t1059.006]
     references:
       - "research/threats.md section 3 R48"
+    falsepositives:
+      - "Projects that legitimately ship a module named like a standard-library module (a local json.py or types.py)"
     when:
       type: [tool.pre, process.exec]
     match:
@@ -157,6 +178,7 @@ rules:
       set: [stdlib_shadow_written]
       ttl: 2h
     emit: false
+    remedy: "Nothing to do: a marker records context for other rules and raises no detection itself."
     tests:
       - name: json.py written
         event: { type: tool.pre, tool: { kind: file_write, name: Write }, target: { path: /home/tester/project/json.py } }
@@ -188,6 +210,8 @@ rules:
     tags: [atlas.aml.t0051.001, attack.t1698, owasp.asi01]
     references:
       - "research/threats.md section 2 row 36: tool poisoning; row 39: Rules File Backdoor"
+    falsepositives:
+      - "Documentation, security research or test fixtures that quote prompt-injection text"
     when:
       type: tool.post
     match:
@@ -198,6 +222,7 @@ rules:
       set: [injection_seen]
       ttl: 30m
     emit: false
+    remedy: "Nothing to do: a marker records context for other rules and raises no detection itself."
     tests:
       - name: fetched page with an override
         event: { type: tool.post, tool: { kind: web_fetch, name: WebFetch }, target: { url: "https://blog.example/p", host: blog.example } }
@@ -223,11 +248,19 @@ rules:
     tags: [attack.t1119, attack.t1552.001]
     references:
       - "research/threats.md section 4 S8"
+    falsepositives:
+      - "Setting up a new machine or debugging credentials across several tools"
     when:
       type: [tool.pre, process.exec]
     match:
       any:
-        - path.sensitive_read: true
+        - all:
+            - path.sensitive_read: true
+            - path.classes|contains_any: [secret_env, ssh_private_key, cloud_credentials, kube_config, docker_config, git_credentials, netrc, npm_token, pypi_token, gpg_keyring, password_store, keychain, browser_data, crypto_wallet, cert_private_key, proc_environ]
+        - all:
+            - path.sensitive_read: true
+            - path.classes: token_file
+            - path.outside_cwd: true
         - shell.cred_access|contains_any: [secret_file_read, ssh_key_read, keychain_dump, browser_cred, password_store, proc_environ_read, cloud_metadata]
     threshold:
       count: 3
@@ -236,6 +269,7 @@ rules:
       set: [bulk_secret_read]
       ttl: 30m
     emit: false
+    remedy: "Nothing to do: a marker records context for other rules and raises no detection itself."
     tests:
       - name: three secret files
         events:
@@ -264,6 +298,8 @@ rules:
     tags: [atlas.aml.t0081]
     references:
       - "research/threats.md section 4 S11"
+    falsepositives:
+      - "A user asking the agent to edit a global CLAUDE.md or another project's instructions"
     when:
       type: tool.pre
     match:
@@ -274,6 +310,7 @@ rules:
       set: [control_written_outside]
       ttl: 1h
     emit: false
+    remedy: "Nothing to do: a marker records context for other rules and raises no detection itself."
     tests:
       - name: settings of another repository
         event: { type: tool.pre, tool: { kind: file_write, name: Write }, target: { path: /home/tester/other-repo/.claude/settings.json } }
@@ -304,14 +341,26 @@ rules:
     tags: [attack.t1552.001, atlas.aml.t0055]
     references:
       - "research/threats.md section 4 S1"
+    falsepositives:
+      - "Reading credentials to configure a tool at the user's request"
     when:
       type: [tool.pre, tool.post, process.exec]
     match:
       any:
-        - path.sensitive_read: true
+        - all:
+            - path.sensitive_read: true
+            - path.classes|contains_any: [secret_env, ssh_private_key, cloud_credentials, kube_config, docker_config, git_credentials, netrc, npm_token, pypi_token, gpg_keyring, password_store, keychain, browser_data, crypto_wallet, cert_private_key, proc_environ]
+        - all:
+            - path.sensitive_read: true
+            - path.classes: token_file
+            - path.outside_cwd: true
         - shell.cred_access|contains_any: [secret_file_read, ssh_key_read, keychain_dump, browser_cred, password_store, token_print, proc_environ_read, cloud_metadata]
         - all:
-            - shell.read_classes|contains_any: [secret_env, ssh_private_key, cloud_credentials, kube_config, docker_config, git_credentials, netrc, npm_token, pypi_token, gpg_keyring, password_store, keychain, browser_data, crypto_wallet, token_file, cert_private_key, proc_environ]
+            - shell.read_classes|contains_any: [secret_env, ssh_private_key, cloud_credentials, kube_config, docker_config, git_credentials, netrc, npm_token, pypi_token, gpg_keyring, password_store, keychain, browser_data, crypto_wallet, cert_private_key, proc_environ]
+            - not:
+                shell.reads|any_contains: ["*", "?", "[", "{"]
+        - all:
+            - shell.read_classes|contains_all: [token_file, outside_cwd]
             - not:
                 shell.reads|any_contains: ["*", "?", "[", "{"]
         - mcp.arg_path_classes|contains_any: [secret_env, ssh_private_key, cloud_credentials, kube_config, docker_config, git_credentials, netrc, npm_token, pypi_token, password_store, keychain, browser_data, crypto_wallet, token_file, cert_private_key]
@@ -319,6 +368,7 @@ rules:
       set: [credential_source_read]
       ttl: 24h
     emit: false
+    remedy: "Nothing to do: a marker records context for other rules and raises no detection itself."
     tests:
       - name: dotenv read result
         event: { type: tool.post, tool: { kind: file_read, name: Read }, target: { path: /home/tester/project/.env } }
@@ -335,6 +385,9 @@ rules:
       - name: token file without a parser-recognised credential command
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cat ~/.config/deploy/token" } }
         expect: match
+      - name: project file named like a credential
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "sed -n 1,40p internal/rules/packs/credential.yaml" } }
+        expect: no_match
 
   - id: SPR-SEQ-001
     title: Untrusted input, credential read and egress in one thread

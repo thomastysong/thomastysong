@@ -181,3 +181,100 @@ func TestNoExecImport(t *testing.T) {
 		}
 	}
 }
+
+// overflowCN reports a netlink overrun every 2 ms, as a sustained exec
+// storm (a parallel build) does.
+type overflowCN struct{}
+
+func (overflowCN) recv([]byte) (int, error) {
+	time.Sleep(2 * time.Millisecond)
+	return 0, errCNOverflow
+}
+func (overflowCN) close() {}
+
+// TestOverflowStormKeepsScanBudget: every overrun asks for a resync, but
+// the requests are coalesced so that full scans keep to the 5% budget
+// (doc.go) instead of running back to back.
+func TestOverflowStormKeepsScanBudget(t *testing.T) {
+	h := newFakeHost(t)
+	h.add(fakeProc{pid: 1, comm: "init", ticks: 1, args: []string{"/sbin/init"}, exe: "/sbin/init", uid: "0"})
+	for i := 0; i < 1500; i++ {
+		pid := 1000 + i
+		h.add(fakeProc{pid: pid, ppid: 1, comm: "worker", ticks: uint64(pid), args: []string{"worker", "--n"}, exe: "/usr/bin/worker"})
+	}
+	if runtime.GOOS != "linux" {
+		t.Skip("HostRoot is Linux only")
+	}
+	m := New(Options{Catalog: loadCatalog(t), HostRoot: h.root, NoOsquery: true, ExecEvents: true, Emit: func(*event.Event) {}})
+	m.disabled = func() bool { return false }
+	m.canaryFn = func() (string, []string, bool) { return "", nil, false }
+	m.openCN = func() (cnConn, error) { return overflowCN{}, nil }
+	// Cost of one full scan of this table once it is populated.
+	m2, _ := newFixtureMonitor(t, h)
+	m2.fullScan(m2.now())
+	t0 := time.Now()
+	const n = 5
+	for i := 0; i < n; i++ {
+		m2.fullScan(m2.now())
+	}
+	per := time.Since(t0) / n
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	start := time.Now()
+	if err := m.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	wall := time.Since(start)
+	st := m.Stats()
+	busy := time.Duration(st.Scans) * per
+	t.Logf("one full scan %v; %d scans in %v (overflows %d) => ~%.0f%% of a core in scans", per, st.Scans, wall, st.Overflows, 100*busy.Seconds()/wall.Seconds())
+	if st.Overflows < 100 {
+		t.Fatalf("the fake connector did not storm: %+v", st)
+	}
+	if busy > wall/5 { // 4x the promised 5%
+		t.Fatalf("sustained ENOBUFS: %d full scans in %v (~%.0f%% of a core), the 5%% budget allows ~%d",
+			st.Scans, wall, 100*busy.Seconds()/wall.Seconds(), int(wall/(20*per))+1)
+	}
+	if st.Scans < 1 {
+		t.Error("no resync at all")
+	}
+}
+
+// TestResyncPacing checks the schedule itself on a fake clock: the first
+// request runs at once, later ones wait for Idle (or twenty scan
+// durations) after the previous full scan, and the mark survives until
+// then.
+func TestResyncPacing(t *testing.T) {
+	h := newFakeHost(t)
+	h.add(fakeProc{pid: 1, comm: "init", ticks: 1, args: []string{"/sbin/init"}, exe: "/sbin/init", uid: "0"})
+	m, clk := newFixtureMonitor(t, h)
+	m.o.Idle = 2 * time.Second
+	r := &runner{m: m}
+	r.tick(t.Context())
+	scans := m.Stats().Scans
+	m.requestResync()
+	clk.add(100 * time.Millisecond)
+	r.tick(t.Context())
+	if m.Stats().Scans != scans || !m.resyncRq.Load() {
+		t.Fatalf("resync ran %v after the last scan (scans %d -> %d)", 100*time.Millisecond, scans, m.Stats().Scans)
+	}
+	if w := r.wait(clk.now()); w > 1900*time.Millisecond+time.Millisecond {
+		t.Errorf("wait = %v, want the time left until the resync is due", w)
+	}
+	clk.add(1900 * time.Millisecond)
+	r.tick(t.Context())
+	if m.Stats().Scans != scans+1 || m.resyncRq.Load() {
+		t.Fatalf("due resync did not run: scans %d, pending %v", m.Stats().Scans, m.resyncRq.Load())
+	}
+	// Repeated requests wake the loop once.
+	select {
+	case <-m.nudge:
+	default:
+	}
+	m.requestResync()
+	m.requestResync()
+	if len(m.nudge) != 1 {
+		t.Errorf("nudges = %d", len(m.nudge))
+	}
+}

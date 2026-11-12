@@ -73,9 +73,11 @@
 //
 // # Unsupported
 //
-// Paths with an osquery wildcard (%), control or formatting characters, or
-// that are not absolute and clean for their OS are rejected: the "spoor
-// installed" label compares paths exactly. Platforms other than linux,
+// Paths with an osquery wildcard or glob character (% * ? [ ] { }), control
+// or formatting characters, or that are not absolute and clean for their OS
+// (no empty, "." or ".." element, no trailing separator; backslashes only on
+// Windows) are rejected: ATC expands patterns and reports canonical paths,
+// while the "spoor installed" label compares paths exactly. Platforms other than linux,
 // darwin and windows have no spoor build and get no ATC block. The macOS
 // and Windows queries (es_process_events, process_etw_events, build_platform
 // values) are checked against osquery's schema, not on those systems.

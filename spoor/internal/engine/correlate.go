@@ -27,9 +27,15 @@ import (
 //     unmatched list.
 //
 // Records without a natural key (no tool-call id, no prompt text) are not
-// correlated, except OTel tool records without a call id in a session that
-// has hook records: those can never be matched and would duplicate every
-// hook record, so they only corroborate.
+// correlated, except OTel tool and prompt records in a session that has
+// hook or transcript records: Gemini CLI's telemetry has no call id, and
+// prompt text is redacted from OTel by default, so such a record can never
+// be matched and would duplicate the other surface's record of the same
+// action; it only corroborates.
+//
+// A held record is counted on its session (heldN): a session that ends
+// while some of its records are held writes its final summary once they
+// have been processed, so the one final summary is complete.
 
 type corrAction int
 
@@ -53,6 +59,10 @@ type held struct {
 	skey string
 	at   time.Time
 	done bool
+	// noBypass: released unmatched, the record is not a tool call the hook
+	// missed (an OTel record whose account was attributed, see
+	// attribution.go).
+	noBypass bool
 }
 
 type corrFIFO struct {
@@ -144,9 +154,10 @@ func (c *correlator) markPrimary(key string, src event.Source, now time.Time) {
 }
 
 // decide applies the rules above to ev; pmu is held.
-func (c *correlator) decide(p *Pipeline, ev *event.Event, s *session, now time.Time) corrAction {
+func (c *correlator) decide(p *Pipeline, ev *event.Event, s *session, now time.Time, how attribution) corrAction {
 	if s == nil || naturalKey(ev) == "" {
-		if ev.Source == event.SourceOTel && toolRecord(ev) && s != nil && s.surfaces[event.SourceHook] {
+		if ev.Source == event.SourceOTel && s != nil && (toolRecord(ev) || ev.Type == event.TypePromptSubmit) &&
+			(s.surfaces[event.SourceHook] || s.surfaces[event.SourceTranscript]) {
 			p.ctr.uncorrelatable++
 			return corrDuplicate
 		}
@@ -163,6 +174,9 @@ func (c *correlator) decide(p *Pipeline, ev *event.Event, s *session, now time.T
 		case ent.held != nil:
 			// The transcript/OTel twin was waiting for this record.
 			ent.held.done = true
+			if s.heldN > 0 {
+				s.heldN--
+			}
 			ent.held = nil
 			ent.primary, ent.hook = true, true
 			ent.sources = addSource(ent.sources, event.SourceHook)
@@ -190,13 +204,16 @@ func (c *correlator) decide(p *Pipeline, ev *event.Event, s *session, now time.T
 	case event.SourceTranscript, event.SourceOTel:
 		switch {
 		case ent == nil:
-			if !holdable(ev) {
+			// A record without an account never waits: no hook record
+			// (which always has one) could match it.
+			if !holdable(ev) || how == attrNone {
 				c.put(key, &corrEntry{sources: []event.Source{ev.Source}, at: now, primary: true}, now)
 				return corrProcess
 			}
-			h := &held{ev: ev, key: key, skey: s.key, at: now}
+			h := &held{ev: ev, key: key, skey: s.key, at: now, noBypass: how != attrOwn}
 			c.put(key, &corrEntry{sources: []event.Source{ev.Source}, at: now, held: h}, now)
 			c.held = append(c.held, h)
+			s.heldN++
 			p.ctr.held++
 			if len(c.held) > maxHeld {
 				p.ctr.heldOverflow++
@@ -264,11 +281,17 @@ func (p *Pipeline) releaseOne(h *held, now time.Time, unmatched bool) {
 	var s *session
 	if el, ok := p.sessions[h.skey]; ok {
 		s = el.Value.(*session)
-		if unmatched && toolRecord(h.ev) && h.ev.Tool != nil && h.ev.Tool.UseID != "" {
+		if s.heldN > 0 {
+			s.heldN--
+		}
+		if unmatched && !h.noBypass && toolRecord(h.ev) && h.ev.Tool != nil && h.ev.Tool.UseID != "" {
 			s.unmatchedCall(h.ev.Tool.UseID, h.ev.ID)
 		}
 	}
 	p.processHeld(h.ev, s, now)
+	if s != nil {
+		p.maybeFinal(s, now)
+	}
 }
 
 // processHeld evaluates a released record. Its session may have been

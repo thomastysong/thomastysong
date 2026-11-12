@@ -9,9 +9,12 @@ $Ext  = Join-Path $Dir 'spoor.ext.exe'
 $Data = Join-Path $env:ProgramData 'spoor'
 $Load = Join-Path $env:ProgramFiles 'osquery\extensions.load'
 
+# sc.exe reports failure only through its exit code. No 2>&1: under
+# 'Stop', Windows PowerShell 5.1 turns redirected stderr into an error.
 if (Get-Service -Name $Name -ErrorAction SilentlyContinue) {
   Stop-Service -Name $Name -Force -ErrorAction SilentlyContinue
-  & sc.exe delete $Name | Out-Null
+  $out = & sc.exe delete $Name | Out-String
+  if ($LASTEXITCODE -ne 0) { throw "sc.exe delete $Name failed with exit code $LASTEXITCODE. $out" }
 }
 
 $restart = $false

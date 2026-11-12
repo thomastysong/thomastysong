@@ -7,19 +7,31 @@ import "strings"
 // analysis bug ("curl -o x URL" read as two URLs), so commands whose
 // positionals matter have a spec.
 type optSpec struct {
-	short   string              // short option letters that take a value
-	long    map[string]struct{} // long options (with dashes) that take a value
-	oneDash bool                // multi-letter options use one dash (-name value); no clustering
-	posStop bool                // options end at the first positional (sudo, env, docker run)
-	slash   bool                // /name and /name:value are options (Windows tools)
+	short   string  // short option letters that take a value
+	long    longSet // long options (with dashes) that take a value
+	oneDash bool    // multi-letter options use one dash (-name value); no clustering
+	posStop bool    // options end at the first positional (sudo, env, docker run)
+	slash   bool    // /name and /name:value are options (Windows tools)
 }
 
-func longSet(names ...string) map[string]struct{} {
-	m := make(map[string]struct{}, len(names))
-	for _, n := range names {
-		m[n] = struct{}{}
+// longSet is a set of long option spellings. It is a slice rather than a
+// map so that every option table (optSpec, interpDef, pkgDef) is a static
+// composite literal the linker lays out in the binary: a map literal is
+// built by package init code in every process that links shellx, and most
+// spoor processes (the hook supervisor, the scanner, the daemon's idle
+// ticks) never analyse a command line. The sets hold at most ~110 entries
+// (curl) and are consulted once per long option word, so the linear scan
+// costs a few hundred nanoseconds per such word at worst; Analyze bounds the
+// number of words it looks at.
+type longSet []string
+
+func (s longSet) has(name string) bool {
+	for _, n := range s {
+		if n == name {
+			return true
+		}
 	}
-	return m
+	return false
 }
 
 type optFlag struct {
@@ -125,7 +137,7 @@ func parseOpts(args []arg, sp *optSpec) opts {
 				continue
 			}
 			f := optFlag{name: name}
-			if _, ok := sp.long[name]; ok && i+1 < len(args) {
+			if sp.long.has(name) && i+1 < len(args) {
 				f.val, f.hasVal = args[i+1], true
 				i++
 			}
@@ -253,7 +265,7 @@ func subcommand(args []arg, sp *optSpec) (string, []arg) {
 			}
 			if sp != nil {
 				if strings.HasPrefix(s, "--") || sp.oneDash {
-					if _, ok := sp.long[s]; ok {
+					if sp.long.has(s) {
 						i++
 					}
 				} else if len(s) == 2 && strings.IndexByte(sp.short, s[1]) >= 0 {

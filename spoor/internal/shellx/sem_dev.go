@@ -2,7 +2,7 @@ package shellx
 
 import "strings"
 
-func init() {
+func registerDev() {
 	register(hGit, "git")
 	register(hGh, "gh", "glab")
 	register(hTerraform, "terraform", "tofu", "terragrunt", "pulumi", "cdk", "cdktf")
@@ -21,7 +21,7 @@ func init() {
 	register(hBfg, "bfg", "git-filter-repo")
 }
 
-var gitGlobalSpec = &optSpec{short: "Cc", long: longSet("--git-dir", "--work-tree", "--namespace", "--exec-path", "--super-prefix", "--config-env", "--attr-source")}
+var gitGlobalSpec = &optSpec{short: "Cc", long: longSet{"--git-dir", "--work-tree", "--namespace", "--exec-path", "--super-prefix", "--config-env", "--attr-source"}}
 
 // gitConfigFacts classifies one "key=value" or key/value git config setting.
 func (a *analyzer) gitConfigFacts(key, val string, depth int) {
@@ -73,7 +73,7 @@ func hGit(a *analyzer, c *simple, in flow, out *flow) {
 	switch sub {
 	case "push":
 		a.gitop("push")
-		o := parseOpts(rest, &optSpec{short: "o", long: longSet("--repo", "--push-option", "--receive-pack", "--exec", "--force-with-lease", "--recurse-submodules")})
+		o := parseOpts(rest, &optSpec{short: "o", long: longSet{"--repo", "--push-option", "--receive-pack", "--exec", "--force-with-lease", "--recurse-submodules"}})
 		force := o.has("-f", "--force", "--force-with-lease", "--force-if-includes", "--mirror")
 		for i := range o.flags {
 			if strings.HasPrefix(o.flags[i].name, "--force-with-lease") {
@@ -136,8 +136,8 @@ func hGit(a *analyzer, c *simple, in flow, out *flow) {
 		a.gitop("clone")
 		a.f.Downloads = true
 		a.unpacked = true
-		o := parseOpts(rest, &optSpec{short: "bcojuO", long: longSet("--branch", "--config", "--origin", "--depth", "--jobs", "--upload-pack",
-			"--reference", "--separate-git-dir", "--template", "--filter", "--shallow-since", "--shallow-exclude", "--recurse-submodules")})
+		o := parseOpts(rest, &optSpec{short: "bcojuO", long: longSet{"--branch", "--config", "--origin", "--depth", "--jobs", "--upload-pack",
+			"--reference", "--separate-git-dir", "--template", "--filter", "--shallow-since", "--shallow-exclude", "--recurse-submodules"}})
 		if len(o.pos) > 0 {
 			a.gitRemoteHost(o.pos[0].s)
 		}
@@ -314,7 +314,7 @@ func hBfg(a *analyzer, c *simple, in flow, out *flow) {
 
 func hGh(a *analyzer, c *simple, in flow, out *flow) {
 	rest := c.rest()
-	sub, r1 := subcommand(rest, &optSpec{short: "R", long: longSet("--repo", "--hostname")})
+	sub, r1 := subcommand(rest, &optSpec{short: "R", long: longSet{"--repo", "--hostname"}})
 	sub2, r2 := subcommand(r1, nil)
 	switch sub + " " + sub2 {
 	case "auth token":
@@ -354,7 +354,7 @@ func hGh(a *analyzer, c *simple, in flow, out *flow) {
 
 // ghAPI classifies "gh api" calls by method.
 func (a *analyzer) ghAPI(rest []arg) {
-	o := parseOpts(rest, &optSpec{short: "XfFHqt", long: longSet("--method", "--field", "--raw-field", "--header", "--input", "--jq", "--template", "--hostname", "--cache")})
+	o := parseOpts(rest, &optSpec{short: "XfFHqt", long: longSet{"--method", "--field", "--raw-field", "--header", "--input", "--jq", "--template", "--hostname", "--cache"}})
 	m, _ := o.get("-X", "--method")
 	method := strings.ToUpper(m.s)
 	if method == "DELETE" {
@@ -403,8 +403,8 @@ func hTerraform(a *analyzer, c *simple, in flow, out *flow) {
 }
 
 // awsGlobalSpec lists aws global options that take a value.
-var awsGlobalSpec = &optSpec{long: longSet("--profile", "--region", "--output", "--endpoint-url", "--query", "--color",
-	"--ca-bundle", "--cli-read-timeout", "--cli-connect-timeout", "--cli-binary-format")}
+var awsGlobalSpec = &optSpec{long: longSet{"--profile", "--region", "--output", "--endpoint-url", "--query", "--color",
+	"--ca-bundle", "--cli-read-timeout", "--cli-connect-timeout", "--cli-binary-format"}}
 
 func hAws(a *analyzer, c *simple, in flow, out *flow) {
 	svc, r1 := subcommand(c.rest(), awsGlobalSpec)
@@ -732,8 +732,8 @@ func hCloudMisc(a *analyzer, c *simple, in flow, out *flow) {
 
 var dbSpec = &optSpec{
 	short: "cefhUdpPuDSEWvobi",
-	long: longSet("--command", "--execute", "--file", "--host", "--port", "--username", "--user", "--dbname", "--database",
-		"--password", "--eval", "--query", "--set", "--variable", "--output", "--input-file"),
+	long: longSet{"--command", "--execute", "--file", "--host", "--port", "--username", "--user", "--dbname", "--database",
+		"--password", "--eval", "--query", "--set", "--variable", "--output", "--input-file"},
 }
 
 // hDB handles database clients: SQL given with -c/-e/--eval, as a

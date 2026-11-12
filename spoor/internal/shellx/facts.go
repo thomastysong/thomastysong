@@ -114,6 +114,7 @@ type Facts struct {
 // use it to reject rules that reference a value Analyze can never produce.
 // The returned map and slices are fresh copies.
 func Vocabulary() map[string][]string {
+	ensureTables()
 	out := make(map[string][]string, len(vocabulary))
 	for k, v := range vocabulary {
 		out[k] = append([]string(nil), v...)
@@ -121,64 +122,68 @@ func Vocabulary() map[string][]string {
 	return out
 }
 
-var vocabulary = map[string][]string{
-	"Obfuscation": {
-		"base64_decode_exec", "hex_escape", "ifs_abuse", "var_indirection", "eval",
-		"char_concat", "encoded_command", "rev_exec", "long_single_token", "deep_nesting",
-	},
-	"Opaque": {
-		"eval", "inline_code", "heredoc_interpreter", "dynamic_command", "decoded_exec",
-		"process_substitution_exec", "deep_nesting",
-	},
-	"Destructive": {
-		"rm_recursive_root", "rm_recursive_home", "rm_recursive_wildcard", "disk_wipe", "mkfs",
-		"git_force_push", "git_reset_hard", "git_clean_force", "git_history_rewrite",
-		"db_drop", "db_truncate", "kubectl_delete", "kubectl_delete_namespace",
-		"terraform_destroy", "cloud_delete", "docker_prune_all", "chmod_recursive_open",
-		"truncate_file", "find_delete", "shadow_copy_delete",
-	},
-	"Persistence": {
-		"cron", "launchd", "systemd", "shell_profile", "registry_run", "scheduled_task",
-		"ssh_authorized_keys", "git_hook", "login_item", "at_job",
-	},
-	"DefenseEvasion": {
-		"stop_security_tool", "disable_gatekeeper", "disable_sip", "defender_tamper",
-		"firewall_disable", "history_clear", "log_clear", "sensor_tamper", "agent_hook_tamper",
-		"selinux_disable", "audit_disable",
-	},
-	"CredAccess": {
-		"keychain_dump", "token_print", "env_dump", "ssh_key_read", "browser_cred",
-		"cloud_metadata", "secret_file_read", "password_store", "proc_environ_read",
-	},
-	"Exfil": {
-		"http_upload_file", "http_post_data", "scp_out", "rsync_out", "dns_tunnel", "netcat_out",
-		"git_push_new_remote", "paste_post", "webhook_post", "email_send", "cloud_bucket_upload",
-	},
-	"NetTools": {
-		"nc", "ncat", "socat", "ssh_reverse_tunnel", "ngrok", "cloudflared", "tailscale_funnel",
-		"chisel", "frp", "bore", "localtunnel", "tor",
-	},
-	"Recon": {
-		"whoami", "id", "uname", "hostname", "ifconfig", "ip", "netstat", "ss", "ps", "env",
-		"find_secrets", "cloud_identity", "nmap",
-	},
-	"Privilege": {
-		"sudo", "su", "setuid_chmod", "sudoers_edit", "docker_privileged", "docker_socket_mount", "cap_add",
-	},
-	"GitOps": {
-		"push", "push_force", "remote_add", "config_credential", "clone", "commit_no_verify",
-	},
-	"PkgInstall.Manager": {
-		"npm", "pnpm", "yarn", "bun", "pip", "uv", "pipx", "cargo", "go", "gem", "brew", "apt",
-		"dnf", "winget", "choco", "scoop", "npx", "uvx", "bunx",
-		"apk", "pacman", "zypper", "snap", "flatpak", "conda", "poetry", "composer", "vscode",
-	},
-	"InlineCode.Lang": {
-		"sh", "python", "javascript", "perl", "ruby", "php", "lua", "powershell", "cmd",
-		"applescript", "awk", "vbscript", "sql",
-	},
-	"Command.Origin": {
-		OriginTop, OriginSubshell, OriginSubstitution, OriginEval, OriginDecoded, OriginWrapper,
-		OriginInlinePrefix + "<interp>",
-	},
+var vocabulary map[string][]string
+
+func buildVocabulary() {
+	vocabulary = map[string][]string{
+		"Obfuscation": {
+			"base64_decode_exec", "hex_escape", "ifs_abuse", "var_indirection", "eval",
+			"char_concat", "encoded_command", "rev_exec", "long_single_token", "deep_nesting",
+		},
+		"Opaque": {
+			"eval", "inline_code", "heredoc_interpreter", "dynamic_command", "decoded_exec",
+			"process_substitution_exec", "deep_nesting",
+		},
+		"Destructive": {
+			"rm_recursive_root", "rm_recursive_home", "rm_recursive_wildcard", "disk_wipe", "mkfs",
+			"git_force_push", "git_reset_hard", "git_clean_force", "git_history_rewrite",
+			"db_drop", "db_truncate", "kubectl_delete", "kubectl_delete_namespace",
+			"terraform_destroy", "cloud_delete", "docker_prune_all", "chmod_recursive_open",
+			"truncate_file", "find_delete", "shadow_copy_delete",
+		},
+		"Persistence": {
+			"cron", "launchd", "systemd", "shell_profile", "registry_run", "scheduled_task",
+			"ssh_authorized_keys", "git_hook", "login_item", "at_job",
+		},
+		"DefenseEvasion": {
+			"stop_security_tool", "disable_gatekeeper", "disable_sip", "defender_tamper",
+			"firewall_disable", "history_clear", "log_clear", "sensor_tamper", "agent_hook_tamper",
+			"selinux_disable", "audit_disable",
+		},
+		"CredAccess": {
+			"keychain_dump", "token_print", "env_dump", "ssh_key_read", "browser_cred",
+			"cloud_metadata", "secret_file_read", "password_store", "proc_environ_read",
+		},
+		"Exfil": {
+			"http_upload_file", "http_post_data", "scp_out", "rsync_out", "dns_tunnel", "netcat_out",
+			"git_push_new_remote", "paste_post", "webhook_post", "email_send", "cloud_bucket_upload",
+		},
+		"NetTools": {
+			"nc", "ncat", "socat", "ssh_reverse_tunnel", "ngrok", "cloudflared", "tailscale_funnel",
+			"chisel", "frp", "bore", "localtunnel", "tor",
+		},
+		"Recon": {
+			"whoami", "id", "uname", "hostname", "ifconfig", "ip", "netstat", "ss", "ps", "env",
+			"find_secrets", "cloud_identity", "nmap",
+		},
+		"Privilege": {
+			"sudo", "su", "setuid_chmod", "sudoers_edit", "docker_privileged", "docker_socket_mount", "cap_add",
+		},
+		"GitOps": {
+			"push", "push_force", "remote_add", "config_credential", "clone", "commit_no_verify",
+		},
+		"PkgInstall.Manager": {
+			"npm", "pnpm", "yarn", "bun", "pip", "uv", "pipx", "cargo", "go", "gem", "brew", "apt",
+			"dnf", "winget", "choco", "scoop", "npx", "uvx", "bunx",
+			"apk", "pacman", "zypper", "snap", "flatpak", "conda", "poetry", "composer", "vscode",
+		},
+		"InlineCode.Lang": {
+			"sh", "python", "javascript", "perl", "ruby", "php", "lua", "powershell", "cmd",
+			"applescript", "awk", "vbscript", "sql",
+		},
+		"Command.Origin": {
+			OriginTop, OriginSubshell, OriginSubstitution, OriginEval, OriginDecoded, OriginWrapper,
+			OriginInlinePrefix + "<interp>",
+		},
+	}
 }

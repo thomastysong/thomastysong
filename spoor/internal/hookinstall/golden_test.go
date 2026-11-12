@@ -58,6 +58,10 @@ func goldenCases() []goldenCase {
 			mutate: func(o *Options) { o.Guard, o.FailClosed = true, true }},
 		goldenCase{name: "cursor-managed-linux-guard-failclosed", agent: "cursor", scope: event.ScopeManaged, goos: "linux", binary: unixBin,
 			mutate: func(o *Options) { o.Guard, o.FailClosed = true, true }},
+		// failClosed handlers on Windows: the PowerShell call without the
+		// check, beside guarded handlers for the other events.
+		goldenCase{name: "cursor-managed-windows-guard-failclosed", agent: "cursor", scope: event.ScopeManaged, goos: "windows", binary: winBin,
+			mutate: func(o *Options) { o.Guard, o.FailClosed = true, true }},
 		goldenCase{name: "claude-code-managed-linux-otel", agent: "claude-code", scope: event.ScopeManaged, goos: "linux", binary: unixBin,
 			mutate: func(o *Options) { o.OTel = "http://127.0.0.1:4319" }},
 		goldenCase{name: "gemini-cli-user-linux-otel", agent: "gemini-cli", scope: event.ScopeUser, goos: "linux", binary: unixBin,

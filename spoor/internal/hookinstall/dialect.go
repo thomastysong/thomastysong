@@ -77,6 +77,25 @@ var dialects = map[string]dialectSpec{
 	"cursor":  {id: "cursor", failClosed: true, handler: cursorHandler},
 }
 
+// runKey is the handler field the agent executes on goos. Codex takes
+// commandWindows on Windows whenever it is present, and command otherwise
+// (codex-rs/hooks/src/engine/discovery.rs: "if cfg!(windows) {
+// command_windows.unwrap_or(command) }", which is also the only command
+// its trust hash covers); Copilot CLI runs bash on unix and powershell on
+// Windows; the other agents have a single command field (Claude Code's
+// with "args").
+func (d dialectSpec) runKey(goos string) string {
+	switch {
+	case d.id == "codex" && goos == "windows":
+		return "commandWindows"
+	case d.id == "copilot" && goos == "windows":
+		return "powershell"
+	case d.id == "copilot":
+		return "bash"
+	}
+	return "command"
+}
+
 // notificationEvents are the only events that may run in the background.
 // A background (async) hook is killed when the session ends right after the
 // event, and the record is lost without an error (Claude Code finalises

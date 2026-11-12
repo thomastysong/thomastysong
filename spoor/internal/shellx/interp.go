@@ -6,11 +6,11 @@ import "strings"
 type interpDef struct {
 	lang    string
 	kind    int
-	code    []string            // flags followed by code
-	cluster bool                // perl/ruby style: -pe 'code', -e'code', several -e
-	short   string              // short flags that take a value
-	long    map[string]struct{} // long flags that take a value
-	module  string              // flag that runs a module as a program (python -m)
+	code    []string // flags followed by code
+	cluster bool     // perl/ruby style: -pe 'code', -e'code', several -e
+	short   string   // short flags that take a value
+	long    longSet  // long flags that take a value
+	module  string   // flag that runs a module as a program (python -m)
 }
 
 const (
@@ -24,35 +24,39 @@ const (
 	kindWSH           // wscript/cscript: script file
 )
 
-var interpDefs = map[string]*interpDef{
-	"sh": {lang: "sh", kind: kindShell}, "bash": {lang: "sh", kind: kindShell}, "zsh": {lang: "sh", kind: kindShell},
-	"dash": {lang: "sh", kind: kindShell}, "ksh": {lang: "sh", kind: kindShell}, "mksh": {lang: "sh", kind: kindShell},
-	"ash": {lang: "sh", kind: kindShell}, "fish": {lang: "sh", kind: kindShell}, "csh": {lang: "sh", kind: kindShell},
-	"tcsh": {lang: "sh", kind: kindShell}, "rbash": {lang: "sh", kind: kindShell},
+var interpDefs map[string]*interpDef
 
-	"python": pyDef, "python2": pyDef, "python3": pyDef, "pypy": pyDef, "pypy3": pyDef, "py": pyDef,
-	"node": nodeDef, "nodejs": nodeDef,
-	"deno": {lang: "javascript", kind: kindDeno}, "bun": {lang: "javascript", kind: kindDeno},
-	"perl": {lang: "perl", code: []string{"-e", "-E"}, cluster: true, short: "IMmFCD"},
-	"ruby": {lang: "ruby", code: []string{"-e"}, cluster: true, short: "IrCFEKTW"},
-	"php":  {lang: "php", code: []string{"-r", "--run", "-B", "-R", "-E"}, short: "dcfzFtS", long: longSet("--define", "--php-ini", "--file", "--server", "--docroot")},
-	"lua":  {lang: "lua", code: []string{"-e"}, short: "l"}, "luajit": {lang: "lua", code: []string{"-e"}, short: "l"},
-	"osascript": {lang: "applescript", code: []string{"-e"}, cluster: true, short: "ls"},
-	"awk":       {lang: "awk", kind: kindAwk}, "gawk": {lang: "awk", kind: kindAwk}, "mawk": {lang: "awk", kind: kindAwk}, "nawk": {lang: "awk", kind: kindAwk},
+func buildInterpDefs() {
+	interpDefs = map[string]*interpDef{
+		"sh": {lang: "sh", kind: kindShell}, "bash": {lang: "sh", kind: kindShell}, "zsh": {lang: "sh", kind: kindShell},
+		"dash": {lang: "sh", kind: kindShell}, "ksh": {lang: "sh", kind: kindShell}, "mksh": {lang: "sh", kind: kindShell},
+		"ash": {lang: "sh", kind: kindShell}, "fish": {lang: "sh", kind: kindShell}, "csh": {lang: "sh", kind: kindShell},
+		"tcsh": {lang: "sh", kind: kindShell}, "rbash": {lang: "sh", kind: kindShell},
 
-	"powershell": {lang: "powershell", kind: kindPwsh}, "pwsh": {lang: "powershell", kind: kindPwsh},
-	"powershell_ise": {lang: "powershell", kind: kindPwsh}, "pwsh-preview": {lang: "powershell", kind: kindPwsh},
-	"cmd":     {lang: "cmd", kind: kindCmd},
-	"mshta":   {lang: "vbscript", kind: kindMshta},
-	"wscript": {lang: "vbscript", kind: kindWSH}, "cscript": {lang: "vbscript", kind: kindWSH},
+		"python": pyDef, "python2": pyDef, "python3": pyDef, "pypy": pyDef, "pypy3": pyDef, "py": pyDef,
+		"node": nodeDef, "nodejs": nodeDef,
+		"deno": {lang: "javascript", kind: kindDeno}, "bun": {lang: "javascript", kind: kindDeno},
+		"perl": {lang: "perl", code: []string{"-e", "-E"}, cluster: true, short: "IMmFCD"},
+		"ruby": {lang: "ruby", code: []string{"-e"}, cluster: true, short: "IrCFEKTW"},
+		"php":  {lang: "php", code: []string{"-r", "--run", "-B", "-R", "-E"}, short: "dcfzFtS", long: longSet{"--define", "--php-ini", "--file", "--server", "--docroot"}},
+		"lua":  {lang: "lua", code: []string{"-e"}, short: "l"}, "luajit": {lang: "lua", code: []string{"-e"}, short: "l"},
+		"osascript": {lang: "applescript", code: []string{"-e"}, cluster: true, short: "ls"},
+		"awk":       {lang: "awk", kind: kindAwk}, "gawk": {lang: "awk", kind: kindAwk}, "mawk": {lang: "awk", kind: kindAwk}, "nawk": {lang: "awk", kind: kindAwk},
+
+		"powershell": {lang: "powershell", kind: kindPwsh}, "pwsh": {lang: "powershell", kind: kindPwsh},
+		"powershell_ise": {lang: "powershell", kind: kindPwsh}, "pwsh-preview": {lang: "powershell", kind: kindPwsh},
+		"cmd":     {lang: "cmd", kind: kindCmd},
+		"mshta":   {lang: "vbscript", kind: kindMshta},
+		"wscript": {lang: "vbscript", kind: kindWSH}, "cscript": {lang: "vbscript", kind: kindWSH},
+	}
 }
 
-var pyDef = &interpDef{lang: "python", code: []string{"-c"}, short: "WXQ", long: longSet("--check-hash-based-pycs"), module: "-m"}
+var pyDef = &interpDef{lang: "python", code: []string{"-c"}, short: "WXQ", long: longSet{"--check-hash-based-pycs"}, module: "-m"}
 
 var nodeDef = &interpDef{
 	lang: "javascript", code: []string{"-e", "--eval", "-p", "--print"}, short: "rC",
-	long: longSet("--require", "--loader", "--import", "--experimental-loader", "--conditions", "--inspect-port",
-		"--max-old-space-size", "--env-file", "--title", "--input-type", "--cpu-prof-dir", "--redirect-warnings"),
+	long: longSet{"--require", "--loader", "--import", "--experimental-loader", "--conditions", "--inspect-port",
+		"--max-old-space-size", "--env-file", "--title", "--input-type", "--cpu-prof-dir", "--redirect-warnings"},
 }
 
 func interpFor(name string) *interpDef {
@@ -372,7 +376,7 @@ loop:
 				i++
 				continue
 			}
-			if _, ok := d.long[s]; ok {
+			if d.long.has(s) {
 				i++
 			}
 			i++
@@ -442,7 +446,7 @@ loop:
 }
 
 func (a *analyzer) awkInterp(c *simple, d *interpDef) {
-	o := parseOpts(c.rest(), &optSpec{short: "Fvfi", long: longSet("--field-separator", "--assign", "--file", "--include"), posStop: true})
+	o := parseOpts(c.rest(), &optSpec{short: "Fvfi", long: longSet{"--field-separator", "--assign", "--file", "--include"}, posStop: true})
 	for _, f := range o.all("-f", "--file") {
 		a.read(f.s)
 	}
@@ -646,7 +650,7 @@ func (a *analyzer) cmdLaunch(c *simple, d *interpDef, in flow) {
 	}
 }
 
-func init() {
+func registerInterp() {
 	register(hEval, "eval")
 	register(hSource, "source", ".")
 	register(hTrapAlias, "trap", "alias")

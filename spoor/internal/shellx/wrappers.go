@@ -39,28 +39,28 @@ func tableWrap(d wrapDef) wrapper {
 	}
 }
 
-func init() {
+func registerWrappers() {
 	plain := tableWrap(wrapDef{})
 	registerWrap(plain, "builtin", "winpty", "busybox", "toybox", "eatmydata", "chronic", "unbuffer", "rlwrap", "dumb-init", "tini")
 	registerWrap(tableWrap(wrapDef{bg: true}), "nohup", "setsid", "daemonize")
-	registerWrap(tableWrap(wrapDef{spec: &optSpec{short: "n", long: longSet("--adjustment")}}), "nice")
-	registerWrap(tableWrap(wrapDef{spec: &optSpec{short: "cnpPu", long: longSet("--class", "--classdata", "--pid", "--pgid", "--uid")}}), "ionice")
-	registerWrap(tableWrap(wrapDef{spec: &optSpec{short: "ioe", long: longSet("--input", "--output", "--error")}}), "stdbuf")
-	registerWrap(tableWrap(wrapDef{spec: &optSpec{short: "fo", long: longSet("--format", "--output")}}), "time", "gtime")
-	registerWrap(tableWrap(wrapDef{spec: &optSpec{short: "ks", long: longSet("--kill-after", "--signal")}, skip: 1}), "timeout", "gtimeout")
-	registerWrap(tableWrap(wrapDef{spec: &optSpec{long: longSet("--userspec", "--groups")}, skip: 1}), "chroot")
-	registerWrap(tableWrap(wrapDef{spec: &optSpec{short: "SG", long: longSet("--setuid", "--setgid", "--propagation", "--setgroups", "--map-user", "--map-group", "--root", "--wd")}}), "unshare")
-	registerWrap(tableWrap(wrapDef{spec: &optSpec{short: "tSGW", long: longSet("--target", "--setuid", "--setgid", "--wdns")}, pre: func(a *analyzer, c *simple, o *opts) bool {
+	registerWrap(tableWrap(wrapDef{spec: &optSpec{short: "n", long: longSet{"--adjustment"}}}), "nice")
+	registerWrap(tableWrap(wrapDef{spec: &optSpec{short: "cnpPu", long: longSet{"--class", "--classdata", "--pid", "--pgid", "--uid"}}}), "ionice")
+	registerWrap(tableWrap(wrapDef{spec: &optSpec{short: "ioe", long: longSet{"--input", "--output", "--error"}}}), "stdbuf")
+	registerWrap(tableWrap(wrapDef{spec: &optSpec{short: "fo", long: longSet{"--format", "--output"}}}), "time", "gtime")
+	registerWrap(tableWrap(wrapDef{spec: &optSpec{short: "ks", long: longSet{"--kill-after", "--signal"}}, skip: 1}), "timeout", "gtimeout")
+	registerWrap(tableWrap(wrapDef{spec: &optSpec{long: longSet{"--userspec", "--groups"}}, skip: 1}), "chroot")
+	registerWrap(tableWrap(wrapDef{spec: &optSpec{short: "SG", long: longSet{"--setuid", "--setgid", "--propagation", "--setgroups", "--map-user", "--map-group", "--root", "--wd"}}}), "unshare")
+	registerWrap(tableWrap(wrapDef{spec: &optSpec{short: "tSGW", long: longSet{"--target", "--setuid", "--setgid", "--wdns"}}, pre: func(a *analyzer, c *simple, o *opts) bool {
 		// Entering the namespaces of PID 1 from a container is a host escape.
 		if t, ok := o.get("-t", "--target"); ok && t.s == "1" {
 			a.priv("docker_privileged")
 		}
 		return true
 	}}), "nsenter")
-	registerWrap(tableWrap(wrapDef{spec: &optSpec{short: "eopsuaPSXEbI", long: longSet("--output", "--trace", "--attach")}}), "strace", "ltrace")
+	registerWrap(tableWrap(wrapDef{spec: &optSpec{short: "eopsuaPSXEbI", long: longSet{"--output", "--trace", "--attach"}}}), "strace", "ltrace")
 	registerWrap(tableWrap(wrapDef{spec: &optSpec{short: "tw"}}), "caffeinate")
-	registerWrap(tableWrap(wrapDef{spec: &optSpec{oneDash: true, long: longSet("-e", "-d")}}), "arch")
-	registerWrap(tableWrap(wrapDef{spec: &optSpec{short: "nsfep", long: longSet("--server-num", "--server-args", "--error-file", "--auth-file", "--xauth-protocol")}}), "xvfb-run")
+	registerWrap(tableWrap(wrapDef{spec: &optSpec{oneDash: true, long: longSet{"-e", "-d"}}}), "arch")
+	registerWrap(tableWrap(wrapDef{spec: &optSpec{short: "nsfep", long: longSet{"--server-num", "--server-args", "--error-file", "--auth-file", "--xauth-protocol"}}}), "xvfb-run")
 	registerWrap(tableWrap(wrapDef{spec: &optSpec{short: "f"}}), "proxychains", "proxychains4")
 	registerWrap(tableWrap(wrapDef{pre: func(a *analyzer, c *simple, o *opts) bool {
 		a.nettool("tor")
@@ -72,8 +72,8 @@ func init() {
 		return !o.has("-v", "-V")
 	}}), "command")
 	registerWrap(tableWrap(wrapDef{spec: &optSpec{short: "pfdP"}}), "sshpass")
-	registerWrap(tableWrap(wrapDef{spec: &optSpec{short: "n", long: longSet("--interval")}, reparse: true, noStdin: true}), "watch")
-	registerWrap(tableWrap(wrapDef{spec: &optSpec{short: "ugCh", long: longSet("--user", "--group", "--chdir", "--host")}, pre: func(a *analyzer, c *simple, o *opts) bool {
+	registerWrap(tableWrap(wrapDef{spec: &optSpec{short: "n", long: longSet{"--interval"}}, reparse: true, noStdin: true}), "watch")
+	registerWrap(tableWrap(wrapDef{spec: &optSpec{short: "ugCh", long: longSet{"--user", "--group", "--chdir", "--host"}}, pre: func(a *analyzer, c *simple, o *opts) bool {
 		a.sudo()
 		return true
 	}}), "pkexec", "gsudo", "run0")
@@ -107,8 +107,8 @@ func init() {
 
 var sudoSpec = &optSpec{
 	short: "ugUpCDrtThR",
-	long: longSet("--user", "--group", "--other-user", "--prompt", "--close-from", "--chdir", "--role",
-		"--type", "--command-timeout", "--host", "--chroot"),
+	long: longSet{"--user", "--group", "--other-user", "--prompt", "--close-from", "--chdir", "--role",
+		"--type", "--command-timeout", "--host", "--chroot"},
 	posStop: true,
 }
 
@@ -154,7 +154,7 @@ func splitAssign(s string) (name, val string, ok bool) {
 	return s[:i], s[i+1:], true
 }
 
-var envSpec = &optSpec{short: "uCS", long: longSet("--unset", "--chdir", "--split-string"), posStop: true}
+var envSpec = &optSpec{short: "uCS", long: longSet{"--unset", "--chdir", "--split-string"}, posStop: true}
 
 func wrapEnv(a *analyzer, c *simple, in flow) (flow, int) {
 	o := parseOpts(c.rest(), envSpec)
@@ -185,7 +185,7 @@ func wrapEnv(a *analyzer, c *simple, in flow) (flow, int) {
 
 var xargsSpec = &optSpec{
 	short:   "InPsLdEa",
-	long:    longSet("--max-args", "--max-procs", "--max-chars", "--max-lines", "--delimiter", "--arg-file", "--eof", "--process-slot-var"),
+	long:    longSet{"--max-args", "--max-procs", "--max-chars", "--max-lines", "--delimiter", "--arg-file", "--eof", "--process-slot-var"},
 	posStop: true,
 }
 
@@ -324,7 +324,7 @@ func secretPattern(p string) bool {
 
 func wrapSu(a *analyzer, c *simple, in flow) (flow, int) {
 	a.priv("su")
-	sp := &optSpec{short: "cgGsuwlU", long: longSet("--command", "--group", "--supp-group", "--shell", "--user", "--whitelist-environment", "--session-command")}
+	sp := &optSpec{short: "cgGsuwlU", long: longSet{"--command", "--group", "--supp-group", "--shell", "--user", "--whitelist-environment", "--session-command"}}
 	if c.name == "su" {
 		// "su -l" takes no value; only runuser's -l does.
 		sp = &optSpec{short: "cgGsw", long: sp.long}
@@ -404,7 +404,7 @@ func wrapSSH(a *analyzer, c *simple, in flow) (flow, int) {
 }
 
 func wrapFlock(a *analyzer, c *simple, in flow) (flow, int) {
-	o := parseOpts(c.rest(), &optSpec{short: "wEc", long: longSet("--timeout", "--conflict-exit-code", "--command"), posStop: true})
+	o := parseOpts(c.rest(), &optSpec{short: "wEc", long: longSet{"--timeout", "--conflict-exit-code", "--command"}, posStop: true})
 	if code, ok := o.get("-c", "--command"); ok {
 		return a.sub(code.s, Posix, OriginWrapper, c.depth+1, in), wrapReparsed
 	}
@@ -419,7 +419,7 @@ func wrapFlock(a *analyzer, c *simple, in flow) (flow, int) {
 }
 
 func wrapScript(a *analyzer, c *simple, in flow) (flow, int) {
-	o := parseOpts(c.rest(), &optSpec{short: "ctTIOBEm", long: longSet("--command", "--timing", "--log-in", "--log-out", "--log-io", "--echo", "--output-limit")})
+	o := parseOpts(c.rest(), &optSpec{short: "ctTIOBEm", long: longSet{"--command", "--timing", "--log-in", "--log-out", "--log-io", "--echo", "--output-limit"}})
 	if code, ok := o.get("-c", "--command"); ok {
 		return a.sub(code.s, Posix, OriginWrapper, c.depth+1, in), wrapReparsed
 	}
@@ -427,7 +427,7 @@ func wrapScript(a *analyzer, c *simple, in flow) (flow, int) {
 }
 
 func wrapParallel(a *analyzer, c *simple, in flow) (flow, int) {
-	o := parseOpts(c.rest(), &optSpec{short: "jSIaNLnPlC", long: longSet("--jobs", "--sshlogin", "--arg-file", "--max-args", "--delimiter", "--colsep", "--joblog", "--results", "--tmpdir", "--timeout", "--retries"), posStop: true})
+	o := parseOpts(c.rest(), &optSpec{short: "jSIaNLnPlC", long: longSet{"--jobs", "--sshlogin", "--arg-file", "--max-args", "--delimiter", "--colsep", "--joblog", "--results", "--tmpdir", "--timeout", "--retries"}, posStop: true})
 	var cmd []arg
 	for _, p := range o.pos {
 		if strings.HasPrefix(p.s, ":::") {
@@ -452,7 +452,7 @@ func wrapRunner(a *analyzer, c *simple, in flow) (flow, int) {
 	skip := 0
 	switch c.name {
 	case "nix-shell":
-		o := parseOpts(args, &optSpec{short: "pIiA", long: longSet("--run", "--command", "--packages", "--attr", "--arg", "--argstr", "--expr")})
+		o := parseOpts(args, &optSpec{short: "pIiA", long: longSet{"--run", "--command", "--packages", "--attr", "--arg", "--argstr", "--expr"}})
 		if code, ok := o.get("--run", "--command"); ok {
 			return a.sub(code.s, Posix, OriginWrapper, c.depth+1, in), wrapReparsed
 		}

@@ -35,6 +35,11 @@ func TestQueueProjectRules(t *testing.T) {
 		sessionEvent(uid, "relative/dir"),
 		sessionEvent(uid, repo+"/../repo"),
 		sessionEvent("", repo),
+		func() *event.Event {
+			e := sessionEvent(uid, filepath.Join(f.user.Home, "build", "child"))
+			e.Source = event.SourceProcess
+			return e
+		}(),
 	})
 	if n := len(s.projQ); n != 1 {
 		t.Fatalf("queued %d project scans, want 1", n)
@@ -130,8 +135,15 @@ func TestScanRecordsState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || rows[0]["last_scan"] == "" && rows[0]["scan_complete"] != "0" {
-		t.Errorf("health after a scan: %v", rows)
+	if len(rows) != 1 {
+		t.Fatalf("health rows after a scan: %v", rows)
+	}
+	if d.board.get("scan.incomplete") == 0 {
+		if rows[0]["last_scan"] == "" || rows[0]["scan_complete"] != "1" {
+			t.Errorf("a complete scan was not recorded: %v", rows[0])
+		}
+	} else if rows[0]["scan_complete"] != "0" {
+		t.Errorf("an incomplete scan was recorded as complete: %v", rows[0])
 	}
 	inv := 0
 	for _, e := range out.all() {

@@ -77,6 +77,12 @@ func (s *scanner) noteSessions(evs []*event.Event) {
 		if ev == nil || ev.Kind != event.KindActivity || ev.Session == nil || ev.Session.CWD == "" || ev.User == nil || ev.User.ID == "" {
 			continue
 		}
+		if ev.Source == event.SourceProcess || ev.Source == event.SourceOsquery {
+			// A child process's working directory is wherever a build or a
+			// shell went, not the session's project; agent roots are
+			// handled by noteAgents.
+			continue
+		}
 		probe := &event.Event{
 			Kind:    event.KindActivity,
 			User:    &event.User{Name: ev.User.Name, ID: ev.User.ID},

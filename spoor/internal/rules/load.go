@@ -1,11 +1,13 @@
 package rules
 
 import (
+	"crypto/sha256"
 	"embed"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
-	"path"
 	"sort"
 	"strings"
 	"sync"
@@ -45,45 +47,100 @@ func LoadEmbedded() (*Set, error) {
 }
 
 // compileEmbedded does the work of the first LoadEmbedded call in a
-// process and reports whether the pre-parsed cache served it.
+// process and reports whether the pre-parsed cache served it. The YAML is
+// read whole only when the cache cannot be used; otherwise it is only
+// streamed through the digest that proves the cache was made from it.
 func compileEmbedded() (*Set, bool, error) {
+	if c, err := embeddedFS.ReadFile(cacheFileName); err == nil {
+		if d, err := embeddedDigest(); err == nil {
+			if srcs, err := decodeCache(c, d); err == nil {
+				if s, err := loadSources(srcs, true); err == nil {
+					return s, true, nil
+				}
+			}
+		}
+	}
 	files, err := readEmbedded()
 	if err != nil {
 		return nil, false, err
-	}
-	if c, err := embeddedFS.ReadFile(cacheFileName); err == nil {
-		if srcs, err := decodeCache(c, sourceDigest(files)); err == nil {
-			if s, err := loadSources(srcs, true); err == nil {
-				return s, true, nil
-			}
-		}
 	}
 	s, err := load(files, true)
 	return s, false, err
 }
 
-// readEmbedded returns the embedded content files: packs/*.yaml and
+// embeddedNames returns the embedded content file names: packs/*.yaml and
 // lists.yaml.
-func readEmbedded() (map[string][]byte, error) {
-	files := map[string][]byte{}
+func embeddedNames() ([]string, error) {
 	entries, err := fs.ReadDir(embeddedFS, "packs")
 	if err != nil {
 		return nil, fmt.Errorf("rules: embedded packs: %w", err)
 	}
+	var names []string
 	for _, e := range entries {
-		if e.IsDir() || !wantFile(e.Name()) {
-			continue
+		if !e.IsDir() && wantFile(e.Name()) {
+			names = append(names, "packs/"+e.Name())
 		}
-		b, err := embeddedFS.ReadFile(path.Join("packs", e.Name()))
-		if err != nil {
-			return nil, fmt.Errorf("rules: embedded pack %s: %w", e.Name(), err)
-		}
-		files["packs/"+e.Name()] = b
 	}
-	if b, err := embeddedFS.ReadFile("lists.yaml"); err == nil {
-		files["lists.yaml"] = b
+	if _, err := fs.Stat(embeddedFS, "lists.yaml"); err == nil {
+		names = append(names, "lists.yaml")
+	}
+	return names, nil
+}
+
+// readEmbedded returns the embedded content files.
+func readEmbedded() (map[string][]byte, error) {
+	names, err := embeddedNames()
+	if err != nil {
+		return nil, err
+	}
+	files := make(map[string][]byte, len(names))
+	for _, n := range names {
+		b, err := embeddedFS.ReadFile(n)
+		if err != nil {
+			return nil, fmt.Errorf("rules: embedded %s: %w", n, err)
+		}
+		files[n] = b
 	}
 	return files, nil
+}
+
+// embeddedDigest is sourceDigest(readEmbedded()) computed by streaming the
+// files through one buffer instead of copying each.
+func embeddedDigest() ([sha256.Size]byte, error) {
+	var out [sha256.Size]byte
+	names, err := embeddedNames()
+	if err != nil {
+		return out, err
+	}
+	sort.Strings(names)
+	h := sha256.New()
+	buf := make([]byte, 32<<10)
+	var n [8]byte
+	for _, name := range names {
+		if fileRole(name) == "" {
+			continue
+		}
+		f, err := embeddedFS.Open(name)
+		if err != nil {
+			return out, err
+		}
+		st, err := f.Stat()
+		if err != nil {
+			f.Close()
+			return out, err
+		}
+		h.Write([]byte(name))
+		h.Write([]byte{0})
+		binary.BigEndian.PutUint64(n[:], uint64(st.Size()))
+		h.Write(n[:])
+		w, err := io.CopyBuffer(h, struct{ io.Reader }{f}, buf)
+		f.Close()
+		if err != nil || w != st.Size() {
+			return out, fmt.Errorf("rules: embedded %s: short read", name)
+		}
+	}
+	h.Sum(out[:0])
+	return out, nil
 }
 
 // ErrInsecureDir is returned by LoadDir when the directory or a file in it

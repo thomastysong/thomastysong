@@ -18,70 +18,78 @@ type pkgDef struct {
 	noSub bool
 }
 
-var npmSpec = &optSpec{short: "wCp", long: longSet("--registry", "--prefix", "--workspace", "--tag", "--cache", "--userconfig",
-	"--loglevel", "--otp", "--scope", "--omit", "--include", "--install-strategy", "--package", "--call", "--cwd", "--filter", "--dir", "--store-dir")}
+var npmSpec = &optSpec{short: "wCp", long: longSet{"--registry", "--prefix", "--workspace", "--tag", "--cache", "--userconfig",
+	"--loglevel", "--otp", "--scope", "--omit", "--include", "--install-strategy", "--package", "--call", "--cwd", "--filter", "--dir", "--store-dir"}}
 
-var pipSpec = &optSpec{short: "ricetfCp", long: longSet("--index-url", "--extra-index-url", "--requirement", "--constraint", "--editable",
+var pipSpec = &optSpec{short: "ricetfCp", long: longSet{"--index-url", "--extra-index-url", "--requirement", "--constraint", "--editable",
 	"--target", "--find-links", "--trusted-host", "--prefix", "--root", "--python", "--platform", "--python-version",
 	"--implementation", "--abi", "--cert", "--client-cert", "--proxy", "--cache-dir", "--src", "--upgrade-strategy",
 	"--config-settings", "--global-option", "--no-binary", "--only-binary", "--progress-bar", "--report", "--index",
-	"--default-index", "--with", "--from", "--with-requirements", "--group", "--extra", "--index-strategy", "--keyring-provider", "--resolution")}
+	"--default-index", "--with", "--from", "--with-requirements", "--group", "--extra", "--index-strategy", "--keyring-provider", "--resolution"}}
 
-var pkgDefs = map[string]*pkgDef{
-	"npm":  {manager: "npm", install: []string{"install", "i", "add", "ci", "install-test", "it", "update", "up", "upgrade"}, exec: []string{"exec", "x"}, remove: []string{"uninstall", "remove", "rm", "un", "r"}, spec: npmSpec},
-	"pnpm": {manager: "pnpm", install: []string{"install", "i", "add", "update", "up"}, exec: []string{"dlx"}, remove: []string{"remove", "rm", "uninstall", "un"}, spec: npmSpec},
-	"yarn": {manager: "yarn", install: []string{"install", "add", "up", "upgrade"}, exec: []string{"dlx"}, remove: []string{"remove"}, spec: npmSpec, noSub: true},
-	"bun":  {manager: "bun", install: []string{"install", "i", "add", "update"}, exec: []string{"x"}, remove: []string{"remove", "rm"}, spec: npmSpec},
-	"npx":  {manager: "npx", bare: true, spec: npmSpec},
-	"bunx": {manager: "bunx", bare: true, spec: npmSpec},
-	"pnpx": {manager: "pnpm", bare: true, spec: npmSpec},
+var pkgDefs map[string]*pkgDef
 
-	"pip": {manager: "pip", install: []string{"install", "download"}, remove: []string{"uninstall"}, spec: pipSpec}, "pip3": {manager: "pip", install: []string{"install", "download"}, remove: []string{"uninstall"}, spec: pipSpec},
-	"uvx":  {manager: "uvx", bare: true, spec: pipSpec},
-	"pipx": {manager: "pipx", install: []string{"install", "inject", "upgrade"}, exec: []string{"run"}, remove: []string{"uninstall"}, global: true, spec: &optSpec{long: longSet("--index-url", "--pip-args", "--python", "--spec", "--suffix", "--with")}},
+func buildPkgDefs() {
+	pkgDefs = map[string]*pkgDef{
+		"npm":  {manager: "npm", install: []string{"install", "i", "add", "ci", "install-test", "it", "update", "up", "upgrade"}, exec: []string{"exec", "x"}, remove: []string{"uninstall", "remove", "rm", "un", "r"}, spec: npmSpec},
+		"pnpm": {manager: "pnpm", install: []string{"install", "i", "add", "update", "up"}, exec: []string{"dlx"}, remove: []string{"remove", "rm", "uninstall", "un"}, spec: npmSpec},
+		"yarn": {manager: "yarn", install: []string{"install", "add", "up", "upgrade"}, exec: []string{"dlx"}, remove: []string{"remove"}, spec: npmSpec, noSub: true},
+		"bun":  {manager: "bun", install: []string{"install", "i", "add", "update"}, exec: []string{"x"}, remove: []string{"remove", "rm"}, spec: npmSpec},
+		"npx":  {manager: "npx", bare: true, spec: npmSpec},
+		"bunx": {manager: "bunx", bare: true, spec: npmSpec},
+		"pnpx": {manager: "pnpm", bare: true, spec: npmSpec},
 
-	"cargo": {manager: "cargo", install: []string{"install", "add", "binstall"}, remove: []string{"uninstall", "remove", "rm"}, spec: &optSpec{short: "jF", long: longSet("--version", "--git", "--branch", "--tag", "--rev", "--path", "--registry", "--index", "--root", "--features", "--target", "--profile", "--jobs", "--bin", "--example")}},
-	"gem":   {manager: "gem", install: []string{"install", "i"}, remove: []string{"uninstall"}, global: true, spec: &optSpec{short: "vsiNnpP", long: longSet("--version", "--source", "--install-dir", "--bindir", "--http-proxy", "--platform", "--trust-policy")}},
-	"brew":  {manager: "brew", install: []string{"install", "reinstall", "upgrade"}, remove: []string{"uninstall", "remove", "rm"}, global: true, spec: &optSpec{long: longSet("--appdir", "--cc", "--env")}},
+		"pip": {manager: "pip", install: []string{"install", "download"}, remove: []string{"uninstall"}, spec: pipSpec}, "pip3": {manager: "pip", install: []string{"install", "download"}, remove: []string{"uninstall"}, spec: pipSpec},
+		"uvx":  {manager: "uvx", bare: true, spec: pipSpec},
+		"pipx": {manager: "pipx", install: []string{"install", "inject", "upgrade"}, exec: []string{"run"}, remove: []string{"uninstall"}, global: true, spec: &optSpec{long: longSet{"--index-url", "--pip-args", "--python", "--spec", "--suffix", "--with"}}},
 
-	"apt": aptDef, "apt-get": aptDef, "aptitude": aptDef,
-	"dnf": dnfDef, "yum": dnfDef, "microdnf": dnfDef,
-	"apk":     {manager: "apk", install: []string{"add"}, remove: []string{"del"}, global: true, spec: &optSpec{short: "Xpt", long: longSet("--repository", "--root", "--virtual", "--repositories-file", "--keys-dir")}},
-	"pacman":  {manager: "pacman", global: true},
-	"zypper":  {manager: "zypper", install: []string{"install", "in"}, remove: []string{"remove", "rm"}, global: true, spec: &optSpec{short: "rtR", long: longSet("--repo", "--from", "--type", "--root")}},
-	"snap":    {manager: "snap", install: []string{"install"}, remove: []string{"remove"}, global: true, spec: &optSpec{long: longSet("--channel", "--revision", "--cohort")}},
-	"flatpak": {manager: "flatpak", install: []string{"install"}, remove: []string{"uninstall", "remove"}, global: true, spec: &optSpec{long: longSet("--arch", "--installation")}},
+		"cargo": {manager: "cargo", install: []string{"install", "add", "binstall"}, remove: []string{"uninstall", "remove", "rm"}, spec: &optSpec{short: "jF", long: longSet{"--version", "--git", "--branch", "--tag", "--rev", "--path", "--registry", "--index", "--root", "--features", "--target", "--profile", "--jobs", "--bin", "--example"}}},
+		"gem":   {manager: "gem", install: []string{"install", "i"}, remove: []string{"uninstall"}, global: true, spec: &optSpec{short: "vsiNnpP", long: longSet{"--version", "--source", "--install-dir", "--bindir", "--http-proxy", "--platform", "--trust-policy"}}},
+		"brew":  {manager: "brew", install: []string{"install", "reinstall", "upgrade"}, remove: []string{"uninstall", "remove", "rm"}, global: true, spec: &optSpec{long: longSet{"--appdir", "--cc", "--env"}}},
 
-	"winget": {manager: "winget", install: []string{"install", "add", "upgrade", "update", "import"}, remove: []string{"uninstall", "remove", "rm"}, global: true, spec: &optSpec{short: "smvlo", long: longSet("--id", "--name", "--moniker", "--version", "--source", "--scope", "--architecture", "--locale", "--location", "--override", "--custom", "--header", "--log", "--manifest", "--query", "--installer-type")}},
-	"choco":  {manager: "choco", install: []string{"install", "upgrade"}, remove: []string{"uninstall"}, global: true, spec: chocoSpec}, "cinst": {manager: "choco", bare: true, global: true, spec: chocoSpec},
-	"scoop": {manager: "scoop", install: []string{"install", "update"}, remove: []string{"uninstall"}, global: true, spec: &optSpec{short: "a", long: longSet("--arch")}},
+		"apt": aptDef, "apt-get": aptDef, "aptitude": aptDef,
+		"dnf": dnfDef, "yum": dnfDef, "microdnf": dnfDef,
+		"apk":     {manager: "apk", install: []string{"add"}, remove: []string{"del"}, global: true, spec: &optSpec{short: "Xpt", long: longSet{"--repository", "--root", "--virtual", "--repositories-file", "--keys-dir"}}},
+		"pacman":  {manager: "pacman", global: true},
+		"zypper":  {manager: "zypper", install: []string{"install", "in"}, remove: []string{"remove", "rm"}, global: true, spec: &optSpec{short: "rtR", long: longSet{"--repo", "--from", "--type", "--root"}}},
+		"snap":    {manager: "snap", install: []string{"install"}, remove: []string{"remove"}, global: true, spec: &optSpec{long: longSet{"--channel", "--revision", "--cohort"}}},
+		"flatpak": {manager: "flatpak", install: []string{"install"}, remove: []string{"uninstall", "remove"}, global: true, spec: &optSpec{long: longSet{"--arch", "--installation"}}},
 
-	"conda": condaDef, "mamba": condaDef, "micromamba": condaDef,
-	"poetry":   {manager: "poetry", install: []string{"add", "install", "update"}, remove: []string{"remove"}, spec: &optSpec{short: "GEP", long: longSet("--group", "--extras", "--source", "--python", "--platform", "--directory", "--with", "--without", "--only")}},
-	"composer": {manager: "composer", install: []string{"require", "install", "update", "global"}, remove: []string{"remove"}, spec: &optSpec{short: "d", long: longSet("--working-dir", "--prefer-install")}},
+		"winget": {manager: "winget", install: []string{"install", "add", "upgrade", "update", "import"}, remove: []string{"uninstall", "remove", "rm"}, global: true, spec: &optSpec{short: "smvlo", long: longSet{"--id", "--name", "--moniker", "--version", "--source", "--scope", "--architecture", "--locale", "--location", "--override", "--custom", "--header", "--log", "--manifest", "--query", "--installer-type"}}},
+		"choco":  {manager: "choco", install: []string{"install", "upgrade"}, remove: []string{"uninstall"}, global: true, spec: chocoSpec}, "cinst": {manager: "choco", bare: true, global: true, spec: chocoSpec},
+		"scoop": {manager: "scoop", install: []string{"install", "update"}, remove: []string{"uninstall"}, global: true, spec: &optSpec{short: "a", long: longSet{"--arch"}}},
+
+		"conda": condaDef, "mamba": condaDef, "micromamba": condaDef,
+		"poetry":   {manager: "poetry", install: []string{"add", "install", "update"}, remove: []string{"remove"}, spec: &optSpec{short: "GEP", long: longSet{"--group", "--extras", "--source", "--python", "--platform", "--directory", "--with", "--without", "--only"}}},
+		"composer": {manager: "composer", install: []string{"require", "install", "update", "global"}, remove: []string{"remove"}, spec: &optSpec{short: "d", long: longSet{"--working-dir", "--prefer-install"}}},
+	}
 }
 
-var chocoSpec = &optSpec{short: "svpu", long: longSet("--source", "--version", "--params", "--package-parameters", "--install-arguments", "--user", "--password", "--cert", "--proxy")}
+var chocoSpec = &optSpec{short: "svpu", long: longSet{"--source", "--version", "--params", "--package-parameters", "--install-arguments", "--user", "--password", "--cert", "--proxy"}}
 
 var aptDef = &pkgDef{manager: "apt", install: []string{"install", "reinstall", "build-dep", "upgrade", "full-upgrade", "dist-upgrade"}, remove: []string{"remove", "purge", "autoremove"}, global: true,
-	spec: &optSpec{short: "otc", long: longSet("--option", "--target-release", "--default-release", "--config-file")}}
+	spec: &optSpec{short: "otc", long: longSet{"--option", "--target-release", "--default-release", "--config-file"}}}
 
 var dnfDef = &pkgDef{manager: "dnf", install: []string{"install", "reinstall", "localinstall", "groupinstall", "upgrade", "update"}, remove: []string{"remove", "erase", "autoremove"}, global: true,
-	spec: &optSpec{short: "cRdex", long: longSet("--enablerepo", "--disablerepo", "--repo", "--repofrompath", "--releasever", "--installroot", "--setopt", "--exclude", "--config")}}
+	spec: &optSpec{short: "cRdex", long: longSet{"--enablerepo", "--disablerepo", "--repo", "--repofrompath", "--releasever", "--installroot", "--setopt", "--exclude", "--config"}}}
 
 var condaDef = &pkgDef{manager: "conda", install: []string{"install", "create", "update"}, remove: []string{"remove", "uninstall"},
-	spec: &optSpec{short: "ncpf", long: longSet("--name", "--channel", "--prefix", "--file", "--override-channels", "--solver", "--clone")}}
+	spec: &optSpec{short: "ncpf", long: longSet{"--name", "--channel", "--prefix", "--file", "--override-channels", "--solver", "--clone"}}}
 
 // registryFlags are options whose value is a package source. They are kept
 // with their value in PkgInstall.Flags because an install from an unexpected
 // index is the dependency-confusion signal.
-var registryFlags = map[string]bool{
-	"--index-url": true, "-i": true, "--extra-index-url": true, "--registry": true, "--find-links": true, "-f": true,
-	"--trusted-host": true, "--source": true, "-s": true, "--index": true, "--default-index": true, "--git": true,
-	"--repository": true, "-X": true, "--channel": true, "-c": true, "--from": true, "--with": true, "--spec": true,
-	"--package": true, "-p": true, "--tap": true, "--repofrompath": true, "--enablerepo": true, "--requirement": true,
-	"-r": true, "--editable": true, "-e": true, "--constraint": true, "--pip-args": true, "--tag": true, "--branch": true, "--rev": true,
-	"--version": true, "--id": true, "--manifest": true,
+var registryFlags map[string]bool
+
+func buildRegistryFlags() {
+	registryFlags = map[string]bool{
+		"--index-url": true, "-i": true, "--extra-index-url": true, "--registry": true, "--find-links": true, "-f": true,
+		"--trusted-host": true, "--source": true, "-s": true, "--index": true, "--default-index": true, "--git": true,
+		"--repository": true, "-X": true, "--channel": true, "-c": true, "--from": true, "--with": true, "--spec": true,
+		"--package": true, "-p": true, "--tap": true, "--repofrompath": true, "--enablerepo": true, "--requirement": true,
+		"-r": true, "--editable": true, "-e": true, "--constraint": true, "--pip-args": true, "--tag": true, "--branch": true, "--rev": true,
+		"--version": true, "--id": true, "--manifest": true,
+	}
 }
 
 // registryEnv are environment variables that redirect a package manager.
@@ -89,7 +97,7 @@ var registryEnv = []string{"PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL", "UV_INDEX_URL
 	"NPM_CONFIG_REGISTRY", "npm_config_registry", "YARN_REGISTRY", "YARN_NPM_REGISTRY_SERVER", "GOPROXY", "GOFLAGS", "GONOSUMDB", "GONOSUMCHECK",
 	"GOPRIVATE", "GOINSECURE", "GOSUMDB", "CARGO_REGISTRIES_CRATES_IO_INDEX", "BUNDLE_MIRROR__RUBYGEMS__ORG", "HOMEBREW_BOTTLE_DOMAIN", "PIP_TRUSTED_HOST", "PIP_CONFIG_FILE"}
 
-func init() {
+func registerInstall() {
 	for name := range pkgDefs {
 		registerWrap(wrapPkg, name)
 	}
@@ -374,8 +382,8 @@ func wrapUv(a *analyzer, c *simple, in flow) (flow, int) {
 
 // wrapGo handles go install / go get / go run pkg@version.
 func wrapGo(a *analyzer, c *simple, in flow) (flow, int) {
-	sub, after := subcommand(c.rest(), &optSpec{oneDash: true, long: longSet("-C")})
-	sp := &optSpec{oneDash: true, long: longSet("-o", "-p", "-tags", "-ldflags", "-gcflags", "-mod", "-modfile", "-overlay", "-pkgdir", "-exec", "-asmflags", "-buildmode", "-compiler", "-installsuffix", "-toolexec", "-coverpkg", "-covermode")}
+	sub, after := subcommand(c.rest(), &optSpec{oneDash: true, long: longSet{"-C"}})
+	sp := &optSpec{oneDash: true, long: longSet{"-o", "-p", "-tags", "-ldflags", "-gcflags", "-mod", "-modfile", "-overlay", "-pkgdir", "-exec", "-asmflags", "-buildmode", "-compiler", "-installsuffix", "-toolexec", "-coverpkg", "-covermode"}}
 	switch sub {
 	case "install", "get":
 		o := parseOpts(after, sp)

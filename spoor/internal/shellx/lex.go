@@ -358,11 +358,15 @@ func (lx *shLexer) fdRedirect() bool {
 	return j < len(lx.s) && j-lx.i <= 2 && (lx.s[j] == '>' || lx.s[j] == '<')
 }
 
-var shReserved = map[string]int{
-	// 0: drop the word and keep going; 1: drop the rest of the header.
-	"if": 0, "then": 0, "else": 0, "elif": 0, "do": 0, "while": 0, "until": 0, "!": 0, "time": 0,
-	"fi": 0, "done": 0, "esac": 0, "coproc": 0, "{": 0, "}": 0, "in": 0,
-	"for": 1, "case": 1, "select": 1, "function": 1,
+var shReserved map[string]int
+
+func buildShReserved() {
+	shReserved = map[string]int{
+		// 0: drop the word and keep going; 1: drop the rest of the header.
+		"if": 0, "then": 0, "else": 0, "elif": 0, "do": 0, "while": 0, "until": 0, "!": 0, "time": 0,
+		"fi": 0, "done": 0, "esac": 0, "coproc": 0, "{": 0, "}": 0, "in": 0,
+		"for": 1, "case": 1, "select": 1, "function": 1,
+	}
 }
 
 func (lx *shLexer) addWord(w arg) {

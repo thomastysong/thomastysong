@@ -6,7 +6,7 @@ import "strings"
 // record file reads/writes, and evaluate the output statically when every
 // input is known, so that "echo <b64> | base64 -d | sh" is seen through.
 
-func init() {
+func registerText() {
 	register(hEcho, "echo")
 	register(hPrintf, "printf")
 	register(hCat, "cat", "tac", "bat", "batcat", "nl", "more", "less", "most", "zcat", "gzcat", "bzcat", "xzcat", "zstdcat")
@@ -203,7 +203,7 @@ func decodeMode(c *simple) bool {
 }
 
 func hBase64(a *analyzer, c *simple, in flow, out *flow) {
-	o := parseOpts(c.rest(), &optSpec{short: "wbio", long: longSet("--wrap", "--break", "--input", "--output")})
+	o := parseOpts(c.rest(), &optSpec{short: "wbio", long: longSet{"--wrap", "--break", "--input", "--output"}})
 	var files []arg
 	files = append(files, o.pos...)
 	if f, ok := o.get("-i", "--input"); ok && f.s != "-" {
@@ -483,9 +483,9 @@ func hReaders(a *analyzer, c *simple, in flow, out *flow) {
 
 var grepSpec = &optSpec{
 	short: "efmABCdDgtTjMr",
-	long: longSet("--regexp", "--file", "--max-count", "--after-context", "--before-context", "--context",
+	long: longSet{"--regexp", "--file", "--max-count", "--after-context", "--before-context", "--context",
 		"--include", "--exclude", "--exclude-dir", "--glob", "--type", "--type-not", "--threads", "--max-depth",
-		"--color", "--colour", "--binary-files", "--devices", "--directories", "--label", "--replace", "--pre", "--pre-glob"),
+		"--color", "--colour", "--binary-files", "--devices", "--directories", "--label", "--replace", "--pre", "--pre-glob"},
 }
 
 func hGrep(a *analyzer, c *simple, in flow, out *flow) {
@@ -528,7 +528,7 @@ func hGrep(a *analyzer, c *simple, in flow, out *flow) {
 	}
 }
 
-var sedSpec = &optSpec{short: "eflE", long: longSet("--expression", "--file", "--line-length")}
+var sedSpec = &optSpec{short: "eflE", long: longSet{"--expression", "--file", "--line-length"}}
 
 func hSed(a *analyzer, c *simple, in flow, out *flow) {
 	args := c.rest()

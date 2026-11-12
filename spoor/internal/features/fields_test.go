@@ -190,7 +190,7 @@ func fill(v reflect.Value, depth int) {
 
 func TestRegistryWellFormed(t *testing.T) {
 	seen := map[string]bool{}
-	for _, d := range append(append(append([]featDef(nil), featureDefs...), sessionDefs...), engineDefs...) {
+	for _, d := range append(append(append([]featDef(nil), featureDefList()...), sessionDefs...), engineDefs...) {
 		if seen[d.name] {
 			t.Errorf("duplicate feature %s", d.name)
 		}

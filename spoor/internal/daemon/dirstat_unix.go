@@ -3,25 +3,10 @@
 package daemon
 
 import (
-	"fmt"
 	"os"
 	"strconv"
 	"syscall"
 )
-
-func modeString(m os.FileMode) string {
-	v := uint32(m.Perm())
-	if m&os.ModeSetgid != 0 {
-		v |= 0o2000
-	}
-	if m&os.ModeSetuid != 0 {
-		v |= 0o4000
-	}
-	if m&os.ModeSticky != 0 {
-		v |= 0o1000
-	}
-	return fmt.Sprintf("%04o", v)
-}
 
 // checkDir compares a directory with what the daemon makes of it.
 func checkDir(name, path string, kind dirKind, ownerUID string) DirStatus {

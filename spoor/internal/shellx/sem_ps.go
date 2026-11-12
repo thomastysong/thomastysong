@@ -5,23 +5,27 @@ import "strings"
 // psAliases maps PowerShell aliases to cmdlets. Aliases that collide with
 // native tools (curl, wget, rm, cp, cat, sc ...) are only followed when the
 // command line is PowerShell; see psCanonical.
-var psAliases = map[string]string{
-	"iwr": "invoke-webrequest", "irm": "invoke-restmethod", "iex": "invoke-expression",
-	"saps": "start-process", "start": "start-process", "ri": "remove-item", "gc": "get-content",
-	"ac": "add-content", "cpi": "copy-item", "mi": "move-item", "ni": "new-item", "sp": "set-itemproperty",
-	"gci": "get-childitem", "gp": "get-itemproperty", "spps": "stop-process", "gps": "get-process",
-	"sls": "select-string", "icm": "invoke-command", "sal": "set-alias", "nal": "new-alias",
-	"gwmi": "get-wmiobject", "gcim": "get-ciminstance", "iwmi": "invoke-wmimethod", "rwmi": "remove-wmiobject",
-	"sajb": "start-job", "clhy": "clear-history", "rp": "remove-itemproperty", "spsv": "stop-service",
-	"sasv": "start-service", "ipmo": "import-module", "rni": "rename-item", "rcjb": "receive-job",
-	"foreach": "foreach-object", "%": "foreach-object", "where": "where-object", "?": "where-object",
-	"sv": "set-variable", "write": "write-output", "tee": "tee-object",
-	// Colliding names, followed only in the PowerShell dialect.
-	"curl": "invoke-webrequest", "wget": "invoke-webrequest", "rm": "remove-item", "rmdir": "remove-item",
-	"del": "remove-item", "erase": "remove-item", "rd": "remove-item", "cat": "get-content", "type": "get-content",
-	"cp": "copy-item", "copy": "copy-item", "mv": "move-item", "move": "move-item", "ls": "get-childitem",
-	"dir": "get-childitem", "kill": "stop-process", "ps": "get-process", "echo": "write-output",
-	"set": "set-variable", "history": "get-history", "h": "get-history",
+var psAliases map[string]string
+
+func buildPsAliases() {
+	psAliases = map[string]string{
+		"iwr": "invoke-webrequest", "irm": "invoke-restmethod", "iex": "invoke-expression",
+		"saps": "start-process", "start": "start-process", "ri": "remove-item", "gc": "get-content",
+		"ac": "add-content", "cpi": "copy-item", "mi": "move-item", "ni": "new-item", "sp": "set-itemproperty",
+		"gci": "get-childitem", "gp": "get-itemproperty", "spps": "stop-process", "gps": "get-process",
+		"sls": "select-string", "icm": "invoke-command", "sal": "set-alias", "nal": "new-alias",
+		"gwmi": "get-wmiobject", "gcim": "get-ciminstance", "iwmi": "invoke-wmimethod", "rwmi": "remove-wmiobject",
+		"sajb": "start-job", "clhy": "clear-history", "rp": "remove-itemproperty", "spsv": "stop-service",
+		"sasv": "start-service", "ipmo": "import-module", "rni": "rename-item", "rcjb": "receive-job",
+		"foreach": "foreach-object", "%": "foreach-object", "where": "where-object", "?": "where-object",
+		"sv": "set-variable", "write": "write-output", "tee": "tee-object",
+		// Colliding names, followed only in the PowerShell dialect.
+		"curl": "invoke-webrequest", "wget": "invoke-webrequest", "rm": "remove-item", "rmdir": "remove-item",
+		"del": "remove-item", "erase": "remove-item", "rd": "remove-item", "cat": "get-content", "type": "get-content",
+		"cp": "copy-item", "copy": "copy-item", "mv": "move-item", "move": "move-item", "ls": "get-childitem",
+		"dir": "get-childitem", "kill": "stop-process", "ps": "get-process", "echo": "write-output",
+		"set": "set-variable", "history": "get-history", "h": "get-history",
+	}
 }
 
 // psWebParams are Invoke-WebRequest parameters. In PowerShell "curl" and
@@ -180,9 +184,12 @@ func psFalse(v string) bool {
 	return l == "$false" || l == "false" || l == "0" || l == "disabled"
 }
 
-var psHandlers = map[string]handler{}
+// psHandlers maps a canonical cmdlet name to its handler; filled by
+// registerPS.
+var psHandlers map[string]handler
 
-func init() {
+func registerPS() {
+	psHandlers = map[string]handler{}
 	ps := func(h handler, names ...string) {
 		for _, n := range names {
 			psHandlers[n] = h

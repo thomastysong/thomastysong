@@ -307,10 +307,6 @@ func (e *Engine) evaluate(ev *event.Event, fired map[string]bool) (res Result) {
 		if r.when != nil && !r.when.eval(fields, ctx) {
 			continue
 		}
-		if r.lazy != nil && r.ensure() != nil {
-			e.invalid.Add(1) // compiled on first use; an invalid rule never fires
-			continue
-		}
 		var used []flagEntryNamed
 		if len(r.require) > 0 || len(r.requireAny) > 0 {
 			if st == nil {
@@ -332,6 +328,10 @@ func (e *Engine) evaluate(ev *event.Event, fired map[string]bool) (res Result) {
 			if used, ok = requireFlags(r, view); !ok {
 				continue
 			}
+		}
+		if r.lazy != nil && r.ensure() != nil {
+			e.invalid.Add(1) // compiled on first use; an invalid rule never fires
+			continue
 		}
 		if !r.match.eval(fields, ctx) {
 			continue

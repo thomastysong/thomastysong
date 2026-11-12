@@ -94,6 +94,22 @@ func prepareLayout(cfg *config.Config, privileged bool, log *slog.Logger) (layou
 	return l, nil
 }
 
+// modeString renders POSIX permission bits with the special bits, as ls
+// and chmod write them ("2750").
+func modeString(m os.FileMode) string {
+	v := uint32(m.Perm())
+	if m&os.ModeSetgid != 0 {
+		v |= 0o2000
+	}
+	if m&os.ModeSetuid != 0 {
+		v |= 0o4000
+	}
+	if m&os.ModeSticky != 0 {
+		v |= 0o1000
+	}
+	return fmt.Sprintf("%04o", v)
+}
+
 // spoolDirFor is <data>/spool/<uid>. A uid that is not a plain account id
 // (digits on POSIX, a SID on Windows) gets no system spool directory: the
 // name becomes a path component.

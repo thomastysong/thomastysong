@@ -102,15 +102,17 @@ func posixCommand(bin, agent string, m guardMode) string {
 //
 // A quoted path is a string expression there, not a command, so it needs
 // the call operator; -LiteralPath takes the path verbatim (no wildcard
-// expansion of [ ] in it). exit $LASTEXITCODE is also what keeps spoor's
-// status: with -Command, PowerShell turns any native exit code other than
-// 0 or 1 into 1 unless the script exits with it explicitly
-// (about_Pwsh.md, "-Command", re-read 2026-11-12), which loses Codex's
-// exit-2 block. A call that fails without running anything (a file that
-// is not a program) leaves $LASTEXITCODE unset, so the guarded line then
-// exits 0 too (UNVERIFIED: no PowerShell in the build environment). The
-// strict and legacy forms are the bare call, which exits 1 when the binary
-// is missing.
+// expansion of [ ] in it). exit $LASTEXITCODE keeps spoor's status as it
+// is: with -Command, PowerShell turns any native exit code other than 0
+// or 1 into 1 unless the script exits with it explicitly (about_Pwsh.md,
+// "-Command", re-read 2026-11-12). spoor hook itself exits 0 in every case
+// and sends every decision, a Codex block included, as JSON
+// (internal/hookcmd), so this only keeps a status spoor does not choose,
+// such as the one left by a kill, from being rewritten. A call that fails
+// without running anything (a file that is not a program) leaves
+// $LASTEXITCODE unset, so the guarded line then exits 0 too (UNVERIFIED:
+// no PowerShell in the build environment). The strict and legacy forms are
+// the bare call, which exits 1 when the binary is missing.
 func pwshCommand(bin, agent string, m guardMode) string {
 	q := pwshQuote(bin)
 	if m != guarded {
@@ -131,10 +133,11 @@ func bareCommand(bin, agent string) string {
 // That form has no missing-binary guard: the guard needs `if`, and no
 // single line found here is valid in cmd.exe, Windows PowerShell 5.1 and
 // PowerShell 7 alike (5.1 has no && or ||, and both parsers reject the
-// other's `if`). Run by PowerShell it also exits 1 where spoor exited 2
-// (see pwshCommand), which only matters for Codex, the one agent whose
-// block is an exit code. Any other path gets the PowerShell form (a path
-// with spaces cannot be written so that both shells accept it).
+// other's `if`). The guard is all it lacks: spoor hook exits 0 in every
+// case and sends its decisions as JSON (internal/hookcmd), so the exit
+// code rewrite described at pwshCommand costs it nothing. Any other path
+// gets the PowerShell form (a path with spaces cannot be written so that
+// both shells accept it).
 func windowsCommand(bin, agent string, m guardMode) string {
 	if plainWindowsPath(bin) {
 		return bareCommand(bin, agent)

@@ -63,10 +63,20 @@ type Info struct {
 
 // packFromNode compiles one parsed pack file into s. A pack from the
 // embedded cache (lazy) has its rules compiled in steps (lazy.go).
-func (s *Set) packFromNode(name string, root *yaml.Node, embedded, lazy bool) error {
+func (s *Set) packFromNode(name string, root *yaml.Node, embedded, lazy bool, tree *cacheTree) error {
 	if lazy {
-		if handled, err := s.lazyPack(name, root, embedded); handled {
+		if handled, err := s.lazyPack(name, root, embedded, tree); handled {
 			return err
+		}
+	}
+	if tree != nil {
+		// Compiled whole: every rule's deferred subtrees first.
+		if rules := mapValue(root, "rules"); rules != nil {
+			for _, rn := range rules.Content {
+				if err := tree.materialize(rn, true); err != nil {
+					return fmt.Errorf("rules: %s: %w", name, err)
+				}
+			}
 		}
 	}
 	var p rawPack
@@ -121,7 +131,7 @@ func (s *Set) checkPackHead(name, pack, version string, rules int) error {
 // lazyPack loads a pack from the embedded cache as rule stubs. handled is
 // false when the pack is not in the plain shape it reads; the caller then
 // compiles it whole (and reports any error from there).
-func (s *Set) lazyPack(name string, root *yaml.Node, embedded bool) (handled bool, err error) {
+func (s *Set) lazyPack(name string, root *yaml.Node, embedded bool, tree *cacheTree) (handled bool, err error) {
 	var p rawPackHead
 	if err := decodeNode(root, &p); err != nil {
 		return false, nil
@@ -134,8 +144,11 @@ func (s *Set) lazyPack(name string, root *yaml.Node, embedded bool) (handled boo
 	}
 	s.packs[p.Pack] = p.Version
 	for _, rn := range p.Rules.Content {
-		r := stubRule(rn, p.Pack, p.Version)
+		r := stubRule(rn, p.Pack, p.Version, tree)
 		if r == nil {
+			if err := tree.materialize(rn, true); err != nil {
+				return true, fmt.Errorf("rules: %s: %w", name, err)
+			}
 			var rr rawRule
 			if err := decodeNode(rn, &rr); err != nil {
 				return true, fmt.Errorf("rules: %s: %w", name, err)
@@ -221,8 +234,9 @@ type sourceFile struct {
 	root *yaml.Node
 	// cached is set on files decoded from the embedded cache: content that
 	// compiled whole when the cache was made, so its rules may be
-	// compiled lazily.
+	// compiled lazily. tree holds their subtrees not decoded yet.
 	cached bool
+	tree   *cacheTree
 }
 
 // fileRole says what a content file is from its base name: "lists",
@@ -312,7 +326,7 @@ func (s *Set) addSource(src sourceFile, embedded bool) error {
 		}
 		s.suppressions = append(s.suppressions, sups...)
 	case "pack":
-		return s.packFromNode(src.name, src.root, embedded, src.cached)
+		return s.packFromNode(src.name, src.root, embedded, src.cached, src.tree)
 	}
 	return nil
 }

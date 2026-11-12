@@ -48,11 +48,11 @@ func TestExportConfigComments(t *testing.T) {
 	}
 	// Every top-level key and every section is explained.
 	for _, k := range keys {
-		if !strings.Contains(k, ".") && configComments[k] == "" {
+		if !strings.Contains(k, ".") && configComments()[k] == "" {
 			t.Errorf("top-level key %q has no comment", k)
 		}
 	}
-	for k := range configComments {
+	for k := range configComments() {
 		found := false
 		for _, have := range keys {
 			if have == k {

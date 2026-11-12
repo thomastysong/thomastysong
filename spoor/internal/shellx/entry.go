@@ -10,6 +10,7 @@ import (
 // the input is attacker-controlled (it arrives on hook stdin), so every
 // failure mode degrades to a heuristic, truncated result instead of an error.
 func Analyze(cmdline string, hint Dialect) *Facts {
+	ensureTables()
 	f := &Facts{ParseOK: true}
 	src := cmdline
 	if len(src) > MaxInput {
@@ -99,6 +100,7 @@ func (a *analyzer) finish() {
 // Windows paths eaten as escapes. The decision is a weighted vote over cheap
 // lexical signals; ties and weak evidence go to POSIX.
 func detectDialect(s string) Dialect {
+	ensureTables()
 	if len(s) > 8<<10 {
 		s = clip(s, 8<<10)
 	}
@@ -271,14 +273,18 @@ func commandWords(t string, max int) []string {
 }
 
 // psVerbs are the approved PowerShell verbs most often seen on command lines.
-var psVerbs = map[string]struct{}{
-	"get": {}, "set": {}, "new": {}, "remove": {}, "invoke": {}, "start": {}, "stop": {}, "add": {}, "out": {},
-	"write": {}, "read": {}, "import": {}, "export": {}, "select": {}, "where": {}, "foreach": {}, "test": {},
-	"convert": {}, "convertto": {}, "convertfrom": {}, "copy": {}, "move": {}, "rename": {}, "clear": {},
-	"enable": {}, "disable": {}, "install": {}, "uninstall": {}, "register": {}, "unregister": {}, "expand": {},
-	"compress": {}, "resolve": {}, "split": {}, "join": {}, "format": {}, "measure": {}, "sort": {}, "group": {},
-	"wait": {}, "update": {}, "restart": {}, "suspend": {}, "resume": {}, "enter": {}, "exit": {}, "push": {},
-	"pop": {}, "unblock": {}, "send": {}, "receive": {}, "connect": {}, "disconnect": {}, "find": {}, "save": {},
+var psVerbs map[string]struct{}
+
+func buildPsVerbs() {
+	psVerbs = map[string]struct{}{
+		"get": {}, "set": {}, "new": {}, "remove": {}, "invoke": {}, "start": {}, "stop": {}, "add": {}, "out": {},
+		"write": {}, "read": {}, "import": {}, "export": {}, "select": {}, "where": {}, "foreach": {}, "test": {},
+		"convert": {}, "convertto": {}, "convertfrom": {}, "copy": {}, "move": {}, "rename": {}, "clear": {},
+		"enable": {}, "disable": {}, "install": {}, "uninstall": {}, "register": {}, "unregister": {}, "expand": {},
+		"compress": {}, "resolve": {}, "split": {}, "join": {}, "format": {}, "measure": {}, "sort": {}, "group": {},
+		"wait": {}, "update": {}, "restart": {}, "suspend": {}, "resume": {}, "enter": {}, "exit": {}, "push": {},
+		"pop": {}, "unblock": {}, "send": {}, "receive": {}, "connect": {}, "disconnect": {}, "find": {}, "save": {},
+	}
 }
 
 // isVerbNoun recognises a cmdlet name such as Get-Content. A word with a dot
@@ -308,11 +314,15 @@ func isVerbNoun(w string) bool {
 }
 
 // winVars are environment variables that only exist on Windows.
-var winVars = map[string]struct{}{
-	"PATH": {}, "TEMP": {}, "TMP": {}, "USERPROFILE": {}, "APPDATA": {}, "LOCALAPPDATA": {}, "COMSPEC": {},
-	"PROGRAMDATA": {}, "SYSTEMROOT": {}, "WINDIR": {}, "USERNAME": {}, "COMPUTERNAME": {}, "HOMEDRIVE": {},
-	"HOMEPATH": {}, "PROGRAMFILES": {}, "PUBLIC": {}, "CD": {}, "DATE": {}, "TIME": {}, "RANDOM": {},
-	"ERRORLEVEL": {}, "USERDOMAIN": {}, "ALLUSERSPROFILE": {}, "SYSTEMDRIVE": {},
+var winVars map[string]struct{}
+
+func buildWinVars() {
+	winVars = map[string]struct{}{
+		"PATH": {}, "TEMP": {}, "TMP": {}, "USERPROFILE": {}, "APPDATA": {}, "LOCALAPPDATA": {}, "COMSPEC": {},
+		"PROGRAMDATA": {}, "SYSTEMROOT": {}, "WINDIR": {}, "USERNAME": {}, "COMPUTERNAME": {}, "HOMEDRIVE": {},
+		"HOMEPATH": {}, "PROGRAMFILES": {}, "PUBLIC": {}, "CD": {}, "DATE": {}, "TIME": {}, "RANDOM": {},
+		"ERRORLEVEL": {}, "USERDOMAIN": {}, "ALLUSERSPROFILE": {}, "SYSTEMDRIVE": {},
+	}
 }
 
 // cmdVarScore scores %NAME% references. date +%Y%m%d also contains "%Y%",
@@ -342,7 +352,12 @@ func cmdVarScore(t string) int {
 	return score
 }
 
-var posixFuncDef = regexp.MustCompile(`(^|[;&|\s{(])[A-Za-z_][A-Za-z0-9_-]*\s*\(\)\s*\{`)
+// posixFuncDef matches a POSIX function definition ("name() {").
+var posixFuncDef *regexp.Regexp
+
+func buildPosixFuncDef() {
+	posixFuncDef = regexp.MustCompile(`(^|[;&|\s{(])[A-Za-z_][A-Za-z0-9_-]*\s*\(\)\s*\{`)
+}
 
 // posixAssignFirst reports whether t starts with NAME=value.
 func posixAssignFirst(t string) bool {

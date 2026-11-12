@@ -86,8 +86,8 @@ func TestGuardRepliesPerDialect(t *testing.T) {
 	}
 }
 
-// Codex blocks are rendered as JSON on exit 0 for every event Codex gates
-// (hookio itself still answers exit 2, which this package never uses).
+// Codex blocks are rendered as JSON on exit 0 for every event Codex gates.
+// hookio renders them so; render passes the reply through unchanged.
 func TestCodexBlockIsJSON(t *testing.T) {
 	d, _ := hookio.Get("codex")
 	dec := hookio.Decision{Action: hookio.ActionDeny, Reason: "reads a key", RuleID: "SPR-X-001"}
@@ -115,6 +115,11 @@ func TestCodexBlockIsJSON(t *testing.T) {
 		if err := json.Unmarshal(reply, &m); err != nil || !ok(m) {
 			t.Fatalf("%s: %s", name, reply)
 		}
+		// A pass-through: byte for byte what the dialect renders.
+		stdout, stderr, code := d.Respond(req, dec)
+		if code != 0 || len(stderr) != 0 || string(stdout) != string(reply) {
+			t.Fatalf("%s: render %q differs from Respond %q %q exit %d", name, reply, stdout, stderr, code)
+		}
 		if !replyCarries(reply, hookio.ActionDeny) {
 			t.Fatalf("%s: replyCarries misses the deny: %s", name, reply)
 		}
@@ -123,6 +128,55 @@ func TestCodexBlockIsJSON(t *testing.T) {
 	reply, ok := render(d, &hookio.Request{EventName: "PostToolUse"}, dec)
 	if !ok || len(reply) != 0 {
 		t.Fatalf("PostToolUse: %q %v", reply, ok)
+	}
+}
+
+// exitDialect stands in for hookio's panic fallback: a reply on a non-zero
+// exit. render must never forward it, since the hook process never exits
+// non-zero and exit 2 also means "Go runtime fatal error".
+type exitDialect struct{ hookio.Dialect }
+
+func (exitDialect) Respond(*hookio.Request, hookio.Decision) ([]byte, []byte, int) {
+	return []byte(`{"decision":"block","reason":"x"}`), []byte("spoor: blocked by policy\n"), 2
+}
+
+type panicDialect struct{ hookio.Dialect }
+
+func (panicDialect) Respond(*hookio.Request, hookio.Decision) ([]byte, []byte, int) {
+	panic("render bug")
+}
+
+func TestRenderNeverForwardsNonZeroExit(t *testing.T) {
+	codex, _ := hookio.Get("codex")
+	req := &hookio.Request{AgentID: "codex", EventName: "PreToolUse", Blocking: true}
+	deny := hookio.Decision{Action: hookio.ActionDeny, Reason: "r"}
+	for name, d := range map[string]hookio.Dialect{"exit 2": exitDialect{codex}, "panic": panicDialect{codex}} {
+		if reply, ok := render(d, req, deny); ok || reply != nil {
+			t.Errorf("%s: rendered %q ok=%v", name, reply, ok)
+		}
+	}
+	// "none" never reaches the dialect.
+	if reply, ok := render(exitDialect{codex}, req, hookio.Decision{Action: hookio.ActionNone}); !ok || reply != nil {
+		t.Errorf("none: %q %v", reply, ok)
+	}
+	// Every dialect renders a deny on each event it gates as JSON on
+	// exit 0, so the pass-through always has something to forward.
+	for _, d := range hookio.All() {
+		agentID, _ := hookio.AgentIDFor(d.ID())
+		for _, he := range d.Events() {
+			if !he.Blocking {
+				continue
+			}
+			r := &hookio.Request{AgentID: agentID, EventName: he.Name, Blocking: true}
+			reply, ok := render(d, r, deny)
+			if !ok {
+				t.Errorf("%s %s: deny not renderable", d.ID(), he.Name)
+				continue
+			}
+			if v, valid := validReply(reply, MaxReply); len(reply) > 0 && (!valid || len(v) == 0) {
+				t.Errorf("%s %s: reply %q not forwardable", d.ID(), he.Name, reply)
+			}
+		}
 	}
 }
 
@@ -240,7 +294,7 @@ func TestGuardUninspectablePayloadAsks(t *testing.T) {
 			}
 			var anomaly *event.Event
 			for _, a := range s.ofKind(t, event.KindActivity) {
-				if a.Type == TypePayloadAnomaly {
+				if a.Type == event.TypePayloadAnomaly {
 					anomaly = a
 				}
 			}
@@ -305,7 +359,7 @@ func TestGuardTruncatedStdinAsks(t *testing.T) {
 			}
 			var anomaly string
 			for _, a := range s.ofKind(t, event.KindActivity) {
-				if a.Type == TypePayloadAnomaly {
+				if a.Type == event.TypePayloadAnomaly {
 					anomaly = a.Labels["hook_error"]
 				}
 			}

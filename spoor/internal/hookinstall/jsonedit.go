@@ -16,6 +16,16 @@ type jfield struct {
 	v any // string | int | bool | jobj | jarr
 }
 
+// get returns the value of key k, or nil and false.
+func (o jobj) get(k string) (any, bool) {
+	for _, f := range o {
+		if f.k == k {
+			return f.v, true
+		}
+	}
+	return nil, false
+}
+
 type jarr []any
 
 // plain converts a generated value into the representation node.value()

@@ -152,3 +152,37 @@ func TestTranscriptRootsFilterAndHomes(t *testing.T) {
 		t.Errorf("GEMINI_CLI_HOME root missing: %v", roots)
 	}
 }
+
+// TestTranscriptFirstSessionOnEmptyHome: with no session log yet the
+// checkpoint store stays empty; the first session created afterwards, and
+// one created while the daemon was down, must still be read from their
+// first line.
+func TestTranscriptFirstSessionOnEmptyHome(t *testing.T) {
+	f := newFixture(t)
+	home := f.user.Home
+	cwd := filepath.Join(home, "repo")
+	proj := filepath.Join(home, ".claude", "projects", "-repo")
+	d, out := f.unitDaemon()
+	ctx := context.Background()
+	r := newTranscriptRunner(d)
+	r.step(ctx)
+	r.step(ctx)
+	if n := d.board.get("transcript.primes"); n != 1 {
+		t.Fatalf("primes = %d, want 1", n)
+	}
+	mustWrite(t, filepath.Join(proj, "first.jsonl"), claudeLines("s1", cwd, "toolu_first", "ls", time.Now()), 0o600)
+	r.step(ctx)
+	r.commit()
+	mustWrite(t, filepath.Join(proj, "down.jsonl"), claudeLines("s2", cwd, "toolu_down", "ls", time.Now()), 0o600)
+	r2 := newTranscriptRunner(d)
+	r2.step(ctx)
+	r2.commit()
+	d.pipe.Close()
+	if n := d.board.get("transcript.primes"); n != 1 {
+		t.Errorf("primes = %d after a restart, want 1", n)
+	}
+	got := out.useIDs()
+	if !got["toolu_first"] || !got["toolu_down"] {
+		t.Errorf("collected %v", got)
+	}
+}

@@ -416,3 +416,11 @@ labels:
     event: 01a1cdf6-2b35-7809-aa95-e86933976b89
     label: false_positive
     reason: "review:privacy: synthetic credentials in a probe test written through a heredoc"
+  - rule: SPR-EXFIL-013
+    event: 01a1cbc1-58a0-757d-9716-92bf0f2cd071
+    label: false_positive
+    reason: "build:mcpconf: a value captured from an earlier broad read (a glob or a listing) recurs in fixture URLs of a test file written through a heredoc; not a credential"
+  - rule: SPR-EXFIL-013
+    event: 01a1cdb5-22f9-709e-971d-a072053de340
+    label: false_positive
+    reason: "build:hookinstall: a value captured from an earlier broad read (a glob or a listing) recurs in a download URL; not a credential"

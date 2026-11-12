@@ -2,7 +2,7 @@ package shellx
 
 import "strings"
 
-func init() {
+func registerFile() {
 	register(hRm, "rm", "grm", "srm")
 	register(hRmdir, "rmdir", "unlink")
 	register(hShred, "shred", "wipe")
@@ -88,7 +88,7 @@ func hRmdir(a *analyzer, c *simple, in flow, out *flow) {
 }
 
 func hShred(a *analyzer, c *simple, in flow, out *flow) {
-	o := parseOpts(c.rest(), &optSpec{short: "ns", long: longSet("--iterations", "--size", "--random-source")})
+	o := parseOpts(c.rest(), &optSpec{short: "ns", long: longSet{"--iterations", "--size", "--random-source"}})
 	for _, t := range o.pos {
 		a.del(t.s)
 		if isDevicePath(normPath(t.s)) {
@@ -97,7 +97,7 @@ func hShred(a *analyzer, c *simple, in flow, out *flow) {
 	}
 }
 
-var cpSpec = &optSpec{short: "tSmogb", long: longSet("--target-directory", "--suffix", "--mode", "--owner", "--group", "--backup", "--reflink", "--sparse")}
+var cpSpec = &optSpec{short: "tSmogb", long: longSet{"--target-directory", "--suffix", "--mode", "--owner", "--group", "--backup", "--reflink", "--sparse"}}
 
 // hCp covers cp, mv and install: sources are read (and removed for mv),
 // the destination is written.
@@ -162,7 +162,7 @@ func hCp(a *analyzer, c *simple, in flow, out *flow) {
 }
 
 func hLn(a *analyzer, c *simple, in flow, out *flow) {
-	o := parseOpts(c.rest(), &optSpec{short: "tS", long: longSet("--target-directory", "--suffix")})
+	o := parseOpts(c.rest(), &optSpec{short: "tS", long: longSet{"--target-directory", "--suffix"}})
 	pos := o.pos
 	if len(pos) == 0 {
 		return
@@ -217,9 +217,9 @@ func hTar(a *analyzer, c *simple, in flow, out *flow) {
 	if !strings.HasPrefix(args[0].s, "-") {
 		args = append([]arg{{s: "-" + args[0].s}}, args[1:]...)
 	}
-	o := parseOpts(args, &optSpec{short: "fCTXIbHKNVg", long: longSet("--file", "--directory", "--files-from", "--exclude-from",
+	o := parseOpts(args, &optSpec{short: "fCTXIbHKNVg", long: longSet{"--file", "--directory", "--files-from", "--exclude-from",
 		"--use-compress-program", "--exclude", "--to-command", "--checkpoint", "--checkpoint-action", "--transform",
-		"--strip-components", "--rsh-command", "--newer", "--owner", "--group", "--mode", "--format")})
+		"--strip-components", "--rsh-command", "--newer", "--owner", "--group", "--mode", "--format"}})
 	create := o.has("-c", "--create", "-r", "--append", "-u", "--update")
 	extract := o.has("-x", "--extract", "--get")
 	archive, hasArchive := o.get("-f", "--file")
@@ -375,7 +375,7 @@ func hChown(a *analyzer, c *simple, in flow, out *flow) {
 }
 
 func hTruncate(a *analyzer, c *simple, in flow, out *flow) {
-	o := parseOpts(c.rest(), &optSpec{short: "sr", long: longSet("--size", "--reference")})
+	o := parseOpts(c.rest(), &optSpec{short: "sr", long: longSet{"--size", "--reference"}})
 	size, _ := o.get("-s", "--size")
 	zero := strings.Trim(size.s, "=0") == "" || strings.HasPrefix(size.s, "0")
 	for _, t := range o.pos {
@@ -395,7 +395,7 @@ func hTouch(a *analyzer, c *simple, in flow, out *flow) {
 	if c.dialect != Posix && c.name == "mkdir" {
 		return
 	}
-	o := parseOpts(c.rest(), &optSpec{short: "dtrm", long: longSet("--date", "--reference", "--time", "--mode")})
+	o := parseOpts(c.rest(), &optSpec{short: "dtrm", long: longSet{"--date", "--reference", "--time", "--mode"}})
 	for _, t := range o.pos {
 		a.attr(t.s)
 	}
@@ -453,8 +453,8 @@ func hOpenssl(a *analyzer, c *simple, in flow, out *flow) {
 		return
 	}
 	sub := strings.ToLower(rest[0].s)
-	o := parseOpts(rest[1:], &optSpec{oneDash: true, long: longSet("-in", "-out", "-inkey", "-key", "-cert", "-CAfile", "-CApath",
-		"-connect", "-pass", "-passin", "-passout", "-k", "-K", "-iv", "-keyout", "-config", "-servername", "-proxy", "-keyfile", "-signkey")})
+	o := parseOpts(rest[1:], &optSpec{oneDash: true, long: longSet{"-in", "-out", "-inkey", "-key", "-cert", "-CAfile", "-CApath",
+		"-connect", "-pass", "-passin", "-passout", "-k", "-K", "-iv", "-keyout", "-config", "-servername", "-proxy", "-keyfile", "-signkey"}})
 	for _, f := range o.all("-in", "-inkey", "-key", "-keyfile", "-signkey") {
 		a.read(f.s)
 	}

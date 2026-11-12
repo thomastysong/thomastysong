@@ -209,7 +209,8 @@ func TestClaudeToolDecision(t *testing.T) {
 }
 
 func TestClaudeUserPrompt(t *testing.T) {
-	const secret = "my token is sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAA"
+	// Assembled at run time so no credential-shaped literal is committed.
+	secret := "my token is " + "sk-" + "ant-api03-" + strings.Repeat("A", 24)
 	t.Run("redacted by default", func(t *testing.T) {
 		ev := one(t, otlpBody(claudeRes, "", claudeRec("user_prompt", kv{
 			"prompt_length": 48, "prompt": "<REDACTED>", "message.uuid": "0b1c-uuid", "command_name": "compact", "command_source": "builtin",

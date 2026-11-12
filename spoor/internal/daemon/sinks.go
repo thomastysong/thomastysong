@@ -80,14 +80,11 @@ func (d *daemon) openSinks() error {
 		return append(tailDBConsumers(tailSpec, check), shipCons...)
 	}
 	d.pruner = newOutboxPruner(pruneOptions{
-		dir:        d.layout.outbox,
-		maxAge:     cfg.Retention.Outbox.D(),
-		maxBytes:   cfg.Retention.OutboxBytes,
-		consumers:  consumers,
-		statePath:  filepath.Join(d.layout.check, "outbox-consumers.json"),
-		copyDir:    filepath.Join(d.layout.check, "taildb-copy"),
-		privileged: d.env.privileged,
-		gid:        d.layout.outboxGID,
+		dir:       d.layout.outbox,
+		maxAge:    cfg.Retention.Outbox.D(),
+		maxBytes:  cfg.Retention.OutboxBytes,
+		consumers: consumers,
+		statePath: filepath.Join(d.layout.check, "outbox-consumers.json"),
 	})
 	return nil
 }

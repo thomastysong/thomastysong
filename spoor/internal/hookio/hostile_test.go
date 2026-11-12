@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"testing"
@@ -253,7 +254,8 @@ func TestURLTargets(t *testing.T) {
 // id, tool name, model, MCP server) are out of scope here: they are
 // serialized by design and bounded by cleanID.
 func TestNoPayloadTextInLabelsOrOutcome(t *testing.T) {
-	const secret = "AKIAIOSFODNN7EXAMPLE secret=hunter2"
+	// Assembled at run time so no credential-shaped literal is committed.
+	secret := "AKIA" + strings.Repeat("Q", 16) + " secret=hunter2"
 	// Put the secret in every free-text and enum position of every fixture.
 	for _, tc := range allFixtures(t) {
 		var base map[string]any
@@ -337,6 +339,7 @@ func TestEnumValue(t *testing.T) {
 }
 
 func TestFailureSummaries(t *testing.T) {
+	const noCode = math.MinInt
 	for in, want := range map[string]struct {
 		summary string
 		code    int
@@ -345,23 +348,29 @@ func TestFailureSummaries(t *testing.T) {
 		"Exit code 127":                    {"exit code 127", 127},
 		"exit code -9\nkilled":             {"exit code -9", -9},
 		"  Exit code 2  \nx":               {"exit code 2", 2},
-		"Exit code 1 and my password is x": {"", -1},
-		"Exit code 99999999999999999999":   {"", -1},
-		"Exit code abc":                    {"", -1},
-		"Command timed out after 2m 0s":    {"", -1},
+		"Exit code 1 and my password is x": {"tool error class:other len:32", noCode},
+		"Exit code 99999999999999999999":   {"tool error class:other len:30", noCode},
+		"Exit code abc":                    {"tool error class:other len:13", noCode},
+		"Command timed out after 2m 0s":    {"tool error class:timeout len:29", noCode},
+		"ENOENT: no such file or directory, open '/home/u/.aws/credentials'": {"tool error class:not_found len:66", noCode},
+		"File has not been read yet. Read it first before writing to it.":    {"tool error class:conflict len:63", noCode},
 	} {
 		e := &event.Event{Content: &event.Content{}, Tool: &event.Tool{}}
 		out := failure(e, in, false)
 		eq(t, "status", out.Status, "error")
-		if want.summary != "" {
-			eq(t, "summary for "+in, out.Error, want.summary)
+		eq(t, "summary for "+in, out.Error, want.summary)
+		switch {
+		case want.code != noCode && out.ExitCode == nil:
+			t.Errorf("failure(%q): exit code lost", in)
+		case want.code != noCode:
 			eq(t, "code", *out.ExitCode, want.code)
-			continue
-		}
-		if out.ExitCode != nil || !strings.HasPrefix(out.Error, "tool error fp:") || len(out.Error) != len("tool error fp:")+8 {
-			t.Errorf("failure(%q) = %q, exit %v", in, out.Error, out.ExitCode)
+		case out.ExitCode != nil:
+			t.Errorf("failure(%q): exit code %d invented", in, *out.ExitCode)
 		}
 		eq(t, "raw kept locally", e.Content.ToolOutput, in)
+		eq(t, "output len", e.Tool.OutputLen, len(in))
+		eq(t, "no unkeyed output hash", e.Tool.OutputSHA256, "")
+		noHashOf(t, out.Error, in)
 	}
 	eq(t, "interrupted", failure(&event.Event{Content: &event.Content{}}, "", true).Status, "interrupted")
 
@@ -371,18 +380,26 @@ func TestFailureSummaries(t *testing.T) {
 		"Classifier unavailable":           "classifier_unavailable",
 		"Auto mode could not evaluate this action and is blocking it for safety: x": "no_verdict",
 		"":                                   "",
-		"[x; rm -rf /]":                      "denied fp:",
-		"the command `cat ~/.ssh/id_rsa`":    "denied fp:",
-		"[" + strings.Repeat("a", 200) + "]": "denied fp:",
+		"   ":                                "",
+		"[x; rm -rf /]":                      "denied class:other len:13",
+		"the command `cat ~/.ssh/id_rsa`":    "denied class:other len:31",
+		"[" + strings.Repeat("a", 200) + "]": "denied class:other len:202",
 	} {
 		got := denialReason(in)
-		if strings.HasSuffix(want, "fp:") {
-			if !strings.HasPrefix(got, want) || len(got) != len(want)+8 {
-				t.Errorf("denialReason(%q) = %q", in, got)
-			}
-			continue
-		}
 		eq(t, "denialReason("+in+")", got, want)
+		if strings.HasPrefix(want, "denied ") {
+			noHashOf(t, got, strings.TrimSpace(in))
+		}
+	}
+}
+
+// noHashOf fails when summary carries any prefix of a hex SHA-256 of text:
+// the fingerprints this package used to emit were the first 8 hex digits.
+func noHashOf(t *testing.T, summary, text string) {
+	t.Helper()
+	h := sha256Hex(text)
+	if strings.Contains(summary, h[:6]) || strings.Contains(summary, "fp:") {
+		t.Errorf("summary %q carries a fingerprint of %q", summary, text)
 	}
 }
 

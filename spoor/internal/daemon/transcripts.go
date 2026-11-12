@@ -120,7 +120,7 @@ func (r *transcriptRunner) step(ctx context.Context) {
 	}
 	r.mu.Lock()
 	r.roots = roots
-	needPrime := r.backfill <= 0 && (fresh || r.t == nil && !r.knownState())
+	needPrime := r.backfill <= 0 && fresh
 	r.mu.Unlock()
 	if needPrime {
 		r.prime(ctx, roots)
@@ -140,12 +140,6 @@ func (r *transcriptRunner) step(ctx context.Context) {
 	}
 	evs, probs, err := tl.Poll(ctx)
 	r.handle(evs, probs, err)
-}
-
-// knownState reports whether a checkpoint store exists from an earlier run.
-func (r *transcriptRunner) knownState() bool {
-	_, err := os.Lstat(r.stateFile)
-	return err == nil
 }
 
 func (r *transcriptRunner) newTailer(fromStart bool) *transcript.Tailer {
@@ -273,12 +267,12 @@ type admittedFile struct {
 	Globs []string `json:"globs"`
 }
 
+// loadAdmitted reads the roots primed by an earlier run. The checkpoint
+// store itself may not exist (no session file had been seen yet); the roots
+// file alone says the roots were looked at. Deleting the store but not the
+// roots file makes the next run read files modified in the last 24 h from
+// their start: that is the explicit backfill.
 func (r *transcriptRunner) loadAdmitted() {
-	if !r.knownState() {
-		// No checkpoints: everything is first sight, whatever an old roots
-		// file says.
-		return
-	}
 	b, err := readSmallFile(r.rootsFile, 4<<20)
 	if err != nil {
 		return

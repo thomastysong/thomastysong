@@ -27,7 +27,8 @@ const (
 	ReasonStdin         = "hook_stdin_timeout"  // the agent did not close stdin in time
 )
 
-// Payload anomaly codes (Labels["hook_error"] of TypePayloadAnomaly records).
+// Payload anomaly codes (Labels["hook_error"] of event.TypePayloadAnomaly
+// records).
 // too_large and too_deep match the codes hookio puts on salvaged events.
 const (
 	anomalyEmpty        = "empty"
@@ -168,7 +169,7 @@ func (s *stamper) naturalKey(e *event.Event, i int, dup bool) string {
 // ships), and the top-level identifiers when they could be read from the
 // kept prefix.
 func anomalyRecord(agentID, code string, payload []byte, size int64, digest string) *event.Event {
-	e := event.New(event.KindActivity, TypePayloadAnomaly, event.SourceHook)
+	e := event.New(event.KindActivity, event.TypePayloadAnomaly, event.SourceHook)
 	e.Fidelity = event.FidelityObserved
 	if agentID == "" {
 		agentID = "unknown"

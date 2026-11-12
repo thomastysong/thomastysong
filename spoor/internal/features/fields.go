@@ -61,7 +61,10 @@ func eventPlan() *plan {
 	return &thePlan
 }
 
-var timeType = reflect.TypeOf(event.Time{})
+// timeType is event.Time, which the flattened view renders as one value
+// rather than as a struct. A function, not a package-level var, so that
+// linking features costs no init work.
+func timeType() reflect.Type { return reflect.TypeFor[event.Time]() }
 
 func buildPlan() plan {
 	p := plan{names: map[string]Type{}}
@@ -74,7 +77,7 @@ func buildPlan() plan {
 		}
 		g := group{top: i}
 		ft := f.Type
-		if ft.Kind() == reflect.Pointer && ft.Elem().Kind() == reflect.Struct && ft.Elem() != timeType {
+		if ft.Kind() == reflect.Pointer && ft.Elem().Kind() == reflect.Struct && ft.Elem() != timeType() {
 			g.ptr = true
 			collect(ft.Elem(), name+".", nil, &g.accs, 0)
 		} else if a, ok := leafAccessor(ft, name, []int{i}, omit); ok {
@@ -130,7 +133,7 @@ func collect(t reflect.Type, prefix string, index []int, out *[]accessor, depth 
 		}
 		idx := append(append([]int(nil), index...), i)
 		ft := f.Type
-		if ft.Kind() == reflect.Pointer && ft.Elem().Kind() == reflect.Struct && ft.Elem() != timeType {
+		if ft.Kind() == reflect.Pointer && ft.Elem().Kind() == reflect.Struct && ft.Elem() != timeType() {
 			collect(ft.Elem(), prefix+name+".", idx, out, depth+1)
 			continue
 		}
@@ -143,7 +146,7 @@ func collect(t reflect.Type, prefix string, index []int, out *[]accessor, depth 
 func leafAccessor(ft reflect.Type, name string, idx []int, omit bool) (accessor, bool) {
 	a := accessor{name: name, index: idx, omitempty: omit}
 	switch {
-	case ft == timeType:
+	case ft == timeType():
 		a.kind = vTime
 	case ft.Kind() == reflect.String:
 		a.kind = vString

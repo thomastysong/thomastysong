@@ -16,6 +16,7 @@ import (
 type renderedField struct {
 	key, value string
 	args       []string // exec form only
+	failClosed bool     // the handler carries "failClosed": true (Cursor)
 }
 
 // renderedFields decodes a rendered file with the standard decoders and
@@ -42,9 +43,10 @@ func renderedFields(t *testing.T, path string, data []byte) []renderedField {
 					args = append(args, s)
 				}
 			}
+			failClosed, _ := x["failClosed"].(bool)
 			for _, k := range []string{"command", "bash", "powershell", "commandWindows"} {
 				if s, ok := x[k].(string); ok {
-					out = append(out, renderedField{key: k, value: s, args: args})
+					out = append(out, renderedField{key: k, value: s, args: args, failClosed: failClosed})
 				}
 			}
 			for _, e := range x {
@@ -111,7 +113,9 @@ func pwshShape(line string) error {
 // command field: it runs `<binary> hook --agent <id>` and nothing more
 // (none of the hook's internal flags --worker, --ppid, --t0, --deadline),
 // is recognised as spoor's and names the binary, and has the form its
-// shell needs.
+// shell needs. A handler marked failClosed (Cursor, guard and fail-closed)
+// must have no missing-binary check on any OS, and every other handler
+// must have it wherever its shell allows one.
 func TestRenderedCommands(t *testing.T) {
 	c := testCatalog(t)
 	internal := []string{"--worker", "--ppid", "--t0", "--deadline"}
@@ -125,7 +129,7 @@ func TestRenderedCommands(t *testing.T) {
 		"darwin":  {"/Applications/Spoor.app/Contents/MacOS/spoor"},
 		"windows": {winBin, `C:\spoor\spoor.exe`, `C:\Users\O'Brien‘s Tools\spoor.exe`},
 	}
-	var nPosix, nPwsh, nBare, nExec int
+	var nPosix, nPwsh, nBare, nExec, nStrictPosix, nStrictPwsh, nStrictBare int
 	for goos, list := range bins {
 		for _, bin := range list {
 			for _, sc := range []event.Scope{event.ScopeManaged, event.ScopeUser, event.ScopeSystem} {
@@ -175,30 +179,48 @@ func TestRenderedCommands(t *testing.T) {
 							}
 							pwsh := f.key == "powershell" || f.key == "commandWindows" ||
 								(goos == "windows" && f.key == "command" && (p.AgentID == "gemini-cli" || p.AgentID == "cursor"))
-							failClosed := vname == "fail-closed" && p.AgentID == "cursor" && strings.HasPrefix(line, posixExec)
+							if f.failClosed && (vname != "fail-closed" || p.AgentID != "cursor") {
+								t.Errorf("%s: %s: failClosed outside Cursor with guard and fail-closed", where, f.key)
+							}
+							// The strict forms are spelled out here rather than
+							// rendered, so a change to the renderer cannot
+							// move the expectation with it.
+							strictPwsh := "& " + pwshQuote(bin) + " hook --agent " + p.AgentID
+							strictPosix := "exec " + posixQuote(bin) + " hook --agent " + p.AgentID
 							switch {
 							case pwsh && plainWindowsPath(bin) && f.key != "powershell" && p.AgentID != "gemini-cli":
 								// Run by PowerShell or cmd.exe: bare, the
-								// documented gap.
+								// documented gap, whether failClosed or not.
 								nBare++
-								if line != bareCommand(bin, p.AgentID) {
+								if f.failClosed {
+									nStrictBare++
+								}
+								if line != bin+" hook --agent "+p.AgentID {
 									t.Errorf("%s: %s should be bare: %s", where, f.key, line)
+								}
+							case pwsh && f.failClosed:
+								// Cursor failClosed on Windows: a missing
+								// binary must fail and so block.
+								nStrictPwsh++
+								if line != strictPwsh {
+									t.Errorf("%s: failClosed %s\n got %s\nwant %s", where, f.key, line, strictPwsh)
+								}
+								if err := pwshShape(line); err != nil {
+									t.Errorf("%s: %s: %v: %s", where, f.key, err, line)
 								}
 							case pwsh:
 								nPwsh++
 								want := pwshCommand(bin, p.AgentID, guarded)
-								if vname == "fail-closed" && p.AgentID == "cursor" && line == pwshCommand(bin, p.AgentID, strict) {
-									want = line
-								}
-								if line != want {
+								if !strings.HasPrefix(line, pwshGuardHead) || line != want {
 									t.Errorf("%s: %s\n got %s\nwant %s", where, f.key, line, want)
 								}
 								if err := pwshShape(line); err != nil {
 									t.Errorf("%s: %s: %v: %s", where, f.key, err, line)
 								}
-							case failClosed:
-								if line != posixCommand(bin, p.AgentID, strict) {
-									t.Errorf("%s: %s: %s", where, f.key, line)
+							case f.failClosed:
+								nStrictPosix++
+								if line != strictPosix {
+									t.Errorf("%s: failClosed %s\n got %s\nwant %s", where, f.key, line, strictPosix)
 								}
 							default:
 								nPosix++
@@ -212,8 +234,9 @@ func TestRenderedCommands(t *testing.T) {
 			}
 		}
 	}
-	if nPosix == 0 || nPwsh == 0 || nBare == 0 || nExec == 0 {
-		t.Errorf("coverage: %d posix, %d pwsh, %d bare, %d exec", nPosix, nPwsh, nBare, nExec)
+	if nPosix == 0 || nPwsh == 0 || nBare == 0 || nExec == 0 || nStrictPosix == 0 || nStrictPwsh == 0 || nStrictBare == 0 {
+		t.Errorf("coverage: %d posix, %d pwsh, %d bare, %d exec, failClosed: %d posix, %d pwsh, %d bare",
+			nPosix, nPwsh, nBare, nExec, nStrictPosix, nStrictPwsh, nStrictBare)
 	}
 }
 
@@ -246,8 +269,18 @@ func TestGuardNotes(t *testing.T) {
 	if n := note("linux", "copilot-cli", unixBin); !strings.Contains(n, "checks for the spoor binary first") {
 		t.Errorf("copilot: %s", n)
 	}
-	if n := note("windows", "codex", `C:\spoor\spoor.exe`); !strings.Contains(n, "commandWindows is written bare") {
-		t.Errorf("codex, plain path: %s", n)
+	// The bare line costs only the missing-binary check: spoor hook exits 0
+	// in every case and sends a Codex block as JSON (internal/hookcmd), so
+	// the note must not claim that PowerShell's exit-code handling loses a
+	// block.
+	plain := note("windows", "codex", `C:\spoor\spoor.exe`)
+	if !strings.Contains(plain, "commandWindows is written bare") || !strings.Contains(plain, "no missing-binary check") || !strings.Contains(plain, "does not block") {
+		t.Errorf("codex, plain path: %s", plain)
+	}
+	for _, bad := range []string{"exits 2", "exit 2", "exits 1", "does not take effect"} {
+		if strings.Contains(plain, bad) {
+			t.Errorf("codex, plain path: the note says %q, but spoor hook never exits 2:\n%s", bad, plain)
+		}
 	}
 	if n := note("windows", "codex", winBin); !strings.Contains(n, "commandWindows is written for PowerShell") {
 		t.Errorf("codex, quoted path: %s", n)

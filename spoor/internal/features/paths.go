@@ -7,19 +7,23 @@ import (
 	"github.com/thomastysong/spoor/internal/event"
 )
 
-// controlClasses are the path classes of files that make an agent, an IDE
-// or git run something or trust something: writing one is how a prompt
+// controlClass reports the path classes of files that make an agent, an
+// IDE or git run something or trust something: writing one is how a prompt
 // injection becomes persistent code execution.
-var controlClasses = map[string]bool{
-	"agent_config": true, "agent_managed_policy": true, "agent_hook": true, "agent_memory": true,
-	"agent_skill": true, "mcp_config": true, "vcs_hook": true, "vcs_internal": true, "startup_item": true,
+func controlClass(class string) bool {
+	switch class {
+	case "agent_config", "agent_managed_policy", "agent_hook", "agent_memory",
+		"agent_skill", "mcp_config", "vcs_hook", "vcs_internal", "startup_item":
+		return true
+	}
+	return false
 }
 
 // IsControlClass reports whether classes include an agent, IDE or VCS
 // control-file class.
 func IsControlClass(classes []string) bool {
 	for _, c := range classes {
-		if controlClasses[c] {
+		if controlClass(c) {
 			return true
 		}
 	}

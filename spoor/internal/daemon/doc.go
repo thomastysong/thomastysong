@@ -37,9 +37,11 @@
 //   - Scans: a full discovery.Scan at start and every scan.full_every,
 //     differential scans every scan.interval (state.Snapshot as the previous
 //     view), state.MarkScan after every complete scan, and discovery.ScanProject
-//     for each new session working directory (rate limited, privacy
-//     exclusions honoured, files not owned by the session's user refused by
-//     discovery itself).
+//     for each new session working directory (from hook and transcript
+//     records and from agent processes; at most once per directory in six
+//     hours and 60 per account per hour; privacy exclusions honoured; only a
+//     real directory owned by the session's account, whose files discovery
+//     again refuses when another account owns them).
 //   - Hook state: hookinstall.Status per user, refreshed with the scans,
 //     answers the pipeline's Hooked.
 //   - Bundle: the installed signed bundle is loaded at start (embedded packs,
@@ -52,7 +54,8 @@
 //     set-group-id bit, files 0640) and optionally stdout. The daemon prunes
 //     the outbox itself (the sink's own pruning is off): segments are
 //     consumed when Fluent Bit's tail database(s) (output.fluent_bit.tail_db,
-//     comma-separated paths or globs, opened read-only) and every configured
+//     comma-separated paths or globs, read without writing anything beside
+//     them: see readTailDB) and every configured
 //     shipper's checkpoint show them read to the end. Read segments are pruned
 //     by age; the hard byte cap removes read segments first, then segments of
 //     streams no consumer reads, then unread data (activity first, detections
@@ -92,7 +95,9 @@
 // or adapter reads, no scans; the process monitor idles itself) and the
 // pipeline writes only a heartbeat labelled status=disabled. When the switch
 // is released transcripts and adapter files restart from their current end,
-// so nothing written while the sensor was off is collected afterwards.
+// so nothing written while the sensor was off is collected afterwards, and
+// collectors hand records over again two seconds later: the pipeline caches
+// its view of the switch for up to a second and would drop them.
 //
 // # Windows service
 //

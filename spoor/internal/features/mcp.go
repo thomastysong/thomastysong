@@ -17,18 +17,26 @@ const (
 	maxArgString   = 4096 // longer strings are not paths or hosts; they are still scanned for secrets
 )
 
-// pathKeys and hostKeys are argument names that say what a string is when
+// pathKey and hostKey report argument names that say what a string is when
 // its shape alone does not.
-var pathKeys = map[string]bool{
-	"path": true, "paths": true, "file": true, "files": true, "filename": true, "file_path": true, "filepath": true,
-	"dir": true, "directory": true, "cwd": true, "root": true, "target": true, "source": true, "destination": true,
-	"dest": true, "src": true, "dst": true, "folder": true, "location": true, "workdir": true, "working_directory": true,
-	"absolute_path": true, "relative_path": true, "notebook_path": true,
+func pathKey(key string) bool {
+	switch key {
+	case "path", "paths", "file", "files", "filename", "file_path", "filepath",
+		"dir", "directory", "cwd", "root", "target", "source", "destination",
+		"dest", "src", "dst", "folder", "location", "workdir", "working_directory",
+		"absolute_path", "relative_path", "notebook_path":
+		return true
+	}
+	return false
 }
 
-var hostKeys = map[string]bool{
-	"host": true, "hostname": true, "domain": true, "url": true, "urls": true, "uri": true, "endpoint": true,
-	"server": true, "base_url": true, "baseurl": true, "address": true, "href": true, "link": true, "webhook": true,
+func hostKey(key string) bool {
+	switch key {
+	case "host", "hostname", "domain", "url", "urls", "uri", "endpoint",
+		"server", "base_url", "baseurl", "address", "href", "link", "webhook":
+		return true
+	}
+	return false
 }
 
 type walker struct {
@@ -151,11 +159,11 @@ func (w *walker) str(key, s string) {
 		}
 		return
 	}
-	if looksLikePath(s) || (pathKeys[lk] && !strings.ContainsAny(s, " \t") && strings.ContainsAny(s, `/\.`)) {
+	if looksLikePath(s) || (pathKey(lk) && !strings.ContainsAny(s, " \t") && strings.ContainsAny(s, `/\.`)) {
 		w.paths.add(s)
 		return
 	}
-	if hostKeys[lk] {
+	if hostKey(lk) {
 		if h := classify.URLHost(s); h != "" && strings.Contains(h, ".") {
 			w.hosts.add(h)
 		}

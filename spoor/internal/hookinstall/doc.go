@@ -50,29 +50,38 @@
 // invisible: exec hands the process to spoor, so stdin, stdout, signals and
 // the exit status are spoor's own, and PowerShell exits with $LASTEXITCODE
 // (with -Command it otherwise turns any native exit code but 0 and 1 into
-// 1, which loses Codex's exit-2 block). The check is a shell builtin and
-// starts no process; the tests measure the whole invocation.
+// 1). spoor hook itself exits 0 in every case and sends every decision, a
+// Codex block included, as JSON (internal/hookcmd), so keeping the status
+// matters only for one spoor does not choose, such as a kill. The check is
+// a shell builtin and starts no process; the tests measure the whole
+// invocation.
 //
 // Three kinds of field carry no check. Claude Code uses the exec form: no
 // shell, and a binary that is not there is a spawn failure, which Claude
 // Code treats as a non-blocking error unless onFailure is "block". A
 // handler that asks the agent to block when it fails (Cursor failClosed)
-// is written as exec '<bin>' hook --agent <id>, so a missing binary still
-// blocks, as the operator asked. Windows fields that may also meet cmd.exe
+// is written as exec '<bin>' hook --agent <id> (on Windows & '<bin>' hook
+// --agent <id>, or bare), so a missing binary still blocks, as the
+// operator asked. Windows fields that may also meet cmd.exe
 // (Codex commandWindows, Cursor) are written bare when the path needs no
 // quoting, which both shells run: no line was found that does the check
 // and is valid in cmd.exe, Windows PowerShell 5.1 and PowerShell 7 alike
-// (5.1 has no && or ||, and each parser rejects the other's if). Run by
-// PowerShell, Codex's usual Windows shell, the bare line also ends with
-// exit code 1 where spoor exited 2, so a Codex block (exit 2 and a reason
-// on stderr; every other reply of every agent is JSON with exit 0) does not
-// take effect there. A path that needs quoting gets the PowerShell form,
-// which keeps the 2 but which cmd.exe cannot run. Neither choice is right
-// for both shells, and a plan for Codex on Windows says which one it made.
+// (5.1 has no && or ||, and each parser rejects the other's if). The
+// check is all the bare line lacks: spoor's replies, blocks included, are
+// JSON on exit 0 (internal/hookcmd), so no exit code of spoor's is lost.
+// With the binary missing,
+// Codex shows a hook error on every event and does not block (it blocks
+// only on exit 2). A path that needs quoting gets the PowerShell form,
+// which has the check but which cmd.exe cannot run. Neither choice is
+// right for both shells, and a plan for Codex on Windows says which one it
+// made.
 //
 // Entries written by releases before the check are still spoor's: install
 // replaces them, uninstall removes them, and Status reports them as
-// modified with a Detail that names them as an earlier release's.
+// modified with a Detail that names them as an earlier release's and says
+// whether a command the agent runs on this OS lacks the check. It does not
+// for Codex on Windows with a bare commandWindows: Codex runs only that
+// field there, and both releases write it the same way.
 //
 // Every tool, prompt and session hook is registered synchronously with an
 // explicit timeout (Options.Timeout, default 10 s): a background hook is

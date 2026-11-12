@@ -16,9 +16,12 @@ const (
 // wrapper unwraps commands that take another command (sudo, env, xargs ...).
 type wrapper func(a *analyzer, c *simple, in flow) (flow, int)
 
+// handlers and wrappers map a command name to what it implies. They are
+// filled by the register* functions that buildTables (tables.go) runs on the
+// first Analyze.
 var (
-	handlers = map[string]handler{}
-	wrappers = map[string]wrapper{}
+	handlers map[string]handler
+	wrappers map[string]wrapper
 )
 
 func register(h handler, names ...string) {

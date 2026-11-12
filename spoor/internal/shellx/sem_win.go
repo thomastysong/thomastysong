@@ -6,7 +6,7 @@ import "strings"
 // because they are recognised in any dialect: an agent on Windows may reach
 // reg.exe through cmd, PowerShell or Git Bash.
 
-func init() {
+func registerWin() {
 	register(hReg, "reg")
 	register(hSchtasks, "schtasks")
 	register(hSc, "sc")

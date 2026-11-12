@@ -25,6 +25,10 @@ import (
 // loses everything read but not delivered), bounded retries (the default
 // retry_limit is 1) and records dropped by an output.
 //
+// Every finding is a warning (BUILD-C: "warn shipper.unsafe_config"): the
+// shipper is configured by the operator, and doctor fails only on what
+// spoor itself controls.
+//
 // What the HTTP API can show, measured on fluent/fluent-bit 5.2.0:
 // /api/v1/metrics lists per-output retries_failed and dropped_records, and
 // /api/v1/storage lists a storage_backlog input only when
@@ -105,7 +109,7 @@ func checkFluentBitAPI(ctx context.Context, c *http.Client, api string) ([]fbFin
 		for _, name := range sortedKeys(metrics.Output) {
 			o := metrics.Output[name]
 			if o.Dropped > 0 {
-				out = append(out, fbFinding{Code: "shipper.dropped_records", Status: "fail",
+				out = append(out, fbFinding{Code: "shipper.dropped_records", Status: "warn",
 					Detail: fmt.Sprintf("output %s dropped %d record(s) (a permanent error such as 401/400/413, or retries exhausted); see storage.keep.rejected", name, o.Dropped)})
 			}
 			if o.RetriesFailed > 0 {
@@ -131,7 +135,7 @@ func checkFluentBitAPI(ctx context.Context, c *http.Client, api string) ([]fbFin
 			}
 		}
 		if !backlog {
-			out = append(out, fbFinding{Code: "shipper.unsafe_config", Status: "fail",
+			out = append(out, fbFinding{Code: "shipper.unsafe_config", Status: "warn",
 				Detail: "service storage.path is not set, so every input is memory-buffered: records read but not yet delivered are lost on restart (5,000 of 5,000 in testing)"})
 		}
 	}
@@ -264,7 +268,7 @@ func checkFluentBitConfig(secs []fbSection, outbox string) []fbFinding {
 		tails++
 		name := firstNonEmpty(s.props["alias"], s.props["tag"], "tail")
 		if !strings.EqualFold(s.props["storage.type"], "filesystem") {
-			out = append(out, fbFinding{Code: "shipper.unsafe_config", Status: "fail",
+			out = append(out, fbFinding{Code: "shipper.unsafe_config", Status: "warn",
 				Detail: fmt.Sprintf("tail input %s is memory-buffered: set storage.type: filesystem", name)})
 		}
 		if s.props["db"] == "" {
@@ -276,7 +280,7 @@ func checkFluentBitConfig(secs []fbSection, outbox string) []fbFinding {
 		out = append(out, fbFinding{Code: "shipper.no_input", Status: "warn", Detail: "no tail input reads the outbox " + outbox})
 	}
 	if tails > 0 && storagePath == "" {
-		out = append(out, fbFinding{Code: "shipper.unsafe_config", Status: "fail", Detail: "service storage.path is not set: filesystem buffering is impossible"})
+		out = append(out, fbFinding{Code: "shipper.unsafe_config", Status: "warn", Detail: "service storage.path is not set: filesystem buffering is impossible"})
 	}
 	for _, s := range secs {
 		if s.kind != "output" {

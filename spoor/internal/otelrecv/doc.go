@@ -87,16 +87,22 @@
 //     Gemini CLI's telemetry has no call id.
 //   - Dedupe is left empty: the engine derives it for every surface from
 //     host, agent, session, tool-call id and type.
-//   - Ids are deterministic for a given record, so an exporter retry does
-//     not create new events.
+//   - Ids are deterministic for a given record within one sensor process,
+//     so an exporter retry does not create new events. They derive from a
+//     hash of the whole record keyed with a per-process secret, because the
+//     record may hold prompt, argument, error or output text and an id is
+//     serialized: an unkeyed hash would confirm guesses about that text.
 //   - Prompt text, tool arguments, tool output and error messages go to
 //     Event.Content only, which is never serialized. Agents export them only
 //     when their content flags are set (OTEL_LOG_USER_PROMPTS,
 //     OTEL_LOG_TOOL_DETAILS, otel.log_user_prompt; on by default in Gemini
 //     CLI). Without those flags an event still proves that a call with a
 //     given id happened, which is what cross-surface coverage needs.
-//   - Label values and Outcome.Error never carry free text: values are
-//     reduced to a fixed alphabet and errors to a category or fingerprint.
+//   - Label values and Outcome.Error never carry free text, nor a hash of
+//     it: values are reduced to a fixed alphabet, and errors to the agent's
+//     error category or, without one, to hookio.ErrorSummary's
+//     closed-vocabulary class and byte length ("tool error class:timeout
+//     len:31"), the summary the hook surface gives for the same text.
 //   - Account e-mail addresses are never kept; only the domain is, as
 //     Labels["account_domain"].
 //

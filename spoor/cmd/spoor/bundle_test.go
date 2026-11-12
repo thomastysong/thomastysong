@@ -1,6 +1,8 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -96,6 +98,32 @@ func TestBundleLifecycle(t *testing.T) {
 			t.Fatalf("a broken bundle replaced a working one: %+v", list.Source)
 		}
 	}
+}
+
+func TestBundlePullURL(t *testing.T) {
+	dir := t.TempDir()
+	cfg, _ := testConfig(t, "")
+	ta := newTestApp(t)
+	key := filepath.Join(dir, "k")
+	ta.mustRun(t, exitOK, "bundle", "keygen", "--out", key)
+	src := filepath.Join(dir, "src")
+	writeTestFile(t, filepath.Join(src, "rules", "zz.yaml"), testPack, 0o644)
+	arch := filepath.Join(dir, "srv", "bundle.tar.gz")
+	ta.mustRun(t, exitOK, "bundle", "create", "--src", src, "--version", "5", "--key", key+".key", "--out", arch)
+	srv := httptest.NewServer(http.FileServer(http.Dir(filepath.Dir(arch))))
+	defer srv.Close()
+	// A loopback http URL is allowed (local mirror); the signature is
+	// fetched from <url>.sig.
+	out := ta.mustRun(t, exitOK, "bundle", "pull", "--config", cfg, "--url", srv.URL+"/bundle.tar.gz", "--pub", key+".pub")
+	if !strings.Contains(out, "installed bundle version 5") {
+		t.Fatalf("pull:\n%s", out)
+	}
+	out = ta.mustRun(t, exitOK, "bundle", "pull", "--config", cfg, "--url", srv.URL+"/bundle.tar.gz", "--pub", key+".pub")
+	if !strings.Contains(out, "is current") {
+		t.Fatalf("second pull:\n%s", out)
+	}
+	ta.mustRun(t, exitError, "bundle", "pull", "--config", cfg, "--url", srv.URL+"/missing.tar.gz", "--pub", key+".pub")
+	ta.mustRun(t, exitUsage, "bundle", "pull", "--config", cfg, "--pub", key+".pub")
 }
 
 func TestBundleKeyPermissions(t *testing.T) {

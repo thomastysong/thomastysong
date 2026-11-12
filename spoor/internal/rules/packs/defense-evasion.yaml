@@ -88,16 +88,14 @@ rules:
             - tool.kind|in: [file_write, file_edit]
             - target.path|re: '(?i)^(/etc/spoor|/var/lib/spoor|(/private)?/var/run/spoor|/run/spoor|/var/log/spoor|/opt/spoor|/usr/(local/)?(s?bin|lib|libexec)/spoor|(/usr/lib|/lib|/etc)/systemd/system/spoor\.service(\.d)?|/Library/(Application Support|Logs)/spoor|/Library/LaunchDaemons/com\.github\.thomastysong\.spoor\.plist|[a-z]:[\\/](program files|programdata)[\\/]spoor|(%(programdata|programfiles|localappdata)%|\$env:(programdata|programfiles|localappdata))[\\/]spoor|(~|\$\{?home\}?|/root|/var/root|/home/[^/]+|/Users/[^/]+)/(\.local/state|Library/Application Support)/spoor|(~|\$\{?home\}?|%userprofile%|\$env:userprofile|[a-z]:[\\/]users[\\/][^\\/]+)[\\/]appdata[\\/]local[\\/]spoor)([/\\]|$)'
         # touch, mkdir, chmod, chown, chattr, mv (its source), icacls,
-        # New-Item ...: the analyser tags the change as sensor_tamper but
-        # records no write or delete for it.
-        - all:
-            - shell.defense_evasion: sensor_tamper
-            - any_command:
-                args|any_re: '(?i)^(/etc/spoor|/var/lib/spoor|(/private)?/var/run/spoor|/run/spoor|/var/log/spoor|/opt/spoor|/usr/(local/)?(s?bin|lib|libexec)/spoor|(/usr/lib|/lib|/etc)/systemd/system/spoor\.service(\.d)?|/Library/(Application Support|Logs)/spoor|/Library/LaunchDaemons/com\.github\.thomastysong\.spoor\.plist|[a-z]:[\\/](program files|programdata)[\\/]spoor|(%(programdata|programfiles|localappdata)%|\$env:(programdata|programfiles|localappdata))[\\/]spoor|(~|\$\{?home\}?|/root|/var/root|/home/[^/]+|/Users/[^/]+)/(\.local/state|Library/Application Support)/spoor|(~|\$\{?home\}?|%userprofile%|\$env:userprofile|[a-z]:[\\/]users[\\/][^\\/]+)[\\/]appdata[\\/]local[\\/]spoor)([/\\]|$)'
-        # Commands that always create or change their operands, for the
-        # spellings the analyser does not tag (cmd.exe mkdir).
+        # New-Item ...: the change is to the command's own operand, which
+        # the analyser records as sensor_tamper but not as a write or a
+        # delete. The operand is matched on that command, not anywhere in
+        # the line: sensor_tamper also fires for any path that merely
+        # contains these names, and a location quoted in a bash -c script
+        # or read by cp is not a change to it.
         - any_command:
-            name|in: [touch, mkdir, md, chmod, chown, chgrp, chattr, chflags, setfacl, icacls, cacls, takeown, new-item, ni, set-acl]
+            name|in: [touch, mkdir, md, chmod, chown, chgrp, chattr, chflags, setfacl, icacls, cacls, takeown, mv, move, ren, rename, truncate, shred, new-item, ni, set-acl, move-item, mi, rename-item, rni, set-content, add-content, clear-content, out-file]
             args|any_re: '(?i)^(/etc/spoor|/var/lib/spoor|(/private)?/var/run/spoor|/run/spoor|/var/log/spoor|/opt/spoor|/usr/(local/)?(s?bin|lib|libexec)/spoor|(/usr/lib|/lib|/etc)/systemd/system/spoor\.service(\.d)?|/Library/(Application Support|Logs)/spoor|/Library/LaunchDaemons/com\.github\.thomastysong\.spoor\.plist|[a-z]:[\\/](program files|programdata)[\\/]spoor|(%(programdata|programfiles|localappdata)%|\$env:(programdata|programfiles|localappdata))[\\/]spoor|(~|\$\{?home\}?|/root|/var/root|/home/[^/]+|/Users/[^/]+)/(\.local/state|Library/Application Support)/spoor|(~|\$\{?home\}?|%userprofile%|\$env:userprofile|[a-z]:[\\/]users[\\/][^\\/]+)[\\/]appdata[\\/]local[\\/]spoor)([/\\]|$)'
     response: ask
     dedup: [shell.deletes, target.path]
@@ -151,6 +149,9 @@ rules:
         expect: no_match
       - name: sensor built in its own source tree
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "go build -o bin/spoor ./cmd/spoor && cp packaging/systemd/spoor.service /tmp/pkgroot/etc/systemd/system/" } }
+        expect: no_match
+      - name: installed location named in a script and a staging directory created
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "mkdir -p \"$V/bin/Program Files/spoor\"; bash -c 'C:/ProgramData/spoor/spoor.exe hook'; cp /etc/spoor/spoor.yaml /tmp/pkgroot/etc/spoor/" } }
         expect: no_match
       - name: package staging root that mirrors the installed layout
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "mkdir -p /tmp/pkgroot/etc/spoor && touch /tmp/pkgroot/etc/spoor/disabled && chmod 755 /tmp/pkgroot/usr/bin/spoor" } }

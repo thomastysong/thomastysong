@@ -55,15 +55,12 @@ type consumer interface {
 
 // pruneOptions configure an outboxPruner.
 type pruneOptions struct {
-	dir        string
-	maxAge     time.Duration     // <= 0: no age limit
-	maxBytes   int64             // <= 0: no byte cap
-	consumers  func() []consumer // re-evaluated every pass: a tail database may appear later
-	statePath  string            // remembered stream coverage per consumer ("" = in memory)
-	copyDir    string            // scratch space for reading a tail database that cannot be opened in place
-	privileged bool
-	gid        int
-	readOnly   bool // measure only (spoor doctor): never delete or save
+	dir       string
+	maxAge    time.Duration     // <= 0: no age limit
+	maxBytes  int64             // <= 0: no byte cap
+	consumers func() []consumer // re-evaluated every pass: a tail database may appear later
+	statePath string            // remembered stream coverage per consumer ("" = in memory)
+	readOnly  bool              // measure only (spoor doctor): never delete or save
 }
 
 // outboxPruner keeps the outbox within its limits.
@@ -121,7 +118,7 @@ type pruneResult struct {
 	bytes     int64
 	oldest    time.Time
 	newest    time.Time
-	perStream map[string]streamSize
+	perStream map[string]StreamSize
 
 	consumers   int
 	lagKnown    bool
@@ -136,7 +133,8 @@ type pruneResult struct {
 	errors                                    int
 }
 
-type streamSize struct {
+// StreamSize is what one stream occupies in the outbox.
+type StreamSize struct {
 	Segments int   `json:"segments"`
 	Bytes    int64 `json:"bytes"`
 }
@@ -361,7 +359,7 @@ func trimEOL(b []byte) []byte {
 
 // measure lists the segments and works out what every consumer has read.
 func (p *outboxPruner) measure(now time.Time) ([]*outSeg, pruneResult) {
-	res := pruneResult{perStream: map[string]streamSize{}, consumerLag: map[string]int64{}, consumerErr: map[string]string{}}
+	res := pruneResult{perStream: map[string]StreamSize{}, consumerLag: map[string]int64{}, consumerErr: map[string]string{}}
 	segs := p.list(now, &res)
 	if !p.loaded {
 		p.loadCovered()

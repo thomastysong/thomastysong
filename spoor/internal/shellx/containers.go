@@ -4,12 +4,12 @@ import "strings"
 
 var dockerGlobalSpec = &optSpec{
 	short: "cHl",
-	long:  longSet("--config", "--context", "--host", "--log-level", "--tlscacert", "--tlscert", "--tlskey", "--url", "--connection", "--namespace", "--address"),
+	long:  longSet{"--config", "--context", "--host", "--log-level", "--tlscacert", "--tlscert", "--tlskey", "--url", "--connection", "--namespace", "--address"},
 }
 
 var dockerRunSpec = &optSpec{
 	short: "aceghlmpuvw",
-	long: longSet("--add-host", "--annotation", "--attach", "--blkio-weight", "--cap-add", "--cap-drop",
+	long: longSet{"--add-host", "--annotation", "--attach", "--blkio-weight", "--cap-add", "--cap-drop",
 		"--cgroup-parent", "--cgroupns", "--cidfile", "--cpu-period", "--cpu-quota", "--cpu-shares", "--cpus",
 		"--cpuset-cpus", "--cpuset-mems", "--device", "--dns", "--dns-option", "--dns-search", "--domainname",
 		"--entrypoint", "--env", "--env-file", "--expose", "--gpus", "--group-add", "--health-cmd",
@@ -18,19 +18,19 @@ var dockerRunSpec = &optSpec{
 		"--memory", "--memory-reservation", "--memory-swap", "--mount", "--name", "--network", "--net",
 		"--network-alias", "--pid", "--pids-limit", "--platform", "--publish", "--pull", "--restart", "--runtime",
 		"--security-opt", "--shm-size", "--stop-signal", "--stop-timeout", "--storage-opt", "--sysctl", "--tmpfs",
-		"--ulimit", "--user", "--userns", "--uts", "--volume", "--volumes-from", "--workdir", "--detach-keys"),
+		"--ulimit", "--user", "--userns", "--uts", "--volume", "--volumes-from", "--workdir", "--detach-keys"},
 	posStop: true,
 }
 
 var dockerExecSpec = &optSpec{
 	short:   "euw",
-	long:    longSet("--env", "--env-file", "--user", "--workdir", "--detach-keys"),
+	long:    longSet{"--env", "--env-file", "--user", "--workdir", "--detach-keys"},
 	posStop: true,
 }
 
 var composeSpec = &optSpec{
 	short: "fp",
-	long:  longSet("--file", "--project-name", "--profile", "--env-file", "--project-directory", "--ansi", "--parallel", "--progress"),
+	long:  longSet{"--file", "--project-name", "--profile", "--env-file", "--project-directory", "--ansi", "--parallel", "--progress"},
 }
 
 // wrapDocker handles docker/podman/nerdctl: the command run inside a
@@ -204,10 +204,10 @@ func volumeSource(v string) string {
 
 var kubectlSpec = &optSpec{
 	short: "nsv",
-	long: longSet("--namespace", "--context", "--cluster", "--user", "--kubeconfig", "--server", "--token",
+	long: longSet{"--namespace", "--context", "--cluster", "--user", "--kubeconfig", "--server", "--token",
 		"--as", "--as-group", "--as-uid", "--certificate-authority", "--client-certificate", "--client-key",
 		"--request-timeout", "--cache-dir", "--tls-server-name", "--password", "--username", "--profile",
-		"--profile-output", "--log-flush-frequency", "--disable-compression"),
+		"--profile-output", "--log-flush-frequency", "--disable-compression"},
 }
 
 // wrapKubectl handles kubectl and oc: exec into a pod, deletes, secret reads
@@ -224,7 +224,7 @@ func wrapKubectl(a *analyzer, c *simple, in flow) (flow, int) {
 				return noFlow(), wrapNone
 			}
 		}
-		o := parseOpts(rest, &optSpec{short: "cnf", long: longSet("--container", "--namespace", "--filename", "--pod-running-timeout", "--image", "--target"), posStop: true})
+		o := parseOpts(rest, &optSpec{short: "cnf", long: longSet{"--container", "--namespace", "--filename", "--pod-running-timeout", "--image", "--target"}, posStop: true})
 		if len(o.pos) > 1 {
 			return a.runInner(c, o.pos[1:], in, true, false), wrapDelegated
 		}

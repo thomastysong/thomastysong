@@ -4,6 +4,7 @@ import (
 	"errors"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/thomastysong/spoor/internal/classify"
 	"github.com/thomastysong/spoor/internal/event"
@@ -152,11 +153,15 @@ func (c *computer) output() {
 	}
 }
 
-// untrustedDirs are path components under which file content is authored by
-// third parties: dependency trees, downloads and scratch space.
-var untrustedDirs = map[string]bool{
-	"node_modules": true, "vendor": true, "downloads": true, "third_party": true, "site-packages": true,
-	"tmp": true, "temp": true,
+// untrustedDir reports path components under which file content is
+// authored by third parties: dependency trees, downloads and scratch space.
+func untrustedDir(seg string) bool {
+	switch seg {
+	case "node_modules", "vendor", "downloads", "third_party", "site-packages",
+		"tmp", "temp":
+		return true
+	}
+	return false
 }
 
 // untrustedSource says why a tool result is attacker-authorable, or "".
@@ -215,7 +220,7 @@ func underUntrusted(p string) bool {
 		return false
 	}
 	for _, seg := range strings.FieldsFunc(p, func(r rune) bool { return r == '/' || r == '\\' }) {
-		if untrustedDirs[strings.ToLower(seg)] {
+		if untrustedDir(strings.ToLower(seg)) {
 			return true
 		}
 	}
@@ -252,25 +257,56 @@ func ghReads(cmds []map[string]any) bool {
 	return false
 }
 
-// autorunPatterns detect content that makes an agent or IDE run something or
-// widen its own permissions. They are applied only to files whose path
-// classifies as a control file, so ordinary JSON that happens to contain
-// "command" is not considered.
-var autorunPatterns = []struct {
+// autorunPattern is one key pattern of Autorun.
+type autorunPattern struct {
 	kind string
 	re   *regexp.Regexp
-}{
-	{"hook_command", regexp.MustCompile(`(?ism)"hooks"\s*:.*"(command|bash|powershell)"\s*:|^\s*\[\[?hooks[\].\]]`)},
-	{"always_apply", regexp.MustCompile(`(?i)alwaysApply\s*:\s*true`)},
-	{"folder_open_task", regexp.MustCompile(`(?i)"runOn"\s*:\s*"folderOpen"`)},
-	{"mcp_server", regexp.MustCompile(`(?i)"mcpServers"\s*:|\[mcp_servers[\].]|"mcp_servers"\s*:|"context_servers"\s*:`)},
-	{"permission_escalation", regexp.MustCompile(`(?i)bypassPermissions|"defaultMode"\s*:\s*"dontAsk"|enableAllProjectMcpServers"\s*:\s*true|"Bash\(\*\)"|"Bash\(\s*\*?\s*:\s*\*\)"|approval_policy\s*=\s*"never"|chat\.tools\.(global\.)?autoApprove"\s*:\s*true|task\.allowAutomaticTasks"\s*:\s*"on"|security\.workspace\.trust\.enabled"\s*:\s*false|"alwaysAllow"\s*:\s*\[\s*"|"autoApprove"\s*:\s*(true|\[\s*")|"trust"\s*:\s*true|"approvalMode"\s*:\s*"yolo"|dangerously-skip-permissions`)},
-	{"base_url_override", regexp.MustCompile(`(?i)"?[A-Z0-9_]*_(BASE_URL|API_BASE)"?\s*[:=]|"apiKeyHelper"\s*:|(?m)^\s*base_url\s*=`)},
-	{"hooks_disabled", regexp.MustCompile(`(?is)"disableAllHooks"\s*:\s*true|"hooksConfig"\s*:\s*\{[^}]{0,512}"enabled"\s*:\s*false`)},
-	{"sandbox_disabled", regexp.MustCompile(`(?is)"sandbox"\s*:\s*(false|\{[^}]{0,512}"enabled"\s*:\s*false)|dangerouslyDisableSandbox|sandbox_mode\s*=\s*"danger-full-access"`)},
 }
 
-var mcpServersKey = regexp.MustCompile(`(?i)"servers"\s*:\s*\{`)
+// autorunRegexps are compiled on the first Autorun call, not at package
+// init: they are nine large case-insensitive patterns that cost 1.3 to 2 ms
+// per process to compile, and most processes that link features (the hook
+// supervisor, an observe-mode hook worker) never call Autorun.
+type autorunRegexps struct {
+	// patterns detect content that makes an agent or IDE run something or
+	// widen its own permissions. They are applied only to files whose path
+	// classifies as a control file, so ordinary JSON that happens to
+	// contain "command" is not considered.
+	patterns []autorunPattern
+	// mcpServersKey is VS Code's "servers" map, an MCP declaration only in
+	// a file named mcp.json.
+	mcpServersKey *regexp.Regexp
+}
+
+var (
+	autorunOnce sync.Once
+	autorunTab  *autorunRegexps
+)
+
+// autorunRE returns the compiled patterns, compiling them on first use.
+// A plain sync.Once rather than sync.OnceValue: the latter is a call at
+// package init and allocates there, and this file's point is that linking
+// features costs no init work at all.
+func autorunRE() *autorunRegexps {
+	autorunOnce.Do(func() { autorunTab = compileAutorun() })
+	return autorunTab
+}
+
+func compileAutorun() *autorunRegexps {
+	return &autorunRegexps{
+		patterns: []autorunPattern{
+			{"hook_command", regexp.MustCompile(`(?ism)"hooks"\s*:.*"(command|bash|powershell)"\s*:|^\s*\[\[?hooks[\].\]]`)},
+			{"always_apply", regexp.MustCompile(`(?i)alwaysApply\s*:\s*true`)},
+			{"folder_open_task", regexp.MustCompile(`(?i)"runOn"\s*:\s*"folderOpen"`)},
+			{"mcp_server", regexp.MustCompile(`(?i)"mcpServers"\s*:|\[mcp_servers[\].]|"mcp_servers"\s*:|"context_servers"\s*:`)},
+			{"permission_escalation", regexp.MustCompile(`(?i)bypassPermissions|"defaultMode"\s*:\s*"dontAsk"|enableAllProjectMcpServers"\s*:\s*true|"Bash\(\*\)"|"Bash\(\s*\*?\s*:\s*\*\)"|approval_policy\s*=\s*"never"|chat\.tools\.(global\.)?autoApprove"\s*:\s*true|task\.allowAutomaticTasks"\s*:\s*"on"|security\.workspace\.trust\.enabled"\s*:\s*false|"alwaysAllow"\s*:\s*\[\s*"|"autoApprove"\s*:\s*(true|\[\s*")|"trust"\s*:\s*true|"approvalMode"\s*:\s*"yolo"|dangerously-skip-permissions`)},
+			{"base_url_override", regexp.MustCompile(`(?i)"?[A-Z0-9_]*_(BASE_URL|API_BASE)"?\s*[:=]|"apiKeyHelper"\s*:|(?m)^\s*base_url\s*=`)},
+			{"hooks_disabled", regexp.MustCompile(`(?is)"disableAllHooks"\s*:\s*true|"hooksConfig"\s*:\s*\{[^}]{0,512}"enabled"\s*:\s*false`)},
+			{"sandbox_disabled", regexp.MustCompile(`(?is)"sandbox"\s*:\s*(false|\{[^}]{0,512}"enabled"\s*:\s*false)|dangerouslyDisableSandbox|sandbox_mode\s*=\s*"danger-full-access"`)},
+		},
+		mcpServersKey: regexp.MustCompile(`(?i)"servers"\s*:\s*\{`),
+	}
+}
 
 // AutorunVocabulary is the vocabulary of Autorun results and of the
 // write.autorun_kinds feature.
@@ -305,15 +341,16 @@ func Autorun(name, content string) []string {
 	}
 	declared, decoded := mcpDeclared(name, content)
 	scan := headTail(content)
+	re := autorunRE()
 	var out []string
-	for _, p := range autorunPatterns {
+	for _, p := range re.patterns {
 		hit := false
 		if p.kind == "mcp_server" {
 			switch {
 			case decoded:
 				hit = declared
 			default:
-				hit = p.re.MatchString(scan) || (isMCPJSON(name) && mcpServersKey.MatchString(scan))
+				hit = p.re.MatchString(scan) || (isMCPJSON(name) && re.mcpServersKey.MatchString(scan))
 			}
 		} else {
 			hit = p.re.MatchString(scan)

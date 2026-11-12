@@ -173,9 +173,41 @@ func wantFor(t target, o Options, installed string, legacy bool) ([]entry, bool)
 	})
 }
 
-// legacyDetail is the Status detail for entries that are exactly what an
-// earlier release installed: not tampered with, only older.
-const legacyDetail = "written by an earlier spoor release whose hook commands fail when the spoor binary is missing; install again to update"
+// legacyPrefix starts the Status detail of entries that are exactly what
+// an earlier release installed: not tampered with, only older.
+const legacyPrefix = "written by an earlier spoor release"
+
+// legacyDetail is that detail when a command the agent runs on this OS
+// lacks the missing-binary check install now writes.
+const legacyDetail = legacyPrefix + " whose hook commands fail when the spoor binary is missing; install again to update"
+
+// legacyRunsCurrent is that detail when every command the agent runs on
+// this OS is already what install writes, so only fields used on other
+// OSes are older: Codex on Windows with a path written bare runs
+// commandWindows, which both releases write the same way (and which stays
+// without the check, see windowsCommand).
+const legacyRunsCurrent = legacyPrefix + "; the commands the agent runs on this OS are already what install writes, only fields it uses on other OSes differ; install again to update them"
+
+// legacyDetailFor picks the detail for entries that match what an earlier
+// release wrote with binary bin.
+func legacyDetailFor(t target, o Options, bin string) string {
+	cur, ok := wantFor(t, o, bin, false)
+	old, okOld := wantFor(t, o, bin, true)
+	if !ok || !okOld || len(cur) != len(old) {
+		return legacyDetail
+	}
+	key := dialects[t.dialect].runKey(o.GOOS)
+	for i := range cur {
+		a, aok := cur[i].handler.get(key)
+		b, bok := old[i].handler.get(key)
+		as, _ := a.(string)
+		bs, _ := b.(string)
+		if !aok || !bok || as == "" || as != bs {
+			return legacyDetail
+		}
+	}
+	return legacyRunsCurrent
+}
 
 func checkJSON(t target, o Options, data []byte) check {
 	d, err := parseJSON(data)
@@ -205,7 +237,7 @@ func checkJSON(t target, o Options, data []byte) check {
 		c.state, c.detail = checkModified, diff
 		if old, ok := wantFor(t, o, sc.binary(), true); ok {
 			if st, _ := sc.compare(old, t.kind); st == contentOK {
-				c.detail = legacyDetail
+				c.detail = legacyDetailFor(t, o, sc.binary())
 			}
 		}
 	}
@@ -256,7 +288,7 @@ func checkTOML(t target, o Options, data []byte) check {
 	case !sameText(data[b.start:b.end], blk):
 		c.state, c.detail = checkModified, "the spoor block differs from what install writes"
 		if old, ok := wantFor(t, o, td.binary(), true); ok && sameText(data[b.start:b.end], []byte(hooksBlock(old, newline(data)))) {
-			c.detail = legacyDetail
+			c.detail = legacyDetailFor(t, o, td.binary())
 		}
 	case spoor != inBlock:
 		c.state, c.detail = checkModified, "spoor hook entries also exist outside the marked block"

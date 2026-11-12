@@ -1,6 +1,8 @@
 package hookio
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -10,6 +12,13 @@ import (
 
 	"github.com/thomastysong/spoor/internal/event"
 )
+
+// sha256Hex is the plain SHA-256 a test compares toolmap.InputHash
+// against; the package itself no longer hashes free text.
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
 
 // fixture reads a recorded hook payload from testdata.
 func fixture(t testing.TB, rel string) []byte {

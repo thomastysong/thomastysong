@@ -39,12 +39,6 @@ func OSEnv() Env {
 // Version is stamped on health records; cmd/spoor sets it at start-up.
 var Version = "dev"
 
-// TypePayloadAnomaly is the activity type of a record that stands in for a
-// hook payload spoor could not decode (empty, malformed, over the input cap,
-// nested deeper than 64 levels, from an unknown agent). A payload the sensor
-// silently drops is an evasion primitive, so it is reported instead.
-const TypePayloadAnomaly = "hook.payload_anomaly"
-
 // ConfigFileName is the configuration file looked for in the platform's
 // config directory when --config is not given.
 const ConfigFileName = "spoor.yaml"

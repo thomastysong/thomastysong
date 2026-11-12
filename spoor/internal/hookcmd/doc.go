@@ -22,11 +22,11 @@
 //     hookio.MaxInput) and a time bound (half the hard deadline). A payload
 //     that cannot be decoded (empty, malformed, over the cap, nested deeper
 //     than 64 levels, from an unknown agent, or cut short because the agent
-//     had not closed stdin in time) produces a TypePayloadAnomaly activity
-//     record instead of nothing, with the size and SHA-256 of every byte the
-//     agent sent (bytes drained past the cap are counted and hashed, not
-//     only the kept prefix); hookio's salvage events for oversized and
-//     over-nested payloads are kept as well.
+//     had not closed stdin in time) produces an event.TypePayloadAnomaly
+//     activity record instead of nothing, with the size and SHA-256 of
+//     every byte the agent sent (bytes drained past the cap are counted and
+//     hashed, not only the kept prefix); hookio's salvage events for
+//     oversized and over-nested payloads are kept as well.
 //   - Payloads are decoded into maps by hookio, never into structs, and no
 //     path from a payload is ever opened.
 //   - Every record carries Host (platform.HostInfo), User (the OS identity
@@ -151,16 +151,18 @@
 // decision is a no-op. Guard is advisory: agents also fail open on their own
 // hook timeouts.
 //
-// Codex blocks: hookio renders a Codex block as exit 2 with the reason on
-// stderr. This package never exits 2; it re-renders a Codex block as the
-// JSON form Codex also accepts on exit 0 (PreToolUse:
-// hookSpecificOutput.permissionDecision "deny" with a reason;
-// UserPromptSubmit: decision "block" with a reason; PermissionRequest:
-// hookSpecificOutput.decision.behavior "deny"), verified against
-// openai/codex main (codex-rs/hooks/src/events/pre_tool_use.rs,
-// user_prompt_submit.rs, permission_request.rs, engine/output_parser.rs)
-// on 2026-11-12. UNVERIFIED: which Codex release first accepted the JSON
-// form; a Codex too old to parse it would fail open on a spoor block.
+// Codex blocks: hookio renders a Codex block as the JSON form Codex accepts
+// on exit 0 (PreToolUse: hookSpecificOutput.permissionDecision "deny" with
+// a reason; UserPromptSubmit: decision "block" with a reason;
+// PermissionRequest: hookSpecificOutput.decision.behavior "deny"),
+// verified against openai/codex main (codex-rs/hooks/src/events/
+// pre_tool_use.rs, user_prompt_submit.rs, permission_request.rs,
+// engine/output_parser.rs, schema.rs) on 2026-11-12, and this package
+// forwards it unchanged like every other dialect's reply. A dialect reply
+// on a non-zero exit (hookio's panic fallback) is never forwarded; the
+// supervisor answers instead. UNVERIFIED: which Codex release first
+// accepted the JSON form; a Codex too old to parse it would fail open on a
+// spoor block.
 //
 // # Configuration
 //

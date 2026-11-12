@@ -2,7 +2,7 @@ package shellx
 
 import "strings"
 
-func init() {
+func registerSys() {
 	register(hSystemctl, "systemctl")
 	register(hService, "service", "rc-service", "initctl", "sv")
 	register(hLaunchctl, "launchctl")
@@ -147,7 +147,7 @@ func hPidLookup(a *analyzer, c *simple, in flow, out *flow) {
 	}
 }
 
-func init() {
+func registerPidLookup() {
 	register(hPidLookup, "pidof", "pgrep")
 }
 
@@ -442,7 +442,7 @@ func hRecon(a *analyzer, c *simple, in flow, out *flow) {
 	case "ifconfig", "arp", "route":
 		a.recon("ifconfig")
 	case "ip":
-		sub, _ := subcommand(rest, &optSpec{short: "nfN", long: longSet("-netns", "-family", "-n")})
+		sub, _ := subcommand(rest, &optSpec{short: "nfN", long: longSet{"-netns", "-family", "-n"}})
 		switch sub {
 		case "a", "addr", "address", "r", "route", "link", "l", "neigh", "n", "neighbor", "neighbour", "rule", "netns":
 			if !containsArgFold(rest, "add") && !containsArgFold(rest, "del") && !containsArgFold(rest, "set") && !containsArgFold(rest, "flush") {

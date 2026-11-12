@@ -1,6 +1,8 @@
 package otelrecv
 
 import (
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -8,9 +10,11 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/thomastysong/spoor/internal/event"
+	"github.com/thomastysong/spoor/internal/hookio"
 	"github.com/thomastysong/spoor/internal/toolmap"
 )
 
@@ -212,8 +216,18 @@ func (c *converter) stamp(lr *logRecord, a attrs) (time.Time, bool) {
 // senders retry on timeouts and 5xx) yields the same event ids and
 // downstream can drop the duplicates. encoding/json writes map keys sorted,
 // which makes the serialization canonical.
+//
+// The record includes free text when the agent's content flags are on
+// (prompt, tool arguments, error and output text), and the id derived from
+// it is serialized, so the hash is keyed with a per-process secret: an
+// unkeyed one would let anyone holding the record confirm a guess about
+// the text. Retries arrive within seconds, while this process lives. A
+// retry that straddles a sensor restart gets a new id: tool calls with a
+// call id and session start/end still collapse on the engine's dedupe key,
+// which does not use this id; anything else is delivered twice, the
+// at-least-once behaviour OTLP export has anyway.
 func recordKey(lr *logRecord, a attrs) string {
-	h := sha256.New()
+	h := hmac.New(sha256.New, recordSecret())
 	b, _ := json.Marshal(map[string]any(a))
 	_, _ = h.Write(b)
 	_, _ = h.Write([]byte{0})
@@ -221,6 +235,16 @@ func recordKey(lr *logRecord, a attrs) string {
 	_, _ = fmt.Fprintf(h, "\x00%d", uint64(lr.TimeUnixNano)|uint64(lr.TimeUnixNanoSnake))
 	return hex.EncodeToString(h.Sum(nil)[:16])
 }
+
+// recordSecret is the process-lifetime key of recordKey. It never leaves
+// memory: nothing needs to reproduce an id outside this process.
+var recordSecret = sync.OnceValue(func() []byte {
+	k := make([]byte, 32)
+	// crypto/rand.Read does not fail on supported platforms (Go 1.24+
+	// aborts the process instead of returning an error).
+	_, _ = rand.Read(k)
+	return k
+})
 
 // eventName finds the record's event name. Claude Code puts the prefixed
 // name in the body and the bare name in the event.name attribute; Codex and
@@ -415,13 +439,17 @@ func setOutcomeStatus(o *event.Outcome, a attrs) {
 }
 
 // setError records a failure without emitting its text: an error category
-// when the agent gives one, else a fingerprint. Error messages quote file
-// content and command output, so the message itself goes to Content only.
+// when the agent gives one, else hookio.ErrorSummary's closed-vocabulary
+// class and byte length, the same summary the hook surface gives for the
+// same text. Error messages quote file content and command output, so the
+// message itself goes to Content only, and no hash of it is kept: an
+// unkeyed hash of a short message is recovered with a dictionary, and these
+// events reach local storage before the privacy stage keys anything.
 func setError(ev *event.Event, o *event.Outcome, category, message string) {
 	if category != "" {
 		o.Error = labelValue(category, maxLabel)
 	} else if message != "" {
-		o.Error = "tool error fp:" + fingerprint(message)
+		o.Error = hookio.ErrorSummary(message)
 	}
 	if message != "" {
 		c := content(ev)

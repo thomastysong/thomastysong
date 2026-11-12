@@ -90,6 +90,11 @@ type rule struct {
 func (r *rule) canonical() []byte {
 	r.canonOnce.Do(func() {
 		if r.canon == nil {
+			if r.lazy != nil {
+				// A failure leaves the tree as decoded; it cannot happen
+				// for a cache that passed decodeCache's validation.
+				_ = r.lazy.tree.materialize(r.node, true)
+			}
 			r.canon = canonical(r.node)
 		}
 		if r.lazy == nil {

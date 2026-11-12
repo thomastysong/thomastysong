@@ -110,7 +110,7 @@ type OutboxStatus struct {
 	Bytes    int64                 `json:"bytes"`
 	Oldest   time.Time             `json:"oldest,omitzero"`
 	Newest   time.Time             `json:"newest,omitzero"`
-	Streams  map[string]streamSize `json:"streams,omitempty"`
+	Streams  map[string]StreamSize `json:"streams,omitempty"`
 	// LagBytes is shipper_lag_bytes: bytes no consumer has read yet. It is
 	// only known when a Fluent Bit tail database or a shipper is configured.
 	LagKnown  bool             `json:"lag_known"`

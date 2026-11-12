@@ -123,4 +123,19 @@
 // point at a sensitive file; 8.3 short names are matched by their generated
 // prefix only. Content features see what the source captured: tool output
 // truncated by the agent is scanned as truncated.
+//
+// # Start-up cost
+//
+// Linking this package costs almost no package init work: only the two
+// exported 5-entry maps CommandKeys and InstallKeys, which other packages
+// index directly (about a microsecond). `spoor hook` starts two
+// processes per agent event and Go runs every linked package's init before
+// main, so compiled regexps, map literals and computed tables here would be
+// paid by processes that never compute a feature (the hook supervisor, an
+// observe-mode worker). The autorun regexps compile on the first Autorun
+// call, the field registry and its vocabularies are built on the first
+// Registry or Lookup call, the event field plan on the first Fields call,
+// and fixed membership sets are switch statements. Keep it that way: a
+// package-level var whose initializer calls a function or is a map literal
+// shows up in GODEBUG=inittrace=1 output for every spoor process.
 package features

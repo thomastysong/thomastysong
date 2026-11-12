@@ -207,7 +207,7 @@ func TestPayloadAnomalies(t *testing.T) {
 			var anomaly *event.Event
 			others := 0
 			for _, a := range acts {
-				if a.Type == TypePayloadAnomaly {
+				if a.Type == event.TypePayloadAnomaly {
 					anomaly = a
 				} else {
 					others++
@@ -245,7 +245,7 @@ func TestInputCap(t *testing.T) {
 	// Size and digest describe the whole payload, not the kept prefix.
 	acts := s.ofKind(t, event.KindActivity)
 	sum := sha256.Sum256(big)
-	if len(acts) != 1 || acts[0].Type != TypePayloadAnomaly || acts[0].Labels["hook_error"] != anomalyTooLarge ||
+	if len(acts) != 1 || acts[0].Type != event.TypePayloadAnomaly || acts[0].Labels["hook_error"] != anomalyTooLarge ||
 		acts[0].Labels["payload_bytes"] != strconv.Itoa(len(big)) || acts[0].Tool.InputSHA256 != hex.EncodeToString(sum[:]) ||
 		acts[0].Session.ID != "s-claude" {
 		t.Fatalf("%+v", acts)
@@ -514,7 +514,7 @@ func TestOversizeAnomalyDescribesWholePayload(t *testing.T) {
 	}
 	var found bool
 	for _, a := range s.ofKind(t, event.KindActivity) {
-		if a.Type != TypePayloadAnomaly {
+		if a.Type != event.TypePayloadAnomaly {
 			continue
 		}
 		found = true

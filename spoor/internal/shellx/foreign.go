@@ -6,22 +6,32 @@ import "strings"
 // is handed to a shell. The scanner is deliberately lexical: it finds
 // os.system('...') without parsing Python, which is enough to see through the
 // common "wrap the shell command in an interpreter one-liner" evasion.
-var shellCalls = map[string][]string{
-	"python": {"os.system", "os.popen", "subprocess.run", "subprocess.call", "subprocess.check_output",
-		"subprocess.check_call", "subprocess.Popen", "subprocess.getoutput", "subprocess.getstatusoutput",
-		"pty.spawn", "commands.getoutput", "system", "popen"},
-	"javascript":  {"execSync", "exec", "spawnSync", "spawn", "execFileSync", "execFile", "doShellScript", "Deno.Command"},
-	"perl":        {"system", "exec", "qx", "open"},
-	"ruby":        {"system", "exec", "%x", "IO.popen", "Open3.capture2", "Open3.capture3", "Open3.popen3", "spawn"},
-	"php":         {"system", "exec", "shell_exec", "passthru", "popen", "proc_open"},
-	"lua":         {"os.execute", "io.popen"},
-	"awk":         {"system"},
-	"applescript": {"do shell script"},
-	"vbscript":    {".run", ".exec", "shell"},
+var shellCalls map[string][]string
+
+func buildShellCalls() {
+	shellCalls = map[string][]string{
+		"python": {"os.system", "os.popen", "subprocess.run", "subprocess.call", "subprocess.check_output",
+			"subprocess.check_call", "subprocess.Popen", "subprocess.getoutput", "subprocess.getstatusoutput",
+			"pty.spawn", "commands.getoutput", "system", "popen"},
+		"javascript":  {"execSync", "exec", "spawnSync", "spawn", "execFileSync", "execFile", "doShellScript", "Deno.Command"},
+		"perl":        {"system", "exec", "qx", "open"},
+		"ruby":        {"system", "exec", "%x", "IO.popen", "Open3.capture2", "Open3.capture3", "Open3.popen3", "spawn"},
+		"php":         {"system", "exec", "shell_exec", "passthru", "popen", "proc_open"},
+		"lua":         {"os.execute", "io.popen"},
+		"awk":         {"system"},
+		"applescript": {"do shell script"},
+		"vbscript":    {".run", ".exec", "shell"},
+	}
 }
 
-// backtickLangs treat `...` as command execution.
-var backtickLangs = map[string]bool{"perl": true, "ruby": true, "php": true}
+// backtickLang reports languages that treat `...` as command execution.
+func backtickLang(lang string) bool {
+	switch lang {
+	case "perl", "ruby", "php":
+		return true
+	}
+	return false
+}
 
 // foreign scans non-shell inline code for the facts that survive a lexical
 // look: URLs, shell commands passed to exec-style calls, encoded payloads
@@ -82,7 +92,7 @@ func (a *analyzer) foreign(lang, code, origin string, depth int) {
 			rest = after
 		}
 	}
-	if backtickLangs[lang] {
+	if backtickLang(lang) {
 		rest := code
 		for found < maxEmbedded {
 			i := strings.IndexByte(rest, '`')
@@ -166,15 +176,19 @@ func (a *analyzer) foreign(lang, code, origin string, depth int) {
 	a.readsInCode(lang, code)
 }
 
-var downloadMarkers = map[string][]string{
-	"python":      {"urlopen(", "urlretrieve(", "requests.get(", "requests.post(", "httpx.get(", "urllib3", "http.client", "aiohttp"},
-	"javascript":  {"fetch(", "http.get(", "https.get(", "axios", "xmlhttprequest", "require('http", "require(\"http", "got("},
-	"perl":        {"lwp::simple", "lwp::useragent", "http::tiny", "io::socket::inet"},
-	"ruby":        {"net::http", "open-uri", "uri.open", "httparty", "faraday", "tcpsocket"},
-	"php":         {"file_get_contents('http", "file_get_contents(\"http", "curl_init", "fopen('http", "fopen(\"http", "fsockopen"},
-	"lua":         {"socket.http", "http.request"},
-	"vbscript":    {"msxml2.xmlhttp", "winhttp.winhttprequest", "msxml2.serverxmlhttp", "adodb.stream"},
-	"applescript": {"curl "},
+var downloadMarkers map[string][]string
+
+func buildDownloadMarkers() {
+	downloadMarkers = map[string][]string{
+		"python":      {"urlopen(", "urlretrieve(", "requests.get(", "requests.post(", "httpx.get(", "urllib3", "http.client", "aiohttp"},
+		"javascript":  {"fetch(", "http.get(", "https.get(", "axios", "xmlhttprequest", "require('http", "require(\"http", "got("},
+		"perl":        {"lwp::simple", "lwp::useragent", "http::tiny", "io::socket::inet"},
+		"ruby":        {"net::http", "open-uri", "uri.open", "httparty", "faraday", "tcpsocket"},
+		"php":         {"file_get_contents('http", "file_get_contents(\"http", "curl_init", "fopen('http", "fopen(\"http", "fsockopen"},
+		"lua":         {"socket.http", "http.request"},
+		"vbscript":    {"msxml2.xmlhttp", "winhttp.winhttprequest", "msxml2.serverxmlhttp", "adodb.stream"},
+		"applescript": {"curl "},
+	}
 }
 
 func hasExecMarker(lang, lower string) bool {

@@ -1,8 +1,6 @@
 package otelrecv
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -148,13 +146,6 @@ func appendUnique(list []string, v string) []string {
 		}
 	}
 	return append(list, v)
-}
-
-// fingerprint is the first 8 hex digits of the SHA-256 of s: enough to tell
-// two error texts apart downstream without emitting either.
-func fingerprint(s string) string {
-	sum := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(sum[:4])
 }
 
 func itoa(n int64) string {

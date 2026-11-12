@@ -2,7 +2,7 @@ package shellx
 
 import "strings"
 
-func init() {
+func registerNet() {
 	register(hCurl, "curl")
 	register(hWget, "wget", "wget2")
 	register(hFetchers, "fetch", "aria2c", "axel", "lwp-download", "lynx", "w3m", "links", "elinks", "tftp", "ftp", "lftp")
@@ -21,7 +21,7 @@ func init() {
 
 var curlSpec = &optSpec{
 	short: "AbcCdDeEFHKmoPQrtTuUwxXyYz",
-	long: longSet("--user-agent", "--cookie", "--cookie-jar", "--continue-at", "--data", "--data-ascii", "--data-binary",
+	long: longSet{"--user-agent", "--cookie", "--cookie-jar", "--continue-at", "--data", "--data-ascii", "--data-binary",
 		"--data-raw", "--data-urlencode", "--dump-header", "--referer", "--cert", "--form", "--form-string", "--header",
 		"--config", "--max-time", "--output", "--ftp-port", "--quote", "--range", "--telnet-option", "--upload-file",
 		"--user", "--proxy-user", "--write-out", "--proxy", "--request", "--speed-time", "--speed-limit", "--time-cond",
@@ -35,7 +35,7 @@ var curlSpec = &optSpec{
 		"--login-options", "--noproxy", "--pass", "--pubkey", "--engine", "--delegation", "--doh-url", "--variable",
 		"--rate", "--parallel-max", "--request-target", "--sasl-authzid", "--service-name", "--tlspassword", "--tlsuser",
 		"--cert-type", "--key-type", "--crlfile", "--curves", "--ftp-account", "--ftp-method", "--hostpubmd5",
-		"--hostpubsha256", "--tls13-ciphers", "--proxy-cacert", "--proxy-cert", "--proxy-key", "--upload-flags"),
+		"--hostpubsha256", "--tls13-ciphers", "--proxy-cacert", "--proxy-cert", "--proxy-key", "--upload-flags"},
 }
 
 // urlBase returns the file name a URL would be saved as by curl -O / wget.
@@ -213,14 +213,14 @@ func hCurl(a *analyzer, c *simple, in flow, out *flow) {
 
 var wgetSpec = &optSpec{
 	short: "OoaPtTwQUeiBlDARIX",
-	long: longSet("--header", "--post-data", "--post-file", "--user", "--password", "--output-document", "--output-file",
+	long: longSet{"--header", "--post-data", "--post-file", "--user", "--password", "--output-document", "--output-file",
 		"--append-output", "--directory-prefix", "--tries", "--timeout", "--wait", "--user-agent", "--referer",
 		"--load-cookies", "--save-cookies", "--ca-certificate", "--certificate", "--private-key", "--method",
 		"--body-data", "--body-file", "--limit-rate", "--bind-address", "--execute", "--input-file", "--base",
 		"--level", "--domains", "--accept", "--reject", "--include-directories", "--exclude-directories",
 		"--proxy-user", "--proxy-password", "--http-user", "--http-password", "--secure-protocol", "--dns-timeout",
 		"--connect-timeout", "--read-timeout", "--waitretry", "--quota", "--cut-dirs", "--progress", "--config",
-		"--ftp-user", "--ftp-password", "--warc-file", "--default-page", "--restrict-file-names"),
+		"--ftp-user", "--ftp-password", "--warc-file", "--default-page", "--restrict-file-names"},
 }
 
 func hWget(a *analyzer, c *simple, in flow, out *flow) {
@@ -308,7 +308,7 @@ func hFetchers(a *analyzer, c *simple, in flow, out *flow) {
 		// -source / -dump write the page to stdout.
 		out.t = tDownload
 	case "fetch", "aria2c", "axel", "lwp-download":
-		o := parseOpts(c.rest(), &optSpec{short: "odn", long: longSet("--out", "--dir", "--output")})
+		o := parseOpts(c.rest(), &optSpec{short: "odn", long: longSet{"--out", "--dir", "--output"}})
 		if f, ok := o.get("-o", "--out", "--output"); ok && f.s != "-" {
 			a.write(f.s)
 			a.drop(f.s, tDownload)
@@ -327,7 +327,7 @@ func hFetchers(a *analyzer, c *simple, in flow, out *flow) {
 
 // hHTTPie covers "http [METHOD] URL [items]" (HTTPie, xh).
 func hHTTPie(a *analyzer, c *simple, in flow, out *flow) {
-	o := parseOpts(c.rest(), &optSpec{short: "oaAsp", long: longSet("--output", "--auth", "--auth-type", "--session", "--print", "--proxy", "--cert", "--cert-key", "--timeout", "--verify")})
+	o := parseOpts(c.rest(), &optSpec{short: "oaAsp", long: longSet{"--output", "--auth", "--auth-type", "--session", "--print", "--proxy", "--cert", "--cert-key", "--timeout", "--verify"}})
 	pos := o.pos
 	method := ""
 	if len(pos) > 0 {
@@ -388,8 +388,8 @@ func hHTTPie(a *analyzer, c *simple, in flow, out *flow) {
 	out.t = tDownload
 }
 
-var ncSpec = &optSpec{short: "ecgGiIMmOopPqsTVwWxX", long: longSet("--exec", "--sh-exec", "--lua-exec", "--source", "--source-port",
-	"--proxy", "--proxy-type", "--proxy-auth", "--wait", "--idle-timeout", "--max-conns", "--ssl-cert", "--ssl-key", "--allow", "--deny", "--output", "--hex-dump")}
+var ncSpec = &optSpec{short: "ecgGiIMmOopPqsTVwWxX", long: longSet{"--exec", "--sh-exec", "--lua-exec", "--source", "--source-port",
+	"--proxy", "--proxy-type", "--proxy-auth", "--wait", "--idle-timeout", "--max-conns", "--ssl-cert", "--ssl-key", "--allow", "--deny", "--output", "--hex-dump"}}
 
 func hNc(a *analyzer, c *simple, in flow, out *flow) {
 	if c.name == "ncat" {
@@ -555,9 +555,9 @@ func hScp(a *analyzer, c *simple, in flow, out *flow) {
 	}
 }
 
-var rsyncSpec = &optSpec{short: "eTBfM", long: longSet("--rsh", "--rsync-path", "--exclude", "--exclude-from", "--include", "--include-from",
+var rsyncSpec = &optSpec{short: "eTBfM", long: longSet{"--rsh", "--rsync-path", "--exclude", "--exclude-from", "--include", "--include-from",
 	"--files-from", "--temp-dir", "--compare-dest", "--copy-dest", "--link-dest", "--password-file", "--port", "--log-file",
-	"--bwlimit", "--max-size", "--min-size", "--timeout", "--chmod", "--chown", "--partial-dir", "--backup-dir", "--filter", "--out-format", "--info", "--debug")}
+	"--bwlimit", "--max-size", "--min-size", "--timeout", "--chmod", "--chown", "--partial-dir", "--backup-dir", "--filter", "--out-format", "--info", "--debug"}}
 
 func hRsync(a *analyzer, c *simple, in flow, out *flow) {
 	o := parseOpts(c.rest(), rsyncSpec)
@@ -740,7 +740,7 @@ func hMail(a *analyzer, c *simple, in flow, out *flow) {
 			send = true
 		}
 	}
-	o := parseOpts(rest, &optSpec{short: "sabcrSAfFiHexto", long: longSet("--subject", "--attach", "--to", "--from", "--server", "--body", "--header", "--data", "--auth-user", "--auth-password")})
+	o := parseOpts(rest, &optSpec{short: "sabcrSAfFiHexto", long: longSet{"--subject", "--attach", "--to", "--from", "--server", "--body", "--header", "--data", "--auth-user", "--auth-password"}})
 	for _, f := range o.all("-a", "-A", "--attach") {
 		if !strings.Contains(f.s, ":") {
 			a.read(f.s)

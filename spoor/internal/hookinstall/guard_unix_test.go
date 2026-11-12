@@ -183,8 +183,9 @@ exit "$STUB_EXIT"
 
 // TestGuardPassesThroughSpoor checks that the guard is invisible when the
 // binary is there: spoor's stdout (its JSON decision), stderr and exit
-// status reach the agent unchanged, including a deliberate 2 (Codex's
-// block) and a deliberate 127, and the stdin payload reaches spoor. The
+// status reach the agent unchanged, including a 2 (what Codex reads as a
+// block; spoor hook itself exits 0 in every case, but the wrapper must not
+// rewrite any status) and a 127, and the stdin payload reaches spoor. The
 // shell's own pid becomes spoor's, which shows exec replaced the shell, so
 // the agent's signals and timeout kill land on spoor itself.
 func TestGuardPassesThroughSpoor(t *testing.T) {

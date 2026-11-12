@@ -322,7 +322,7 @@ running daemon picks the new content up without a restart.`)
 		}
 		ctx, cancel := context.WithTimeout(a.ctx, *timeout)
 		defer cancel()
-		updated, m, err = bundle.Pull(ctx, bundle.PullOptions{URL: u, Pubs: keys, DestDir: dest, Client: a.client, Validate: validateBundle})
+		updated, m, err = bundle.Pull(ctx, bundle.PullOptions{URL: u, Pubs: keys, DestDir: dest, Validate: validateBundle})
 	}
 	if err != nil {
 		// A downgrade or a reused version number is refused loudly: it is

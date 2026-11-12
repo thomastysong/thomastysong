@@ -147,7 +147,7 @@ func TestFluentBitAPIChecks(t *testing.T) {
 	for _, x := range f {
 		codes[x.Code] = x.Status
 	}
-	if codes["shipper.dropped_records"] != "fail" || codes["shipper.unsafe_config"] != "fail" {
+	if codes["shipper.dropped_records"] != "warn" || codes["shipper.unsafe_config"] != "warn" {
 		t.Fatalf("findings: %+v", f)
 	}
 	f, _ = checkFluentBitAPI(ctx, c, "http://127.0.0.1:1")
@@ -163,7 +163,7 @@ func TestDoctorFluentBitFromConfig(t *testing.T) {
 	ta.run("doctor", "--config", cfg, "--json")
 	var r doctorReport
 	decodeJSON(t, ta.out.String(), &r)
-	if c := checkOf(&r, "fluent_bit"); c.Status != "fail" || !strings.Contains(c.Detail, "shipper.unsafe_config") {
+	if c := checkOf(&r, "fluent_bit"); c.Status != "warn" || !strings.Contains(c.Detail, "shipper.unsafe_config") {
 		t.Fatalf("memory-buffered Fluent Bit not flagged: %+v", c)
 	}
 }
@@ -200,17 +200,19 @@ func TestFluentBitConfigUnsafe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := map[string]int{}
+	var details []string
 	for _, f := range checkFluentBitConfig(secs, "/var/lib/spoor/outbox") {
-		got[f.Status]++
-		if f.Code != "shipper.unsafe_config" {
-			t.Errorf("code %s", f.Code)
+		details = append(details, f.Detail)
+		if f.Code != "shipper.unsafe_config" || f.Status != "warn" {
+			t.Errorf("finding %+v", f)
 		}
 	}
-	// memory buffering + no storage.path (fail, fail), no db and bounded
-	// retries (warn, warn).
-	if got["fail"] != 2 || got["warn"] != 2 {
-		t.Fatalf("findings by status: %v", got)
+	// Memory buffering, no storage.path, no db, bounded retries.
+	all := strings.Join(details, "\n")
+	for _, want := range []string{"memory-buffered", "storage.path", "no db", "retry_limit 5"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("no finding about %q in:\n%s", want, all)
+		}
 	}
 	// Include loops are bounded.
 	loop := filepath.Join(dir, "loop.yaml")

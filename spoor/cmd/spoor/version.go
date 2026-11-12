@@ -94,31 +94,33 @@ func (a *app) cmdVersion(args []string) int {
 // moduleLicenses maps the modules spoor links to their licenses, read from
 // each module's LICENSE file in the module cache (2026-11-12). The full texts
 // ship in THIRD_PARTY_LICENSES with the source and release archives.
-var moduleLicenses = map[string]string{
-	"github.com/BurntSushi/toml":       "MIT",
-	"github.com/apache/thrift":         "Apache-2.0",
-	"github.com/klauspost/compress":    "BSD-3-Clause AND Apache-2.0 (see its LICENSE: several parts)",
-	"github.com/osquery/osquery-go":    "MIT",
-	"golang.org/x/sys":                 "BSD-3-Clause",
-	"golang.org/x/text":                "BSD-3-Clause",
-	"gopkg.in/yaml.v3":                 "MIT AND Apache-2.0",
-	"modernc.org/sqlite":               "BSD-3-Clause (SQLite itself is public domain)",
-	"mvdan.cc/sh/v3":                   "BSD-3-Clause",
-	"github.com/Microsoft/go-winio":    "MIT",
-	"github.com/dustin/go-humanize":    "MIT",
-	"github.com/google/uuid":           "BSD-3-Clause",
-	"github.com/mattn/go-isatty":       "MIT",
-	"github.com/ncruces/go-strftime":   "MIT",
-	"github.com/pkg/errors":            "BSD-2-Clause",
-	"github.com/remyoudompheng/bigfft": "BSD-3-Clause",
-	"modernc.org/libc":                 "BSD-3-Clause",
-	"modernc.org/mathutil":             "BSD-3-Clause",
-	"modernc.org/memory":               "BSD-3-Clause",
-	"github.com/go-logr/logr":          "Apache-2.0",
-	"github.com/go-logr/stdr":          "Apache-2.0",
-	"go.opentelemetry.io/otel":         "Apache-2.0",
-	"go.opentelemetry.io/otel/metric":  "Apache-2.0",
-	"go.opentelemetry.io/otel/trace":   "Apache-2.0",
+func moduleLicenses() map[string]string {
+	return map[string]string{
+		"github.com/BurntSushi/toml":       "MIT",
+		"github.com/apache/thrift":         "Apache-2.0",
+		"github.com/klauspost/compress":    "BSD-3-Clause AND Apache-2.0 (see its LICENSE: several parts)",
+		"github.com/osquery/osquery-go":    "MIT",
+		"golang.org/x/sys":                 "BSD-3-Clause",
+		"golang.org/x/text":                "BSD-3-Clause",
+		"gopkg.in/yaml.v3":                 "MIT AND Apache-2.0",
+		"modernc.org/sqlite":               "BSD-3-Clause (SQLite itself is public domain)",
+		"mvdan.cc/sh/v3":                   "BSD-3-Clause",
+		"github.com/Microsoft/go-winio":    "MIT",
+		"github.com/dustin/go-humanize":    "MIT",
+		"github.com/google/uuid":           "BSD-3-Clause",
+		"github.com/mattn/go-isatty":       "MIT",
+		"github.com/ncruces/go-strftime":   "MIT",
+		"github.com/pkg/errors":            "BSD-2-Clause",
+		"github.com/remyoudompheng/bigfft": "BSD-3-Clause",
+		"modernc.org/libc":                 "BSD-3-Clause",
+		"modernc.org/mathutil":             "BSD-3-Clause",
+		"modernc.org/memory":               "BSD-3-Clause",
+		"github.com/go-logr/logr":          "Apache-2.0",
+		"github.com/go-logr/stdr":          "Apache-2.0",
+		"go.opentelemetry.io/otel":         "Apache-2.0",
+		"go.opentelemetry.io/otel/metric":  "Apache-2.0",
+		"go.opentelemetry.io/otel/trace":   "Apache-2.0",
+	}
 }
 
 type moduleLicense struct {
@@ -134,13 +136,14 @@ func (a *app) cmdLicenses(args []string) int {
 		return code
 	}
 	var mods []moduleLicense
+	known := moduleLicenses()
 	if bi, ok := debug.ReadBuildInfo(); ok {
 		for _, d := range bi.Deps {
 			m := d
 			if d.Replace != nil {
 				m = d.Replace
 			}
-			lic := moduleLicenses[m.Path]
+			lic := known[m.Path]
 			if lic == "" {
 				lic = "see the module's own LICENSE"
 			}

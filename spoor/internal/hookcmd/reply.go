@@ -86,20 +86,14 @@ func fallbackRequest(d hookio.Dialect, eventName string) *hookio.Request {
 	return req
 }
 
-// render produces the reply for a decision. It differs from Dialect.Respond
-// in one place: a Codex block. hookio renders that as exit 2 with the
-// reason on stderr, but exit 2 is also what the Go runtime exits with on a
-// fatal error, so the hook never uses it. Codex accepts a JSON block on
-// exit 0 for every event it gates (openai/codex main,
-// codex-rs/hooks/src/events/pre_tool_use.rs, user_prompt_submit.rs and
-// permission_request.rs, read 2026-11-12):
-//
-//	PreToolUse        hookSpecificOutput.permissionDecision "deny" + permissionDecisionReason
-//	UserPromptSubmit  decision "block" + reason
-//	PermissionRequest hookSpecificOutput.decision.behavior "deny" + message
-//
-// Any other non-zero exit from a dialect (hookio's own panic fallback) is
-// reported as not renderable, so the supervisor answers instead.
+// render produces the reply for a decision: Dialect.Respond's stdout,
+// passed through. Every dialect, Codex included, renders a decision as JSON
+// on exit 0 (hookio's reply table; for Codex the forms checked against
+// openai/codex main on 2026-11-12, see the package doc). A non-zero exit
+// from a dialect comes only from hookio's own panic fallback (exit 2 with a
+// fixed reason on stderr); exit 2 is also what the Go runtime exits with
+// on a fatal error, so it is never forwarded: the reply is reported as not
+// renderable and the supervisor answers instead.
 func render(d hookio.Dialect, req *hookio.Request, dec hookio.Decision) (reply []byte, ok bool) {
 	defer func() {
 		if recover() != nil {
@@ -109,40 +103,11 @@ func render(d hookio.Dialect, req *hookio.Request, dec hookio.Decision) (reply [
 	if d == nil || req == nil || dec.Action == hookio.ActionNone || dec.Action == "" {
 		return nil, true
 	}
-	stdout, stderr, code := d.Respond(req, dec)
-	if code == 0 {
-		return stdout, true
-	}
-	if d.ID() != "codex" || dec.Action != hookio.ActionDeny {
+	stdout, _, code := d.Respond(req, dec)
+	if code != 0 {
 		return nil, false
 	}
-	msg := string(bytes.TrimSpace(stderr))
-	if msg == "" {
-		msg = "spoor: blocked by policy"
-	}
-	switch req.EventName {
-	case "PreToolUse":
-		return jsonLine(map[string]any{"hookSpecificOutput": map[string]any{
-			"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": msg,
-		}}), true
-	case "UserPromptSubmit":
-		return jsonLine(map[string]any{"decision": "block", "reason": msg}), true
-	case "PermissionRequest":
-		return jsonLine(map[string]any{"hookSpecificOutput": map[string]any{
-			"hookEventName": "PermissionRequest", "decision": map[string]any{"behavior": "deny", "message": msg},
-		}}), true
-	}
-	return nil, false
-}
-
-func jsonLine(v any) []byte {
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if enc.Encode(v) != nil {
-		return nil
-	}
-	return buf.Bytes()
+	return stdout, true
 }
 
 // replyCarries reports whether a rendered reply actually hands the agent

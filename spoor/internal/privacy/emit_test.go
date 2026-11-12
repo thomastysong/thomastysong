@@ -147,3 +147,44 @@ func TestEmitDetectionEvidenceAllowlist(t *testing.T) {
 		t.Errorf("allowed evidence lost: %v", ev)
 	}
 }
+
+// TestEmitConcurrent: the engine shares one Policy across goroutines.
+func TestEmitConcurrent(t *testing.T) {
+	p := &Policy{Profile: ProfileStandard, Key: testKey, KeyID: "k1", PseudonymizeUsers: true}
+	corpus := canaryCorpus()
+	done := make(chan struct{})
+	for g := 0; g < 8; g++ {
+		go func(g int) {
+			defer func() { done <- struct{}{} }()
+			for i := g; i < len(corpus); i += 8 {
+				out, _, ok := p.Emit(corpus[i].build())
+				if !ok || out == nil {
+					t.Errorf("%s dropped", corpus[i].name)
+					continue
+				}
+				if b, _ := out.MarshalLine(); strings.Contains(string(b), "Canary") {
+					t.Errorf("%s leaked under concurrency", corpus[i].name)
+				}
+				p.ContextFor("d", []*event.Event{corpus[i].build()}, 1)
+			}
+		}(g)
+	}
+	for g := 0; g < 8; g++ {
+		<-done
+	}
+}
+
+// TestEmitKeyIDWhenFingerprintsAreKeyed: a record whose only keyed content
+// is a rewritten secret marker still names the key that made it.
+func TestEmitKeyIDWhenFingerprintsAreKeyed(t *testing.T) {
+	e := shellEvent("mysql -pKeyedPw1 db")
+	e.Content = nil
+	out, _, _ := (&Policy{Profile: ProfileStandard, Key: testKey, KeyID: "tenant-7"}).Emit(e)
+	if !strings.Contains(out.Target.Command, ":hmac=") || out.Labels["key_id"] != "tenant-7" {
+		t.Errorf("command %q labels %v", out.Target.Command, out.Labels)
+	}
+	out, _, _ = (&Policy{Profile: ProfileStandard, KeyID: "tenant-7"}).Emit(e)
+	if strings.Contains(out.Target.Command, "hmac=") || out.Labels["key_id"] != "" {
+		t.Errorf("no key: command %q labels %v", out.Target.Command, out.Labels)
+	}
+}

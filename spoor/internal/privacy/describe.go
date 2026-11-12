@@ -18,15 +18,19 @@ func (p *Policy) Describe() []string {
 	switch s.profile {
 	case ProfileMinimal:
 		add("Leaves this machine: detection findings, inventory of AI tools and their configuration, posture check results, sensor health, and per-session summaries (counts, tool kinds, hosts contacted, classes of sensitive paths touched).")
-		add("Stays on this machine: agent activity (commands, file paths, URLs, prompts). It is kept in a local ring buffer; when a finding is raised, the few preceding steps of that session are attached to it with commands redacted and no prompt text, tool input or tool output.")
+		add("Stays on this machine: agent activity (commands, file paths, URLs, prompts). It is kept in a local ring buffer. Exception: when a finding is raised, the few preceding steps of that session are shipped with it, with commands redacted and no prompt text, tool input or tool output.")
 	case ProfileStandard:
 		add("Leaves this machine: everything in the minimal profile, plus agent activity: tool calls with commands redacted structurally (credentials removed from flags, assignments, headers, URLs and piped input), file paths, hosts, and URLs without query strings.")
 		add("Not shipped in this profile: prompt text, web search queries, tool input and tool output. Only the names of tool arguments, lengths rounded up to a power of four, and keyed digests are shipped.")
 	case ProfileFull:
-		add("Leaves this machine: everything in the standard profile, plus prompt text, web search queries, tool input and the beginning of tool output (at most %d bytes per field), all with credentials redacted.", s.maxField)
+		add("Leaves this machine: everything in the standard profile, plus prompt text, web search queries, tool input (which includes the beginning of file contents an agent writes) and the beginning of tool output (at most %d bytes per field), all with credentials redacted.", s.maxField)
 		add("Redaction of free text is pattern-based: \"password=hunter2\" is removed, \"my password is hunter2\" is not. Treat this profile as content collection.")
 	}
-	add("Never leaves this machine in any profile: values of detected credentials (or any unkeyed fingerprint of them), file contents being written, the path of the agent's session transcript, and the text of excluded sessions.")
+	if s.profile == ProfileFull {
+		add("Never leaves this machine in any profile: values of detected credentials (or any unkeyed fingerprint of them), the path of the agent's session transcript, and anything from excluded sessions.")
+	} else {
+		add("Never leaves this machine in this profile: values of detected credentials (or any unkeyed fingerprint of them), prompt text, tool output (except the first %d bytes of a failed tool's error message, redacted), file contents being written, the path of the agent's session transcript, and anything from excluded sessions.", maxErrStd)
+	}
 	add("Paths under your home directory are shown as ~/... .")
 	if s.key != nil {
 		id := s.keyID

@@ -316,6 +316,88 @@ func TestFixtureModes(t *testing.T) {
 	}
 }
 
+// TestFixtureEditorAndLauncherParents covers the parents that decide
+// LifecycleParent for editors (VS Code's extension host versus its terminal
+// pty host, which share a command line) and an npm launcher whose process
+// title has swallowed its arguments.
+func TestFixtureEditorAndLauncherParents(t *testing.T) {
+	h := newFakeHost(t)
+	utility := []string{"/usr/share/code/code", "--type=utility", "--utility-sub-type=node.mojom.NodeService", "--lang=en-US", "--service-sandbox-type=none"}
+	h.add(fakeProc{pid: 1, comm: "init", ticks: 1, args: []string{"/sbin/init"}, exe: "/sbin/init", uid: "0"})
+	h.add(fakeProc{pid: 700, ppid: 1, comm: "code", ticks: 10, args: []string{"/usr/share/code/code"}, exe: "/usr/share/code/code", children: []int{701, 710}})
+	// Integrated terminal: code (ptyHost) -> bash -> claude.
+	h.add(fakeProc{pid: 701, ppid: 700, comm: "code", ticks: 11, args: utility, exe: "/usr/share/code/code",
+		env: map[string]string{"VSCODE_CRASH_REPORTER_PROCESS_TYPE": "ptyHost"}, children: []int{702}})
+	h.add(fakeProc{pid: 702, ppid: 701, comm: "bash", ticks: 12, args: []string{"/bin/bash"}, exe: "/usr/bin/bash",
+		env: map[string]string{"TERM_PROGRAM": "vscode"}, children: []int{703}})
+	h.add(fakeProc{pid: 703, ppid: 702, comm: "claude", ticks: 13, args: []string{"claude", "--dangerously-skip-permissions"}, exe: "/usr/local/bin/claude",
+		env: map[string]string{"TERM_PROGRAM": "vscode"}})
+	// Extension: code (extensionHost) -> claude, started with a scrubbed
+	// environment so only the ancestor's own environment tells.
+	h.add(fakeProc{pid: 710, ppid: 700, comm: "code", ticks: 14, args: utility, exe: "/usr/share/code/code",
+		env: map[string]string{"VSCODE_CRASH_REPORTER_PROCESS_TYPE": "extensionHost", "SECRET_TOKEN": canaryToken}, children: []int{711}})
+	h.add(fakeProc{pid: 711, ppid: 710, comm: "claude", ticks: 15,
+		args: []string{"/home/dev/.vscode/extensions/anthropic.claude-code-2.1.0-linux-x64/resources/native-binary/claude", "--output-format", "stream-json"},
+		exe:  "/home/dev/.vscode/extensions/anthropic.claude-code-2.1.0-linux-x64/resources/native-binary/claude"})
+	// npm exec with a process title: npm exec @openai/codex --yolo -> sh ->
+	// node codex.js with the flags the title could not show.
+	h.add(fakeProc{pid: 730, ppid: 1, comm: "npm exec @open", ticks: 20, args: []string{"npm exec @openai/codex --yolo"}, exe: "/usr/bin/node", children: []int{731}})
+	h.add(fakeProc{pid: 731, ppid: 730, comm: "sh", ticks: 21, args: []string{"sh", "-c", "codex --yolo"}, exe: "/usr/bin/dash", children: []int{732}})
+	h.add(fakeProc{pid: 732, ppid: 731, comm: "node", ticks: 22,
+		args: []string{"node", "/home/dev/.npm/_npx/9/node_modules/@openai/codex/bin/codex.js", "--yolo", "--dangerously-bypass-hook-trust", "exec", "--ephemeral", "fix it"},
+		exe:  "/usr/bin/node"})
+	// An agent with an oversized command line.
+	long := []string{"codex"}
+	for i := 0; i < 100; i++ {
+		long = append(long, "--add-dir=/srv/x")
+	}
+	h.add(fakeProc{pid: 740, ppid: 1, comm: "codex", ticks: 30, args: long, exe: "/usr/local/bin/codex"})
+	m, _ := newFixtureMonitor(t, h)
+	m.fullScan(m.now())
+	evs := drain(m)
+
+	got := map[int]AgentProc{}
+	for _, a := range m.Agents() {
+		got[a.PID] = a
+	}
+	if len(got) != 4 {
+		t.Fatalf("agents = %+v", m.Agents())
+	}
+	if a := got[703]; a.AgentID != "claude-code" || a.LifecycleParent != "" {
+		t.Errorf("terminal agent = %q %q, want claude-code and no lifecycle parent", a.AgentID, a.LifecycleParent)
+	}
+	if a := got[711]; a.AgentID != "claude-code" || a.LifecycleParent != LifecycleExtensionHost || !a.Headless {
+		t.Errorf("extension agent = %+v", a)
+	}
+	launcher := got[730]
+	if launcher.AgentID != "codex" || !contains(launcher.Flags, "--yolo") {
+		t.Fatalf("title launcher = %+v", launcher)
+	}
+	if !launcher.HookFree || !launcher.Headless || !launcher.PersistenceFree || !contains(launcher.Flags, "--dangerously-bypass-hook-trust") {
+		t.Errorf("payload traits not merged into the launcher: %+v", launcher)
+	}
+	if ap, ok := m.Attribute(732); !ok || ap.PID != 730 || !ap.HookFree {
+		t.Errorf("Attribute(payload) = %+v %v", ap, ok)
+	}
+	execs := ofType(evs, event.TypeProcessExec)
+	if e := byPID(execs, 732); e == nil || !contains(e.Process.Flags, "--dangerously-bypass-hook-trust") || e.Agent.PID != 730 {
+		t.Errorf("payload exec event = %+v", e)
+	}
+	if e := byPID(execs, 731); e == nil || len(e.Process.Flags) != 0 {
+		t.Errorf("shell exec event = %+v", e)
+	}
+	starts := ofType(evs, event.TypeAgentProcessStart)
+	if e := byPID(starts, 740); e == nil || !contains(e.Truncated, "process.args") || len(e.Process.Args) >= len(long) {
+		t.Errorf("long command line start event = %+v", e)
+	}
+	if e := byPID(starts, 703); e == nil || len(e.Truncated) != 0 || e.Labels["lifecycle_parent"] != "" {
+		t.Errorf("terminal start event = %+v", e)
+	}
+	if out := marshalAll(t, evs); strings.Contains(out, canaryToken) || strings.Contains(out, "ptyHost") || strings.Contains(out, "VSCODE_CRASH") {
+		t.Fatalf("environment values leaked:\n%s", out)
+	}
+}
+
 func TestFixtureRateCap(t *testing.T) {
 	h := newFakeHost(t)
 	h.add(fakeProc{pid: 1, comm: "init", ticks: 1, args: []string{"/sbin/init"}, exe: "/sbin/init", uid: "0"})

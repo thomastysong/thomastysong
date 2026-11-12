@@ -48,7 +48,10 @@
 //  2. osquery (internal/osqexec): exec rows from a running osqueryd's
 //     evented process table over its extension socket, attributed through
 //     the same table (exited processes stay answerable as tombstones for
-//     two minutes, because rows arrive 2 to 15 s after the exec).
+//     two minutes, because rows arrive 2 to 15 s after the exec). Rows are
+//     rate-capped on their own event time, not on arrival, so a delivery
+//     batch is not mistaken for a burst. The connection is closed when Run
+//     returns and while the kill switch is on.
 //  3. poll: the process table is listed every Idle interval (2 s), and the
 //     descendants of live roots every Active interval (200 ms) through
 //     /proc/<pid>/task/<tid>/children. Polling sees agent roots and
@@ -68,7 +71,11 @@
 // random nonce argument, directly with os.StartProcess (this package does
 // not import os/exec), and checks that the active provider reported that
 // exec within 5 s (cn_proc) or 90 s (osquery). ExecHealthy reports the
-// result. The canary itself is never emitted.
+// result. The canary itself is never emitted. On Unix the program must be
+// one only root can have put there: the file and its directory root-owned
+// and not group or world writable; one symlink (busybox's /bin/true) is
+// followed when the link and its directory pass the same test. Without
+// such a program ExecHealthy stays false.
 //
 // # Events
 //
@@ -80,6 +87,13 @@
 // Integrity root when the monitor runs privileged. AgentProc attributes
 // without a contract field are labels: headless, bare, hook_free,
 // persistence_free, lifecycle_parent, config_home, parent_agent, evidence.
+// A process.exec of a process that is itself an agent (a nested agent, a
+// relaunch, the payload of an npx-style launcher) carries its risky flags
+// in Process.Flags. A launcher root's AgentProc absorbs its payload's
+// flags and modes (the launcher's own command line is the package runner's,
+// or an npm process title that has swallowed the arguments); the start
+// event has gone out by then, so Agents, Attribute and the stop event show
+// the merged view.
 // process.exec events are capped at 20 per second per agent root (500 per
 // second overall); the number dropped is attached as labels.exec_dropped to
 // the next event of that root and counted in Stats.RateDropped.
@@ -91,8 +105,12 @@
 // Environments are read (at most 256 KiB) to find marker variable NAMES;
 // the only values kept are session ids (only when they look like plain
 // identifiers) and HomeEnv overrides such as CLAUDE_CONFIG_DIR. npm's
-// lifecycle variables are read to decide LifecycleParent and then dropped.
-// Nothing read from a process is ever executed or opened as a path.
+// lifecycle variables and VS Code's VSCODE_CRASH_REPORTER_PROCESS_TYPE (of
+// the agent, and of Electron utility processes above it) are read to decide
+// LifecycleParent and then dropped. A Node process title that replaced the
+// whole argv ("npm exec @openai/codex --yolo") is split on white space for
+// flag detection only. Nothing read from a process is ever executed or
+// opened as a path.
 //
 // # Kill switch
 //
@@ -128,8 +146,15 @@
 //   - The headless, bare, hook-free and persistence-free tables in
 //     traits.go cover claude-code, codex, gemini-cli, copilot-cli,
 //     cursor-agent and kiro-cli; entries not checked against a primary
-//     source are marked UNVERIFIED there, as are the extension-host and URL
-//     handler spellings in lifecycle.go.
+//     source are marked UNVERIFIED there, as are the URL handler list and
+//     the macOS "Helper (Plugin)" rule in lifecycle.go. The VS Code
+//     extension-host test (environment, not command line: the terminal's
+//     pty host has the same command line) was checked against VS Code's
+//     source; an extension host whose environment cannot be read (another
+//     user's process while unprivileged, hardened processes on macOS) is
+//     only recognised through the agent's inherited environment.
+//   - Monitor.Source reports "disabled" while the kill switch is on, in
+//     addition to cn_proc, osquery and poll.
 //   - osquery rows are attributed by pid; a pid reused within the seconds
 //     before a row arrives can be attributed to the wrong process (the same
 //     limit internal/osqexec documents).

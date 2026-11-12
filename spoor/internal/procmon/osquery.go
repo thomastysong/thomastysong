@@ -113,7 +113,7 @@ func (m *Monitor) pollOsquery(ctx context.Context, now time.Time) bool {
 		owner := m.ownerForRow(ev.Process.PID, ev.Process.PPID)
 		var b *bucket
 		if owner != nil {
-			b = &owner.bucket
+			b = &owner.osqBucket
 			if ev.Agent != nil && ev.Agent.ID == owner.ap.AgentID {
 				ev.Agent.PID, ev.Agent.Name = owner.ap.PID, owner.prod.name
 			}
@@ -128,8 +128,11 @@ func (m *Monitor) pollOsquery(ctx context.Context, now time.Time) bool {
 			}
 		}
 		m.st.attributed.Add(1)
-		if b != nil && (!b.take(now, m.rate, m.burst) || !m.global.take(now, globalExecRate, globalExecRate)) {
-			b.dropped++
+		at := osqRowTime(ev, now)
+		if (b != nil && !b.take(at, m.rate, m.burst)) || !m.osqGlobal.take(at, globalExecRate, globalExecRate) {
+			if b != nil {
+				b.dropped++
+			}
 			m.st.rateDropped.Add(1)
 			continue
 		}
@@ -148,6 +151,28 @@ func (m *Monitor) pollOsquery(ctx context.Context, now time.Time) bool {
 	m.mu.Unlock()
 	m.enqueue(out)
 	return true
+}
+
+// osqRowTime is the instant an osquery row is rate-capped at. Rows arrive in
+// batches 2 to 15 s after the exec (and a whole backlog after a sensor
+// restart), so capping on arrival would drop a root's steady 10 execs a
+// second as if they were one burst. The row's own time is used when it is
+// plausible: not in the future and within the window osqexec catches up
+// over. osquery stamps rows with whole seconds, which is the granularity of
+// the cap anyway.
+func osqRowTime(ev *event.Event, now time.Time) time.Time {
+	t := ev.TS.Time
+	if t.IsZero() || t.After(now) || now.Sub(t) > osqRateWindow {
+		return now
+	}
+	return t
+}
+
+// closeOsquery drops the connection to osqueryd, when the provider has one.
+func (m *Monitor) closeOsquery() {
+	if c, ok := m.osq.(interface{ Close() }); ok {
+		c.Close()
+	}
 }
 
 // ownerForRow finds the agent root behind an osquery row. Caller holds m.mu.

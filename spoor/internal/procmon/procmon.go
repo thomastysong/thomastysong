@@ -178,7 +178,9 @@ const (
 	tombTTL        = 2 * time.Minute
 	exitMarkTTL    = time.Minute
 	cnRetryEvery   = time.Minute
+	cnNoAckRetry   = 10 * time.Minute
 	osqRetryEvery  = time.Minute
+	osqRateWindow  = 10 * time.Minute
 	canaryEvery    = 5 * time.Minute
 	canaryFirst    = 3 * time.Second
 	canaryWaitCN   = 5 * time.Second
@@ -236,8 +238,11 @@ type Monitor struct {
 	exitMark map[int]exitMark
 	markerB  map[string]*bucket
 	global   bucket
-	seq      uint64
-	can      canaryState
+	// osqGlobal is the host-wide cap for osquery rows, on their own event
+	// time (see osqRowTime).
+	osqGlobal bucket
+	seq       uint64
+	can       canaryState
 
 	st counters
 }

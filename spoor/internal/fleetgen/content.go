@@ -105,7 +105,7 @@ func Build(o Options) (c *Content, err error) {
 	}
 	v := vocabularyOf(r.cat)
 	c = &Content{
-		ATC:            map[string]map[string]any{},
+		ATC:              map[string]map[string]any{},
 		DBPaths:          r.dbPaths,
 		BinPaths:         r.binPaths,
 		CatalogVersion:   v.catalogVersion,

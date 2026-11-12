@@ -24,6 +24,16 @@
 // Privacy field carries the profile name ("standard" for detection
 // context, which always uses the standard field policy).
 //
+// # Detection context
+//
+// Context renders the events that preceded a finding so that a case is
+// self-contained even in minimal. The records are routed to the detection
+// stream (sinks route by kind): Kind "detection", Type TypeContext, with
+// labels context_for (the finding's id), context_kind, context_type and
+// context_event_id (what the record was), and a new deterministic id, so
+// they never collide with the activity record itself or with the context
+// of another finding. Seq and Writer are left for the writer to set.
+//
 // # Structural redaction
 //
 // Commands are redacted from their structure first and by pattern second
@@ -35,9 +45,12 @@
 // handled here; every recovered secret is then searched for in plain,
 // reversed and encoded (base64, hex, escapes, UTF-16LE) form; a secret that
 // cannot be located reduces the command to program and flag names. The
-// tests push a canary corpus of synthetic credentials through every
-// profile and require zero leaks, and report the over-redaction rate on a
-// benign corpus.
+// searches are budgeted (secrets x text length): a line with more
+// recovered secrets than the budget allows (hundreds in a 256 KiB line,
+// thousands in a short one) is reduced to the same skeleton rather than
+// costing seconds per event. The tests push a canary corpus of synthetic
+// credentials through every profile and require zero leaks, and report
+// the over-redaction rate on a benign corpus.
 //
 // # Secret markers and digests
 //
@@ -65,7 +78,10 @@
 // evidence is copied only from a fixed allowlist of non-content fields;
 // prompt text and tool output are never evidence outside the full
 // profile, whatever a rule asks for (a rule pack must not become a covert
-// content search).
+// content search). A field that is asked for but not allowed is reported
+// as Withheld, so the request stays visible; stamping rule and bundle
+// versions on findings (so such a request is attributable) is the rule
+// engine's job, and Emit passes those labels through.
 //
 // # Known gaps
 //

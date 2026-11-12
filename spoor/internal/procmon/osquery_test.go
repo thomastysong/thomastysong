@@ -6,6 +6,7 @@ import (
 	"os"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,12 +20,20 @@ import (
 type fakeOsq struct {
 	mu     sync.Mutex
 	attr   func(pid, ppid int) (string, string, bool)
-	rows   [][2]int // pid, ppid
+	rows   [][2]int    // pid, ppid
+	times  []time.Time // event time of each row (default: now)
 	err    error
 	polls  int
 	status string
+	closed int
 	// canary makes Poll report the monitor's pending self-test process.
 	canary func() int
+}
+
+func (f *fakeOsq) Close() {
+	f.mu.Lock()
+	f.closed++
+	f.mu.Unlock()
 }
 
 func (f *fakeOsq) Poll(context.Context) ([]*event.Event, error) {
@@ -36,20 +45,23 @@ func (f *fakeOsq) Poll(context.Context) ([]*event.Event, error) {
 		return nil, f.err
 	}
 	f.status = "event"
-	rows := f.rows
-	f.rows = nil
+	rows, times := f.rows, f.times
+	f.rows, f.times = nil, nil
 	if f.canary != nil {
 		if pid := f.canary(); pid != 0 {
 			rows = append(rows, [2]int{pid, os.Getpid()})
 		}
 	}
 	var out []*event.Event
-	for _, r := range rows {
+	for i, r := range rows {
 		agent, session, ok := f.attr(r[0], r[1])
 		if !ok {
 			continue
 		}
 		ev := event.New(event.KindActivity, event.TypeProcessExec, event.SourceOsquery)
+		if i < len(times) {
+			ev.TS = event.At(times[i])
+		}
 		ev.Fidelity = event.FidelityObserved
 		ev.Agent = &event.Agent{ID: agent}
 		ev.Process = &event.Process{PID: r[0], PPID: r[1], Name: "x"}
@@ -178,6 +190,113 @@ func TestOsqueryProvider(t *testing.T) {
 	r.tick(t.Context())
 	if e := byPID(ofType(drain(m), event.TypeProcessExec), 13); e == nil || e.Labels["exec_source"] != SourcePoll {
 		t.Errorf("poll event after osquery outage = %+v", e)
+	}
+}
+
+// TestOsqueryRateCapOnEventTime checks that osquery rows are capped by when
+// the execs happened, not by when the batch arrived: osquery delivers rows
+// seconds late and in batches, and a steady 10 execs a second must not be
+// cut to the 20-per-second cap just because 60 of them arrive together.
+func TestOsqueryRateCapOnEventTime(t *testing.T) {
+	h := newFakeHost(t)
+	osqueryTree(h)
+	m, clk := newFixtureMonitor(t, h)
+	m.fullScan(m.now())
+	drain(m)
+	fo := &fakeOsq{attr: m.osqAttribute}
+	m.osq = fo
+
+	feed := func(n int, at func(i int) time.Time) {
+		fo.mu.Lock()
+		for i := 0; i < n; i++ {
+			fo.rows = append(fo.rows, [2]int{5000 + len(fo.rows), 11})
+			fo.times = append(fo.times, at(i))
+		}
+		fo.mu.Unlock()
+	}
+	osqExecs := func() []*event.Event {
+		var out []*event.Event
+		for _, e := range ofType(drain(m), event.TypeProcessExec) {
+			if e.Labels["exec_source"] == SourceOsquery {
+				out = append(out, e)
+			}
+		}
+		return out
+	}
+
+	// 60 execs at 10 a second over the six seconds before the poll.
+	base := m.now().Add(-8 * time.Second)
+	feed(60, func(i int) time.Time { return base.Add(time.Duration(i) * 100 * time.Millisecond) })
+	if !m.pollOsquery(t.Context(), m.now()) {
+		t.Fatal("osquery not delivering")
+	}
+	if got := osqExecs(); len(got) != 60 {
+		t.Fatalf("steady rate: %d of 60 rows emitted (dropped %d)", len(got), m.Stats().RateDropped)
+	}
+
+	// 60 execs within one second: the cap applies.
+	clk.add(5 * time.Second)
+	burst := m.now().Add(-2 * time.Second)
+	feed(60, func(int) time.Time { return burst })
+	m.pollOsquery(t.Context(), m.now())
+	if got := osqExecs(); len(got) != execRate {
+		t.Fatalf("burst: %d rows emitted, want the cap %d", len(got), execRate)
+	}
+	if st := m.Stats(); st.RateDropped != 40 {
+		t.Errorf("rate dropped = %d", st.RateDropped)
+	}
+	// The next row that gets through reports what was dropped.
+	clk.add(time.Second)
+	feed(1, func(int) time.Time { return m.now().Add(-time.Second) })
+	m.pollOsquery(t.Context(), m.now())
+	if got := osqExecs(); len(got) != 1 || got[0].Labels["exec_dropped"] != "40" {
+		t.Fatalf("after the burst: %+v", got)
+	}
+
+	// Implausible row times (future, ancient) fall back to arrival time.
+	now := m.now()
+	for _, ts := range []time.Time{now.Add(time.Hour), now.Add(-24 * time.Hour), {}} {
+		if got := osqRowTime(&event.Event{TS: event.At(ts)}, now); !got.Equal(now) {
+			t.Errorf("osqRowTime(%v) = %v", ts, got)
+		}
+	}
+}
+
+// TestOsqueryClosed checks that the monitor lets go of osqueryd's socket
+// when it stops and when the kill switch is pulled.
+func TestOsqueryClosed(t *testing.T) {
+	h := newFakeHost(t)
+	osqueryTree(h)
+	m, _ := newFixtureMonitor(t, h)
+	fo := &fakeOsq{attr: m.osqAttribute}
+	m.osq = fo
+	var off atomic.Bool
+	m.disabled = off.Load
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- m.Run(ctx) }()
+	waitFor(t, 5*time.Second, "osquery to be polled", func() bool {
+		fo.mu.Lock()
+		defer fo.mu.Unlock()
+		return fo.polls > 0
+	})
+	off.Store(true)
+	m.wake()
+	waitFor(t, 5*time.Second, "the kill switch", func() bool { return m.Source() == SourceDisabled })
+	fo.mu.Lock()
+	closed := fo.closed
+	fo.mu.Unlock()
+	if closed != 1 {
+		t.Errorf("closed %d times after the kill switch", closed)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	fo.mu.Lock()
+	defer fo.mu.Unlock()
+	if fo.closed != 2 {
+		t.Errorf("closed %d times after Run returned", fo.closed)
 	}
 }
 

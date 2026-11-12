@@ -106,8 +106,18 @@ func TestLifecycleParent(t *testing.T) {
 		{"python -m pip", nil, []ancestor{anc("python3", "-m", "pip", "install", ".")}, LifecyclePip},
 		{"setup.py", nil, []ancestor{anc("python3", "-u", "/tmp/pkg/setup.py", "install")}, LifecycleSetupPy},
 		{"python script", nil, []ancestor{anc("python3", "app.py")}, ""},
-		{"extension host", nil, []ancestor{anc("code", "--type=extensionHost")}, LifecycleExtensionHost},
+		{"remote extension host", nil, []ancestor{anc("node", "/srv/vscode-server/out/server-main.js", "--type=extensionHost")}, LifecycleExtensionHost},
 		{"mac plugin helper", nil, []ancestor{{name: "Code Helper (Plugin)"}}, LifecycleExtensionHost},
+		{"utility extension host", nil, []ancestor{anc("bash"), {name: "code", args: []string{"code", "--type=utility", "--utility-sub-type=node.mojom.NodeService"}, utilityType: "extensionHost"}}, LifecycleExtensionHost},
+		// The integrated terminal's pty host has the same command line as
+		// the extension host; only its environment tells them apart.
+		{"terminal pty host", nil, []ancestor{anc("bash"), {name: "code", args: []string{"code", "--type=utility", "--utility-sub-type=node.mojom.NodeService"}, utilityType: "ptyHost"}, anc("code")}, ""},
+		{"utility with unreadable env", nil, []ancestor{{name: "code", args: []string{"code", "--type=utility", "--utility-sub-type=node.mojom.NodeService"}}}, ""},
+		{"inherited extension host env", map[string]string{"VSCODE_CRASH_REPORTER_PROCESS_TYPE": "extensionHost"}, []ancestor{anc("sh")}, LifecycleExtensionHost},
+		{"inherited pty host env", map[string]string{"VSCODE_CRASH_REPORTER_PROCESS_TYPE": "ptyHost"}, []ancestor{anc("bash")}, ""},
+		{"npm script under an extension", map[string]string{"VSCODE_CRASH_REPORTER_PROCESS_TYPE": "extensionHost", "npm_lifecycle_event": "postinstall"}, nil, LifecycleNPM},
+		{"windows node path with spaces", nil, []ancestor{{name: "node.exe", exe: `C:\Program Files\nodejs\node.exe`,
+			args: []string{`C:\Program Files\nodejs\node.exe`, `C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js`, "install"}}}, LifecycleNPM},
 		{"xdg-open", nil, []ancestor{anc("bash"), anc("xdg-open", "claude-cli://x")}, LifecycleURLHandler},
 		{"windows url.dll", nil, []ancestor{{name: "rundll32.exe", args: []string{"rundll32.exe", "url.dll,FileProtocolHandler", "x"}}}, LifecycleURLHandler},
 		{"nearest wins", nil, []ancestor{anc("pip", "install"), anc("npm", "install")}, LifecyclePip},
@@ -117,6 +127,33 @@ func TestLifecycleParent(t *testing.T) {
 		if got := lifecycleParent(tc.env, tc.anc); got != tc.want {
 			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
 		}
+	}
+}
+
+func TestExpandTitle(t *testing.T) {
+	tests := []struct {
+		in, want []string
+	}{
+		{[]string{"npm exec @openai/codex --yolo"}, []string{"npm", "exec", "@openai/codex", "--yolo"}},
+		{[]string{"npm install left-pad", "x"}, []string{"npm", "install", "left-pad", "x"}},
+		{[]string{"/Applications/Visual Studio Code.app/Contents/MacOS/Electron", "--type=utility"}, nil},
+		{[]string{`C:\Program Files\nodejs\node.exe`, "cli.js"}, nil},
+		{[]string{"claude", "-p", "a prompt with spaces"}, nil},
+		{[]string{"   "}, nil},
+		{nil, nil},
+		{[]string{strings.Repeat("a ", 3000)}, nil}, // over the size bound
+	}
+	for _, tc := range tests {
+		want := tc.want
+		if want == nil {
+			want = tc.in
+		}
+		if got := expandTitle(tc.in); !reflect.DeepEqual(got, want) {
+			t.Errorf("expandTitle(%q) = %q, want %q", tc.in, got, want)
+		}
+	}
+	if got := expandTitle([]string{strings.Repeat("x ", 100)}); len(got) != 64 {
+		t.Errorf("title fields not capped: %d", len(got))
 	}
 }
 

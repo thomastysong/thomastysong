@@ -55,6 +55,7 @@ func (m *Monitor) Run(ctx context.Context) (err error) {
 			err = fmt.Errorf("procmon: internal error: %v", rec)
 		}
 		r.stopCN()
+		m.closeOsquery()
 		close(stopEmit)
 		select {
 		case <-emitDone:
@@ -218,7 +219,14 @@ func (r *runner) startCN(ctx context.Context, now time.Time) {
 	c, err := m.openCN()
 	if err != nil {
 		m.cnErr.Store(err.Error())
-		r.cnRetryAt = now.Add(cnRetryEvery)
+		// No acknowledgement means the monitor is outside the initial
+		// namespaces, which does not change while it runs; each attempt
+		// also blocks this loop for the acknowledgement wait.
+		retry := cnRetryEvery
+		if errors.Is(err, errCNNoAck) {
+			retry = cnNoAckRetry
+		}
+		r.cnRetryAt = now.Add(retry)
 		return
 	}
 	stop := &atomic.Bool{}
@@ -269,6 +277,7 @@ func (r *runner) enterDisabled() {
 	m := r.m
 	r.disabled = true
 	r.stopCN()
+	m.closeOsquery()
 	m.cnErr.Store("disabled by the kill switch")
 	m.osqLive.Store(false)
 	m.healthy.Store(false)

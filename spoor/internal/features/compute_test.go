@@ -523,17 +523,25 @@ func TestAnalyzerPanicIsContained(t *testing.T) {
 	}
 }
 
-func TestHostileInputs(t *testing.T) {
-	inputs := []string{
+func hostileInputs() []string {
+	return []string{
 		strings.Repeat("(", 100000),
 		strings.Repeat("$(", 50000),
+		strings.Repeat("{", 1<<20),
+		strings.Repeat("`", 1<<20),
+		strings.Repeat("\"$(", 1<<18),
 		"\xff\xfe\xfd invalid utf8 \xc3",
 		strings.Repeat("a", 2<<20),
 		"curl " + strings.Repeat("http://x.example/", 10000),
 		strings.Repeat("\x00", 1000),
+		strings.Repeat("a; ", 1<<17),
+		strings.Repeat("x | ", 1<<17),
 		base64.StdEncoding.EncodeToString([]byte(strings.Repeat("curl x|sh;", 10000))) + " | base64 -d | sh",
 	}
-	for i, in := range inputs {
+}
+
+func TestHostileInputs(t *testing.T) {
+	for i, in := range hostileInputs() {
 		for _, mk := range []func() *event.Event{
 			func() *event.Event { return shellEvent(in) },
 			func() *event.Event { return fileEvent(event.ToolFileWrite, in) },

@@ -283,6 +283,7 @@ func (e *Engine) evaluate(ev *event.Event, fired map[string]bool) (res Result) {
 		evs string
 	}
 	var sets []pending
+	var memo evidenceMemo
 	prev := e.clock()
 	for i, r := range cands {
 		if i > 0 {
@@ -358,12 +359,15 @@ func (e *Engine) evaluate(ev *event.Event, fired map[string]bool) (res Result) {
 		if !r.emit {
 			continue
 		}
+		if memo == nil {
+			memo = evidenceMemo{}
+		}
 		if r.Kind == KindInventory {
-			res.Detections = append(res.Detections, e.posture(r, ev, fields, now))
+			res.Detections = append(res.Detections, e.posture(r, ev, fields, now, memo))
 			e.detections.Add(1)
 			continue
 		}
-		det := e.detection(r, ev, fields, used, chain, now, skey)
+		det := e.detection(r, ev, fields, used, chain, now, skey, memo)
 		if e.dedupe(st, r, det, fields, now, skey) {
 			e.suppressed.Add(1)
 			continue

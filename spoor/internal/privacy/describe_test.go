@@ -25,7 +25,7 @@ func TestDescribe(t *testing.T) {
 		if !strings.Contains(all, "Privacy profile: "+string(prof)) {
 			t.Errorf("profile not stated:\n%s", all)
 		}
-		if !strings.Contains(all, "Never leaves this machine") {
+		if !strings.Contains(all, "Never leaves this machine") || strings.Contains(all, "file contents being written") == (prof == ProfileFull) {
 			t.Errorf("never-leaves line missing:\n%s", all)
 		}
 		hasKey := p != nil && len(p.Key) >= MinKeyLen

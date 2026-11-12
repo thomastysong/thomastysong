@@ -55,25 +55,32 @@ func dedupKey(r *rule, class, skey string, fields map[string]any) string {
 	return hex.EncodeToString(h.Sum(nil)[:16])
 }
 
-// evidence renders the rule's evidence fields: secrets replaced by
-// classify.Redact markers, the engine's home directory shown as "~", each
-// value capped. The privacy stage may rebuild it from the shared Content
-// and Feat with the keys of this map.
-func (e *Engine) evidence(r *rule, fields map[string]any) map[string]string {
+// evidence renders the rule's evidence fields: credentials redacted
+// (structurally for commands, argument vectors and URLs, then by
+// classify.Redact), the engine's home directory shown as "~", each value
+// capped. Detections leave the host in every privacy profile, so this is a
+// floor even though the privacy stage may rebuild evidence from the shared
+// Content and Feat with the keys of this map.
+//
+// memo caches rendered values by field for the event being evaluated:
+// several rules firing on one event usually name the same evidence fields,
+// and structural redaction re-parses argument vectors.
+func (e *Engine) evidence(r *rule, fields map[string]any, memo evidenceMemo) map[string]string {
 	if len(r.evidence) == 0 {
 		return nil
 	}
 	out := make(map[string]string, len(r.evidence))
 	for _, f := range r.evidence {
-		s := fieldString(fields[f], ", ")
-		if s == "" {
-			continue
+		v, ok := memo[f]
+		if !ok {
+			v = e.renderEvidence(f, fields)
+			if memo != nil {
+				memo[f] = v
+			}
 		}
-		red, _ := classify.Redact(s)
-		if h := e.o.Home; h != "" && len(h) > 1 {
-			red = strings.ReplaceAll(red, h, "~")
+		if v != "" {
+			out[f] = v
 		}
-		out[f] = cutString(red, maxEvidenceValue)
 	}
 	if len(out) == 0 {
 		return nil
@@ -90,7 +97,7 @@ func (e *Engine) labels(r *rule) map[string]string {
 }
 
 // detection builds the detection.finding record for r firing on ev.
-func (e *Engine) detection(r *rule, ev *event.Event, fields map[string]any, used []flagEntryNamed, chain []hit, now time.Time, skey string) *event.Event {
+func (e *Engine) detection(r *rule, ev *event.Event, fields map[string]any, used []flagEntryNamed, chain []hit, now time.Time, skey string, memo evidenceMemo) *event.Event {
 	c := ev.Clone()
 	ts := ev.TS
 	if ts.IsZero() {
@@ -167,7 +174,7 @@ func (e *Engine) detection(r *rule, ev *event.Event, fields map[string]any, used
 			Maturity:   r.Maturity,
 			Category:   r.Category,
 			Tags:       tags,
-			Evidence:   e.evidence(r, fields),
+			Evidence:   e.evidence(r, fields, memo),
 			EventIDs:   ids,
 			Flags:      flagNames,
 			Response:   r.response,
@@ -190,7 +197,7 @@ func raiseClass(c string) string {
 }
 
 // posture builds the posture.check failure an inventory rule reports.
-func (e *Engine) posture(r *rule, ev *event.Event, fields map[string]any, now time.Time) *event.Event {
+func (e *Engine) posture(r *rule, ev *event.Event, fields map[string]any, now time.Time, memo evidenceMemo) *event.Event {
 	c := ev.Clone()
 	ts := ev.TS
 	if ts.IsZero() {
@@ -215,7 +222,7 @@ func (e *Engine) posture(r *rule, ev *event.Event, fields map[string]any, now ti
 	if chk.AgentID == "" && ev.Agent != nil {
 		chk.AgentID = ev.Agent.ID
 	}
-	if ev := e.evidence(r, fields); len(ev) > 0 {
+	if ev := e.evidence(r, fields, memo); len(ev) > 0 {
 		keys := make([]string, 0, len(ev))
 		for k := range ev {
 			keys = append(keys, k)
@@ -240,4 +247,149 @@ func (e *Engine) posture(r *rule, ev *event.Event, fields map[string]any, now ti
 		Labels: e.labels(r),
 		Check:  chk,
 	}
+}
+
+// evidenceMemo maps an evidence field name to its rendered value for one
+// event.
+type evidenceMemo map[string]string
+
+func (e *Engine) renderEvidence(f string, fields map[string]any) string {
+	s := evidenceValue(f, fields)
+	if s == "" {
+		return ""
+	}
+	red, _ := classify.Redact(s)
+	if h := e.o.Home; h != "" && len(h) > 1 {
+		red = strings.ReplaceAll(red, h, "~")
+	}
+	return cutString(red, maxEvidenceValue)
+}
+
+// evidenceValue renders one evidence field before free-text redaction.
+// classify.Redact recognises a secret by its shape; a password given as a
+// flag value ("mysql -pHunter2", "curl -u admin:pw", "--token x") has none,
+// so fields that hold command lines or argument vectors are redacted from
+// the parsed commands first, and URLs by query parameter name.
+func evidenceValue(field string, fields map[string]any) string {
+	v := fields[field]
+	switch field {
+	case "target.command":
+		s, _ := v.(string)
+		return redactCommand(s, fields)
+	case "shell.argv":
+		if _, ok := v.([]string); !ok {
+			return ""
+		}
+		var parts []string
+		for _, argv := range redactedCommands(fields) {
+			parts = append(parts, argv[1:]...)
+		}
+		if parts == nil {
+			// No parsed commands to anchor on: redact the flat list.
+			parts = classify.RedactArgs(append([]string{""}, v.([]string)...))[1:]
+		}
+		return strings.Join(parts, ", ")
+	case "process.args":
+		l, _ := v.([]string)
+		return strings.Join(classify.RedactArgs(l), " ")
+	case "target.url", "shell.urls", "net.url":
+		switch t := v.(type) {
+		case string:
+			return classify.RedactURL(t, true)
+		case []string:
+			out := make([]string, len(t))
+			for i, u := range t {
+				out[i] = classify.RedactURL(u, true)
+			}
+			return strings.Join(out, ", ")
+		}
+	}
+	return fieldString(v, ", ")
+}
+
+// redactedCommands returns the classify.RedactArgs form of every parsed
+// command's argv, program first.
+func redactedCommands(fields map[string]any) [][]string {
+	cmds, _ := fields["shell.cmds"].([]map[string]any)
+	out := make([][]string, 0, len(cmds))
+	for _, c := range cmds {
+		path, _ := c["path"].(string)
+		args, _ := c["args"].([]string)
+		out = append(out, classify.RedactArgs(append([]string{path}, args...)))
+	}
+	return out
+}
+
+// redactCommand replaces, in the command line as written, every argument
+// that classify.RedactArgs redacts in the parsed commands. When an argument
+// cannot be found verbatim (the parser removed quotes or escapes around
+// it), the command is rendered from the redacted argument vectors instead:
+// losing the original layout is better than keeping a credential.
+func redactCommand(s string, fields map[string]any) string {
+	if s == "" {
+		return ""
+	}
+	cmds, _ := fields["shell.cmds"].([]map[string]any)
+	out := s
+	rebuilt := make([]string, 0, len(cmds))
+	exact := true
+	for _, c := range cmds {
+		path, _ := c["path"].(string)
+		args, _ := c["args"].([]string)
+		argv := append([]string{path}, args...)
+		red := classify.RedactArgs(argv)
+		rebuilt = append(rebuilt, strings.Join(red, " "))
+		for i := 1; i < len(argv); i++ {
+			if red[i] == argv[i] || argv[i] == "" {
+				continue
+			}
+			var n int
+			out, n = replaceTokens(out, argv[i], red[i])
+			if n == 0 {
+				exact = false
+			}
+		}
+	}
+	if !exact {
+		return strings.Join(rebuilt, "; ")
+	}
+	return out
+}
+
+// tokenSep are the bytes that end a shell word or a key=value / user:pass
+// part of one.
+const tokenSep = " \t\r\n'\"=:;|&()<>,"
+
+// replaceTokens replaces occurrences of old in s that stand as a whole
+// shell word or word part (bounded on both sides by the start or end of s
+// or a tokenSep byte), so a short secret does not rewrite unrelated text.
+// It returns the count replaced.
+func replaceTokens(s, old, repl string) (string, int) {
+	if old == "" {
+		return s, 0
+	}
+	var b strings.Builder
+	n, i := 0, 0
+	for {
+		j := strings.Index(s[i:], old)
+		if j < 0 {
+			break
+		}
+		start, end := i+j, i+j+len(old)
+		before := start == 0 || strings.IndexByte(tokenSep, s[start-1]) >= 0
+		after := end == len(s) || strings.IndexByte(tokenSep, s[end]) >= 0
+		if before && after {
+			b.WriteString(s[i:start])
+			b.WriteString(repl)
+			n++
+		} else {
+			b.WriteString(s[i:end])
+		}
+		i = end
+	}
+	if n == 0 {
+		return s, 0
+	}
+	b.WriteString(s[i:])
+	return b.String(), n
 }

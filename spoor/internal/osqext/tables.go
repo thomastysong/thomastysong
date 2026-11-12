@@ -61,21 +61,22 @@ func generator(src *source, def state.TableDef) table.GenerateFunc {
 		// by a concurrent reopen, or belong to a file that was replaced
 		// between the identity check and the query.
 		for attempt := 0; ; attempt++ {
-			st, err := src.store()
+			h, err := src.acquire()
 			if err != nil {
 				return nil, fmt.Errorf("%s: %w", def.OsqueryName(), err)
 			}
-			if st == nil {
+			if h == nil {
 				// No database: the sensor is not installed or has not
 				// started. Zero rows, as ATC would give; policies carry the
 				// heartbeat guard for exactly this case.
 				return []map[string]string{}, nil
 			}
-			rows, err = st.QueryWhere(ctx, def.Name, nil, f)
+			rows, err = h.st.QueryWhere(ctx, def.Name, nil, f)
+			src.release(h)
 			if err == nil {
 				return rows, nil
 			}
-			src.drop(st)
+			src.drop(h)
 			if attempt > 0 || ctx.Err() != nil {
 				return nil, fmt.Errorf("%s: %w", def.OsqueryName(), err)
 			}
@@ -162,33 +163,45 @@ func plainInteger(s string) bool {
 // source hands out a read-only handle on the state database and replaces it
 // when the file at the path is no longer the file that was opened (sensor
 // reinstalled, database deleted and recreated).
+//
+// Handles are reference-counted: osquery calls generators concurrently, and
+// closing a handle while another query still runs on it would fail that
+// query. A replaced handle is retired and closed only when its last query
+// releases it.
 type source struct {
 	path string
 
-	mu sync.Mutex
-	st *state.Store
-	fi os.FileInfo
+	mu  sync.Mutex
+	cur *handle
+	fi  os.FileInfo
+}
+
+type handle struct {
+	st      *state.Store
+	refs    int
+	retired bool
 }
 
 func newSource(path string) *source { return &source{path: path} }
 
-// store returns the current handle, or nil with no error when there is no
-// database file.
-func (s *source) store() (*state.Store, error) {
+// acquire returns the current handle with a reference held, or nil with no
+// error when there is no database file. Callers must release it.
+func (s *source) acquire() (*handle, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	fi, err := os.Lstat(s.path)
 	if err != nil {
-		s.closeLocked()
+		s.retireLocked()
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, err
 	}
-	if s.st != nil && os.SameFile(s.fi, fi) {
-		return s.st, nil
+	if s.cur != nil && os.SameFile(s.fi, fi) {
+		s.cur.refs++
+		return s.cur, nil
 	}
-	s.closeLocked()
+	s.retireLocked()
 	st, err := state.OpenReadOnly(s.path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -196,28 +209,43 @@ func (s *source) store() (*state.Store, error) {
 		}
 		return nil, err
 	}
-	s.st, s.fi = st, fi
-	return st, nil
+	s.cur, s.fi = &handle{st: st, refs: 1}, fi
+	return s.cur, nil
 }
 
-// drop discards the cached handle if it is still st.
-func (s *source) drop(st *state.Store) {
+// release drops a reference taken by acquire.
+func (s *source) release(h *handle) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.st == st {
-		s.closeLocked()
+	h.refs--
+	if h.retired && h.refs <= 0 {
+		_ = h.st.Close()
 	}
 }
 
+// drop retires h if it is still the current handle (a query on it failed).
+func (s *source) drop(h *handle) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cur == h {
+		s.retireLocked()
+	}
+}
+
+// close retires the current handle; it is closed once no query uses it.
 func (s *source) close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.closeLocked()
+	s.retireLocked()
 }
 
-func (s *source) closeLocked() {
-	if s.st != nil {
-		_ = s.st.Close()
-		s.st, s.fi = nil, nil
+func (s *source) retireLocked() {
+	if s.cur == nil {
+		return
 	}
+	s.cur.retired = true
+	if s.cur.refs <= 0 {
+		_ = s.cur.st.Close()
+	}
+	s.cur, s.fi = nil, nil
 }

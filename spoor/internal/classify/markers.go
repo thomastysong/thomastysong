@@ -8,7 +8,7 @@ import (
 // Redaction markers already in a string are opaque. A marker is
 // "[REDACTED:<kind>:<fp>]" (this package), "[REDACTED:<kind>:hmac=<fp>]" (the
 // privacy tier's keyed rewrite) or "[REDACTED:<kind>]" (fingerprint
-// removed), with <kind> one of the kind names spoor writes (markerKinds) and
+// removed), with <kind> one of the kind names spoor writes (markerKind) and
 // <fp> 8 lower-case hex digits.
 //
 // Pattern detection never looks inside or across one: Redact scans the text

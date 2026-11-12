@@ -43,18 +43,20 @@ import (
 //
 // What an entry holds. The memo is keyed by SHA-256 of the hint and the
 // text and keeps neither. An entry writes the result as pieces of the text
-// it was computed from (offset and length) and stores only the result's
-// bytes that it does not match in that text: in practice the markers
-// redaction put in and what a rewrite composed (the skeleton, a space for
-// a control character). A line with nothing to redact is one piece and no
-// bytes, and a line cut at maxCommandScan with nothing to redact is one
-// piece and its truncation marker, however long it is; neither leaves any
-// of its text in the memo once its records are gone. Every stored byte is
-// a byte of the redacted result, so a value the redactor removed is never
-// stored. On reuse the caller's own text, which has the same key and is
-// checked to have the same length, supplies the pieces. A form is stored
-// only if it reproduces the result exactly. The memo is bounded in entries
-// and bytes and evicts the least recently used entry. Failure results (the
+// as the redactor reads it (control characters already turned into
+// spaces), by offset and length, and stores only the result's bytes that
+// it does not match in that text: in practice the markers redaction put in
+// and what a rewrite composed (the skeleton). A line with nothing to
+// redact is one piece and no bytes, and a line cut at maxCommandScan with
+// nothing to redact is one piece and its truncation marker, however long
+// it is; neither leaves any of its text in the memo once its records are
+// gone. Every stored byte is a byte of the redacted result, so a value the
+// redactor removed is never stored. On reuse the caller's own text, which
+// has the same key and is checked to have the same length, supplies the
+// pieces. A form is stored only if it reproduces the result exactly and
+// fits memoMaxValue (a result that differs from its text in thousands of
+// places is redacted again instead). The memo is bounded in entries and
+// bytes and evicts the least recently used entry. Failure results (the
 // failure marker) are not stored.
 
 const (
@@ -362,11 +364,14 @@ func redactCommand(cmd string, hint shellx.Dialect) (string, bool) {
 		return cmd, false
 	}
 	k := memoKeyOf(cmd, hint)
-	if out, pre, ok := commandMemo.get(k, cmd); ok {
+	// The text as the redactor reads it; the same string as cmd unless cmd
+	// holds control characters.
+	base, _ := controlsToSpace(cmd)
+	if out, pre, ok := commandMemo.get(k, base); ok {
 		return out, pre
 	}
 	out, pre := redactCommandUncached(cmd, hint)
-	commandMemo.put(k, cmd, out, pre)
+	commandMemo.put(k, base, out, pre)
 	return out, pre
 }
 

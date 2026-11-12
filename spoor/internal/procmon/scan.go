@@ -40,11 +40,17 @@ func (m *Monitor) prepare(id ident, rec *platform.Proc, via string, ts time.Time
 		env = nil
 	}
 	o.envF = ix.scanEnv(env)
+	o.name = emitName(rec.Name)
 	if id.pid != m.self {
 		o.cand = m.candidate(rec, env, o.envF)
 	}
-	if o.cand == nil && (o.envF.verified || m.parentAttributed(id.ppid)) {
+	switch {
+	case o.cand != nil:
+		o.args, o.argsCut, o.argsDone = o.cand.ap.Args, o.cand.argsCut, true
+	case o.envF.verified || m.parentAttributed(id.ppid):
 		o.cwd = m.src.cwd(id.pid)
+		o.args, o.argsCut = emitArgs(rec.Args)
+		o.argsDone = true
 	}
 	return o
 }
@@ -463,8 +469,9 @@ func (m *Monitor) promote(pids []int, now time.Time) {
 		if ef.hasProduct(product, m.index()) {
 			continue // it carries the marker itself: not the boundary
 		}
-		o := &observed{id: id, rec: &rec, envF: ef, via: viaPoll}
+		o := &observed{id: id, rec: &rec, envF: ef, via: viaPoll, name: emitName(rec.Name)}
 		o.cand = m.buildCand(&rec, env, ef, p, []string{EvidenceEnvMarker})
+		o.args, o.argsCut, o.argsDone = o.cand.ap.Args, o.cand.argsCut, true
 		m.mu.Lock()
 		evs, _ := m.ingest([]*observed{o}, seq0, now)
 		m.mu.Unlock()

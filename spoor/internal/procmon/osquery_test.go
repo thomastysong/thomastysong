@@ -93,6 +93,9 @@ func osqueryTree(h *fakeHost) {
 func TestOsqAttribute(t *testing.T) {
 	h := newFakeHost(t)
 	osqueryTree(h)
+	// A shell with a user-exported weak marker: no osquery row is
+	// attributed on that ground.
+	h.add(fakeProc{pid: 30, ppid: 1, comm: "bash", ticks: 300, args: []string{"-bash"}, exe: "/usr/bin/bash", env: map[string]string{"COPILOT_MODEL": "gpt-5"}})
 	m, clk := newFixtureMonitor(t, h)
 	m.fullScan(m.now())
 	drain(m)
@@ -111,6 +114,8 @@ func TestOsqAttribute(t *testing.T) {
 	check(9999, 10, "claude-code", "", true)
 	check(9999, 20, "", "", false)
 	check(20, 1, "", "", false)
+	check(30, 1, "", "", false)
+	check(9999, 30, "", "", false)
 
 	// The shell exits; osquery reports its exec seconds later.
 	h.remove(11)

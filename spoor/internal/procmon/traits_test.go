@@ -185,7 +185,7 @@ func TestEnvScan(t *testing.T) {
 		"CLAUDE_CODE_SESSION_ID":        "6f1c2a9e-0d3b-4e57-9a10-2b7c3d4e5f60",
 		"CODEX_THREAD_ID":               "/etc/passwd", // not an identifier: dropped
 	})
-	if !f.known || f.product == "" || !f.strong {
+	if !f.known || f.product == "" || !f.strong || !f.verified {
 		t.Fatalf("facts = %+v", f)
 	}
 	if got := f.session("claude-code"); got != "6f1c2a9e-0d3b-4e57-9a10-2b7c3d4e5f60" {
@@ -198,8 +198,16 @@ func TestEnvScan(t *testing.T) {
 		t.Errorf("markers = %v", f.markers)
 	}
 	weak := ix.scanEnv(map[string]string{"COPILOT_MODEL": "gpt-5"})
-	if weak.product != "copilot-cli" || weak.strong {
+	if weak.product != "copilot-cli" || weak.strong || weak.verified {
 		t.Errorf("weak = %+v", weak)
+	}
+	// An app's marker that the catalog has not verified (every one today)
+	// is weak too; a strong marker wins over it in the same environment.
+	if app := ix.scanEnv(map[string]string{"CURSOR_TRACE_ID": "x"}); app.product != "cursor" || app.verified {
+		t.Errorf("app marker = %+v", app)
+	}
+	if mix := ix.scanEnv(map[string]string{"CURSOR_TRACE_ID": "x", "CODEX_THREAD_ID": "t1"}); mix.product != "codex" || !mix.strong {
+		t.Errorf("mixed = %+v", mix)
 	}
 	if none := ix.scanEnv(nil); none.known {
 		t.Error("nil env is unknown, not empty")

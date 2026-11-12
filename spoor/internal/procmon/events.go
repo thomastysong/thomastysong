@@ -398,7 +398,10 @@ func (m *Monitor) execEvent(n *node, o *observed, owner *root, marker string, no
 	if ts.IsZero() {
 		ts = rec.Start
 	}
-	args, cut := emitArgs(rec.Args)
+	args, cut := o.args, o.argsCut
+	if !o.argsDone {
+		args, cut = emitArgs(rec.Args)
+	}
 	ev := m.newEvent(event.TypeProcessExec, ts, now)
 	// The id is an unkeyed hash, so it covers only what the event shows: a
 	// digest of the raw command line would let a reader test guesses about
@@ -424,7 +427,7 @@ func (m *Monitor) execEvent(n *node, o *observed, owner *root, marker string, no
 		PPID:       n.ppid,
 		Name:       n.name,
 		Exe:        n.exe,
-		Args:       args,
+		Args:       append([]string(nil), args...),
 		User:       n.user,
 		Ancestors:  m.execAncestors(n, owner),
 		EnvMarkers: append([]string(nil), n.env.markers...),

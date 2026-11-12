@@ -93,15 +93,23 @@ func (r *root) absorb(p *AgentProc) {
 
 // observed is one process read from the OS outside the table lock.
 type observed struct {
-	id     ident
-	rec    *platform.Proc
-	envF   envFacts
-	cand   *rootCand
-	via    string    // cn_proc | poll | osquery
-	ts     time.Time // exec time for exec events
-	exec   bool      // the process just ran exec (report it even if known)
-	cwd    string
-	canary bool
+	id   ident
+	rec  *platform.Proc
+	envF envFacts
+	cand *rootCand
+	via  string    // cn_proc | poll | osquery
+	ts   time.Time // exec time for exec events
+	exec bool      // the process just ran exec (report it even if known)
+	cwd  string
+	// name, args and argsCut are the emitted (redacted, bounded) forms,
+	// computed outside the table lock: redaction runs regular expressions
+	// and must not hold up the connector reader. args is set only when
+	// argsDone (for processes likely to be reported).
+	name     string
+	args     []string
+	argsCut  bool
+	argsDone bool
+	canary   bool
 	// rename: a re-read of a known process that changed its own name
 	// (setproctitle, a Node process.title) without running exec.
 	rename bool
@@ -124,7 +132,10 @@ func (n *node) update(o *observed) {
 		n.ppid = o.id.ppid
 	}
 	if r := o.rec; r != nil {
-		n.name = emitName(r.Name)
+		if o.name == "" && r.Name != "" {
+			o.name = emitName(r.Name)
+		}
+		n.name = o.name
 		n.exe = capString(r.Exe, 4096)
 		n.start = r.Start
 		n.uid = capString(r.UID, 128)

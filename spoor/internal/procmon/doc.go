@@ -24,13 +24,21 @@
 // IDEs and desktop apps (catalog kinds other than "agent") are not roots:
 // most of what runs under an editor was started by a person. Their agent
 // runs are attributed through the marker variables the catalog lists
-// (CURSOR_AGENT, CLAUDE_CODE_IS_COWORK, ...). Marker attribution also covers
-// agents the catalog cannot identify (a renamed or rebuilt binary): when a
-// process carries a strong marker of an agent (a session variable, or an
-// EnvMarkers entry the catalog has verified) and its parent does not, the
-// parent is the agent and becomes a root with Evidence "env_marker". This
-// is the marker-boundary technique from the OS telemetry research; it
-// fails against an agent whose children's environment is scrubbed.
+// (CURSOR_AGENT, CLAUDE_CODE_IS_COWORK, ...). Markers come in two
+// strengths. A verified marker (an agent's session variable, or an
+// EnvMarkers entry the catalog does not mark unverified) is set by the
+// product itself: a process carrying one is reported as process.exec with
+// labels.attribution=env_marker. A weak marker (an unverified name, or a
+// switch a user can export for a whole shell, such as COPILOT_MODEL) is in
+// every process of that shell, so it only answers Attribute, with Evidence
+// "env_marker_weak", and never produces an event; today every app marker
+// in the catalog is weak. Marker attribution also covers agents the
+// catalog cannot identify (a renamed or rebuilt binary): when a process
+// carries a strong marker (a verified marker of an agent) and its parent
+// does not, the parent is the agent and becomes a root with Evidence
+// "env_marker". This is the marker-boundary technique from the OS
+// telemetry research; it fails against an agent whose children's
+// environment is scrubbed.
 //
 // # Exec providers
 //
@@ -39,8 +47,11 @@
 //  1. cn_proc, the Linux netlink process connector (Options.ExecEvents).
 //     Fork, exec and exit events for every process on the host; on exec the
 //     monitor reads /proc/<pid> at once, in the reader goroutine, before a
-//     short-lived process is gone. A netlink overrun (ENOBUFS) triggers a
-//     full rescan, and a full rescan runs every 30 s regardless. Messages
+//     short-lived process is gone. A netlink overrun (ENOBUFS) marks the
+//     table for a rescan; overruns come in storms (a parallel build), so
+//     the marks are coalesced into one full scan no sooner than Idle (or
+//     twenty times the last scan's duration) after the previous one. A
+//     full rescan runs every 30 s regardless. Messages
 //     not sent by the kernel (netlink port id 0) are dropped. Needs root,
 //     or kernel 6.6+, and the initial user and pid namespaces (the kernel
 //     ignores LISTEN from elsewhere without an answer; the monitor waits
@@ -59,6 +70,14 @@
 //     interval (measured: 7 of 120 short processes at 1 s), so it is not
 //     exec ground truth and ExecHealthy is always false under it.
 //
+// A scan notices an exec it was not told about by a changed kernel name.
+// npm, yarn, pnpm and every setproctitle(3) user rename themselves after
+// exec, so a changed name counts as an exec only when the executable
+// changed too, or when the name went back to the one the kernel gives on
+// exec (the program's or the interpreted script's base name). Otherwise
+// the process is re-read without a process.exec, and an agent root that
+// renames itself stays the root it was.
+//
 // Polling runs under every provider: it finds agents that were running
 // before the monitor started and repairs the table after overruns. A scan
 // never takes more than about 5% of a core: its interval stretches to
@@ -71,18 +90,30 @@
 // random nonce argument, directly with os.StartProcess (this package does
 // not import os/exec), and checks that the active provider reported that
 // exec within 5 s (cn_proc) or 90 s (osquery). ExecHealthy reports the
-// result. The canary itself is never emitted. On Unix the program must be
-// one only root can have put there: the file and its directory root-owned
-// and not group or world writable; one symlink (busybox's /bin/true) is
-// followed when the link and its directory pass the same test. Without
-// such a program ExecHealthy stays false.
+// result. The canary itself is never emitted. A process is taken for the
+// canary (and so not ingested) only while a test is pending, only when its
+// parent is this process and its arguments carry the nonce, and, once
+// StartProcess has returned, only with the canary's pid; nonce and pid are
+// forgotten as soon as the test settles. Any local user can read the
+// nonce while the canary runs, but cannot make a process the monitor's
+// child. On Unix the program must be one only root can have put there:
+// os.StartProcess resolves the path again, so every name on the way is
+// checked, each directory root-owned and not group or world writable (a
+// sticky directory is accepted, as only root can replace root's entries in
+// it) and each link root-owned. Directory links such as /bin -> usr/bin are
+// followed under that rule; the program may be one link (busybox's
+// /bin/true) whose target is a regular file. Without such a program
+// ExecHealthy stays false. With HostRoot the canary's pids are not the
+// ones the host-side providers report, so the self-test does not pass
+// there.
 //
 // # Events
 //
 // agent.process.start (TS = process start, deterministic id so a sensor
 // restart re-reports an agent with the same id), agent.process.stop
 // (Outcome carries the exit status when the connector saw the exit), and
-// process.exec for every process an agent root (or marker) owns. All carry
+// process.exec for every process an agent root (or a verified marker) owns.
+// All carry
 // Source process (osquery rows keep Source osquery), Fidelity observed,
 // Integrity root when the monitor runs privileged. AgentProc attributes
 // without a contract field are labels: headless, bare, hook_free,
@@ -100,23 +131,43 @@
 //
 // # What is read and what is emitted
 //
-// Command lines go through classify.RedactArgs and are bounded (64
-// arguments, 1 KiB each, 8 KiB in all; cuts are listed in Truncated).
+// Command lines go through classify.RedactArgs first and are bounded
+// after (64 arguments, 1 KiB each, 8 KiB in all): bounding first would cut
+// a value inside long inline JSON (claude --mcp-config, --settings) before
+// its closing quote, and the head of the secret would no longer be
+// recognised. A cut argument ends in a "[TRUNCATED:<n>B]" marker (a cut
+// never splits a "[REDACTED:...]" marker), dropped arguments are replaced
+// by one final "[TRUNCATED:<n>B]" placeholder counting their bytes, and an
+// argument cut by the 256 KiB command-line read limit is never emitted;
+// every cut is listed in Truncated. The process.exec id covers the emitted
+// arguments with the redaction fingerprints left out, so it is no oracle
+// for the removed values. Process names get the same redaction (split on
+// white space) wherever they are kept or emitted (Process.Name, Ancestors,
+// AgentProc.Name): a Node process title or setproctitle(3) writes the
+// whole command line over argv[0], and the name refined from it, or the
+// kernel's first 15 bytes of it, carries that command line. What the
+// redaction cannot see in 15 bytes (the start of a vendor token whose
+// pattern needs more) can remain in a kernel name.
 // Environments are read (at most 256 KiB) to find marker variable NAMES;
 // the only values kept are session ids (only when they look like plain
 // identifiers) and HomeEnv overrides such as CLAUDE_CONFIG_DIR. npm's
 // lifecycle variables and VS Code's VSCODE_CRASH_REPORTER_PROCESS_TYPE (of
 // the agent, and of Electron utility processes above it) are read to decide
-// LifecycleParent and then dropped. A Node process title that replaced the
-// whole argv ("npm exec @openai/codex --yolo") is split on white space for
-// flag detection only. Nothing read from a process is ever executed or
-// opened as a path.
+// LifecycleParent and then dropped. npm_lifecycle_event=npx, which
+// everything npm exec / npx runs inherits, is not a lifecycle parent (a
+// person or program chose to run the agent); the ancestors decide, so a
+// package script that ran npx is still found above it. A Node process
+// title that replaced the whole argv ("npm exec @openai/codex --yolo") is
+// split on white space for flag detection; what is emitted is the redacted
+// title. Nothing read from a process is ever executed or opened as a path.
 //
 // # Kill switch
 //
-// While platform.Disabled() is true the monitor stops every provider, emits
-// nothing and Source reports "disabled"; when the file goes away it rescans
-// and carries on.
+// While platform.Disabled() is true the monitor stops every provider and
+// emits nothing; Stats.Disabled says so, and Source stays within cn_proc |
+// osquery | poll (poll: nothing better runs). Attribute then answers from
+// the table as it stood, without reading /proc or queueing events. When
+// the file goes away the monitor rescans and carries on.
 //
 // # Platforms and limits
 //
@@ -153,8 +204,6 @@
 //     source; an extension host whose environment cannot be read (another
 //     user's process while unprivileged, hardened processes on macOS) is
 //     only recognised through the agent's inherited environment.
-//   - Monitor.Source reports "disabled" while the kill switch is on, in
-//     addition to cn_proc, osquery and poll.
 //   - osquery rows are attributed by pid; a pid reused within the seconds
 //     before a row arrives can be attributed to the wrong process (the same
 //     limit internal/osqexec documents).

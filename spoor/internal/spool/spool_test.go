@@ -347,3 +347,45 @@ func TestHelperAppend(t *testing.T) {
 		}
 	}
 }
+
+// The hook supervisor reports its own failures (worker crash, timeout, bad
+// reply) as health.error records in the spool. They are counted by reason,
+// never accepted as health records; anything else claiming to be health
+// stays forged.
+func TestHookErrorsAreCountedNotTrusted(t *testing.T) {
+	dir := privateDir(t)
+	file := filepath.Join(dir, "health-20261111.ndjson")
+	health := func(mode, reason string) string {
+		return `{"v":1,"event":{"v":1,"id":"h","ts":"2026-11-11T00:00:00.000000Z","kind":"health","type":"health.error","source":"sensor","health":{"sensor_version":"x","mode":"` + mode + `","reason":"` + reason + `","detail":"worker killed"}}}`
+	}
+	lines := []string{
+		health("hook", "hook_worker_crash"),
+		health("hook", "hook_worker_timeout"),
+		health("daemon", "hook_worker_crash"),           // not the hook's mode
+		health("hook", "outbox.dropped_unshipped"),      // not a hook reason
+		health("hook", "hook_"),                         // empty code
+		health("hook", "hook_X; rm -rf"),                // outside the alphabet
+		health("hook", "hook_"+strings.Repeat("a", 41)), // too long
+	}
+	if err := os.WriteFile(file, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := NewReader(ReaderOptions{Roots: func() []Root { return []Root{myRoot(dir)} }})
+	evs, probs, _ := r.Poll(context.Background())
+	if len(evs) != 0 {
+		t.Fatalf("health claims became events: %+v", evs)
+	}
+	var hook []string
+	forged := 0
+	for _, p := range probs {
+		switch p.Kind {
+		case "hook_error":
+			hook = append(hook, p.Detail)
+		case "forged_kind":
+			forged++
+		}
+	}
+	if strings.Join(hook, ",") != "hook_worker_crash,hook_worker_timeout" || forged != 5 {
+		t.Errorf("hook errors %v, forged %d; problems %+v", hook, forged, probs)
+	}
+}

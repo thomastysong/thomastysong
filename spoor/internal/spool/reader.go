@@ -36,7 +36,7 @@ type ReaderOptions struct {
 
 // Problem is something the reader refused or noticed.
 type Problem struct {
-	Kind   string // forged_kind | owner_mismatch | symlink_refused | not_regular | oversize_line | rate_limited | malformed | truncated
+	Kind   string // forged_kind | hook_error | owner_mismatch | symlink_refused | not_regular | oversize_line | rate_limited | malformed | truncated
 	Path   string
 	Detail string
 }
@@ -245,6 +245,13 @@ func decode(line []byte, root Root, path string) (*event.Event, *Problem) {
 		return nil, &Problem{Kind: "malformed", Path: path}
 	}
 	e := rec.Event
+	if reason, ok := hookErrorReason(e); ok {
+		// The hook supervisor's own failure reports (worker crash, timeout,
+		// bad reply). They are claims like everything else in a user spool,
+		// so they never become health records: only the reason code is
+		// passed on, for the daemon to count.
+		return nil, &Problem{Kind: "hook_error", Path: path, Detail: reason}
+	}
 	if e.Kind != event.KindActivity {
 		return nil, &Problem{Kind: "forged_kind", Path: path, Detail: "kind " + clipStr(string(e.Kind), 32) + " is not accepted from a user spool"}
 	}
@@ -261,6 +268,26 @@ func decode(line []byte, root Root, path string) (*event.Event, *Problem) {
 		e.Content = &event.Content{PromptText: c.PromptText, ToolInput: c.ToolInput, ToolOutput: c.ToolOutput, FileContent: c.FileContent}
 	}
 	return e, nil
+}
+
+// hookErrorReason recognises a hook supervisor health.error record and
+// returns its reason code: "hook_" followed by 1 to 40 lower-case letters
+// or underscores (internal/hookcmd's Reason* constants). Anything else is
+// not a hook error.
+func hookErrorReason(e *event.Event) (string, bool) {
+	if e.Kind != event.KindHealth || e.Type != event.TypeHealthError || e.Health == nil || e.Health.Mode != "hook" {
+		return "", false
+	}
+	r := e.Health.Reason
+	if !strings.HasPrefix(r, "hook_") || len(r) > 45 || len(r) == 5 {
+		return "", false
+	}
+	for i := 5; i < len(r); i++ {
+		if c := r[i]; !(c >= 'a' && c <= 'z' || c == '_') {
+			return "", false
+		}
+	}
+	return r, true
 }
 
 func clipStr(s string, n int) string {

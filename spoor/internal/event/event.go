@@ -84,6 +84,11 @@ const (
 	TypeAgentProcessStart  = "agent.process.start"
 	TypeAgentProcessStop   = "agent.process.stop"
 	TypeProcessExec        = "process.exec" // child process attributed to an agent session
+	// TypePayloadAnomaly is written by the hook when a payload could not be
+	// read as an agent event (empty, malformed, too large, too deep): size
+	// and a digest of the raw bytes instead of nothing, so padding a payload
+	// past the caps is visible rather than an evasion.
+	TypePayloadAnomaly = "hook.payload_anomaly"
 )
 
 // Non-activity event types.

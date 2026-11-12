@@ -241,11 +241,30 @@ var (
 	dropperRe     *regexp.Regexp
 )
 
+// maxImageURL bounds the image URL a regex capture hands to the URL checks
+// (see textRegexes). Comment bodies are scanned whole: ScanText's input cap
+// already bounds them, and a length bound would let padding hide an
+// instruction.
+const maxImageURL = 2000
+
+// clipBytes cuts s to at most n bytes without splitting a UTF-8 sequence.
+func clipBytes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && n < len(s) && s[n]&0xC0 == 0x80 {
+		n--
+	}
+	return s[:n]
+}
+
 func textRegexes() {
+	// Go's RE2 rejects counted repeats above 1000 ({1,4096} panics in
+	// MustCompile), so lengths are bounded after matching instead.
 	textReOnce.Do(func() {
-		htmlCommentRe = regexp.MustCompile(`(?s)<!--(.{1,4096}?)-->`)
-		mdCommentRe = regexp.MustCompile(`(?m)^\[(?://|comment)\]:\s*(?:#|<>)\s*[("](.{1,2000})[)"]\s*$`)
-		imageRe = regexp.MustCompile(`(?i)(?:!\[[^\]]{0,200}\]\(\s*<?|<img\b[^>]{0,400}?\bsrc\s*=\s*["']?)(https?://[^)\s"'>]{1,2000})`)
+		htmlCommentRe = regexp.MustCompile(`(?s)<!--(.*?)-->`)
+		mdCommentRe = regexp.MustCompile(`(?m)^\[(?://|comment)\]:\s*(?:#|<>)\s*[("](.+)[)"]\s*$`)
+		imageRe = regexp.MustCompile(`(?i)(?:!\[[^\]]{0,200}\]\(\s*<?|<img\b[^>]{0,400}?\bsrc\s*=\s*["']?)(https?://[^)\s"'>]+)`)
 		base64RunRe = regexp.MustCompile(`[A-Za-z0-9+/_\-]{40,}={0,2}`)
 		dropperRe = regexp.MustCompile(`(?i)\b(?:curl|wget|bash|/bin/sh|sh -c|eval|powershell|iex|invoke-expression|invoke-webrequest|nc -|python3? -c|base64 -d|osascript|chmod \+x)\b`)
 	})
@@ -424,7 +443,7 @@ func scanImages(text string, ms *markerSet) {
 		return
 	}
 	for _, m := range imageRe.FindAllStringSubmatch(text, 64) {
-		u := m[1]
+		u := clipBytes(m[1], maxImageURL)
 		p := splitURL(u)
 		suspicious := false
 		badge := badgeHosts[normalizeHost(p.hostport)] && !strings.Contains(p.path, "/dynamic") && !strings.Contains(p.path, "/endpoint")

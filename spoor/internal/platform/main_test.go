@@ -40,6 +40,11 @@ type unprivReport struct {
 	ContainerID   string
 	Runtime       string
 	PodUID        string
+	// CapEff is the helper's own effective capability set as the kernel
+	// reports it ("" when unreadable), so a test can tell "file
+	// capabilities were not honoured here" from a wrong answer.
+	CapEff  string
+	IsAdmin bool
 }
 
 func runReportHelper() {
@@ -71,6 +76,12 @@ func runReportHelper() {
 	r.HostIDSource = HostIDSource()
 	r.ContainerID, r.Runtime = ContainerOf(os.Getpid())
 	r.PodUID = PodOf(os.Getpid())
+	r.IsAdmin = IsAdmin()
+	if b, err := os.ReadFile("/proc/self/status"); err == nil {
+		if eff, ok := parseCapEff(b); ok {
+			r.CapEff = fmt.Sprintf("%016x", eff)
+		}
+	}
 	_ = json.NewEncoder(os.Stdout).Encode(r)
 }
 

@@ -68,6 +68,15 @@ const (
 	// is a few KiB and carries a unique event_id and timestamp, so this
 	// covers at least the first record of a file.
 	fpBytes = 4 << 10
+	// admitSlack (seconds) keeps a file written just after its pattern was
+	// admitted from passing for older content. The kernel stamps mtime
+	// from its coarse clock, which trails time.Now by up to a tick (3.8 ms
+	// measured here), and admission is kept in whole seconds: a pattern
+	// admitted in the first milliseconds of second S and a file created
+	// right after it can carry an mtime in second S-1. Content moved in
+	// that is less than two seconds older than the admission is read; the
+	// rule exists to keep pre-deployment logs out, not seconds.
+	admitSlack = 2
 )
 
 func newAdapterRunner(d *daemon) *adapterRunner {
@@ -249,7 +258,7 @@ func (r *adapterRunner) readFile(ps *adPass, path, format string, fresh bool, ad
 		// A new file under a known name (rename-then-create rotation,
 		// delete and recreate): it was created after the last pass.
 		c = adCkpt{ID: id}
-	case fresh || fi.ModTime().Unix() < admitted:
+	case fresh || fi.ModTime().Unix() < admitted-admitSlack:
 		// It existed when its pattern was first looked at, or its content
 		// did: no retroactive collection.
 		c = adCkpt{ID: id, Off: size}

@@ -365,7 +365,8 @@ func (e *Engine) evaluate(ev *event.Event, fired map[string]bool) (res Result) {
 			continue
 		}
 		if r.response != ResponseNone && blockable(ev.Type) && responseRank(r.response) > responseRank(res.Response) {
-			res.Response, res.Rule, res.Reason = r.response, r.ID, reasonFor(r)
+			res.Response, res.Rule = r.response, r.ID
+			res.Reason = cutString(reasonFor(r)+inheritedReason(fields), maxReason)
 		}
 		if !r.emit {
 			continue
@@ -494,6 +495,9 @@ func (e *Engine) updateSession(st *sessionState, ev *event.Event, now time.Time,
 	if ev.Tool != nil && ev.Tool.UseID != "" {
 		useID = stateRef(ev.Tool.UseID)
 	}
+	// The result of a tool call whose request this session already saw
+	// carries the same input: its written content was analysed then.
+	resultOfSeen := ev.Type == event.TypeToolPost && useID != "" && st.seenUse(useID)
 	switch ev.Type {
 	case event.TypeToolPre:
 		st.toolCalls++
@@ -513,17 +517,9 @@ func (e *Engine) updateSession(st *sessionState, ev *event.Event, now time.Time,
 		cwd = ev.Session.CWD
 	}
 	goos := e.osName(ev)
-	execs := execPaths(ev)
-	if len(execs) > 0 || f["shell.parse_ok"] != nil {
-		f["session.runs_written_file"] = false
-		for _, p := range execs {
-			if d := pathDigest(p, cwd, e.o.Home, goos); d != "" && st.hasWritten(d) {
-				f["session.runs_written_file"] = true
-				f["session.written_exec_path"] = p
-				break
-			}
-		}
-	}
+	// First what the event runs (it may inherit a written script's facts,
+	// writes included), then what it writes.
+	inh := e.runWritten(st, ev, cwd, goos)
 	for i, p := range writtenPaths(ev) {
 		if i >= 64 {
 			break
@@ -532,8 +528,17 @@ func (e *Engine) updateSession(st *sessionState, ev *event.Event, now time.Time,
 			st.addWritten(d)
 		}
 	}
+	if !resultOfSeen {
+		e.rememberScripts(st, ev, cwd, goos, now, stop)
+	}
 
-	if kinds, checked, truncated := st.secretFlow(ev, stop); checked {
+	kinds, checked, truncated := st.secretFlow(ev, stop)
+	if inh.flowChk {
+		kinds = mergeKinds(kinds, inh.flow)
+		checked = true
+		truncated = truncated || inh.flowCut
+	}
+	if checked {
 		f["session.secret_flow"] = len(kinds) > 0
 		if len(kinds) > 0 {
 			f["session.secret_flow_kinds"] = kinds

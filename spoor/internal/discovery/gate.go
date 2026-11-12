@@ -37,16 +37,20 @@ const (
 // Gate refusals. They are counted in the ledger by class: errDenied-like
 // refusals as Denied, size and type refusals as Skipped.
 var (
-	errEscape   = errors.New("path resolves outside its root")
-	errOwner    = errors.New("file not owned by the expected user")
-	errTooLarge = errors.New("file exceeds the size cap")
-	errPersonal = errors.New("personal directory not inspected")
-	errBudget   = errors.New("scan budget exhausted")
-	errDeadline = errors.New("scan deadline reached")
-	errSymlink  = errors.New("symbolic link not followed")
-	errNotReg   = errors.New("not a regular file")
-	errNotDir   = errors.New("not a directory")
-	errBadPath  = errors.New("path not acceptable")
+	errEscape = errors.New("path resolves outside its root")
+	errOwner  = errors.New("file not owned by the expected user")
+	// errUntrusted refuses a file in an account's home that someone other
+	// than the account (or root) owns or can write; it is wrapped with
+	// the reason and reported as posture (untrusted_owner).
+	errUntrusted = errors.New("file owner or permissions not trusted")
+	errTooLarge  = errors.New("file exceeds the size cap")
+	errPersonal  = errors.New("personal directory not inspected")
+	errBudget    = errors.New("scan budget exhausted")
+	errDeadline  = errors.New("scan deadline reached")
+	errSymlink   = errors.New("symbolic link not followed")
+	errNotReg    = errors.New("not a regular file")
+	errNotDir    = errors.New("not a directory")
+	errBadPath   = errors.New("path not acceptable")
 )
 
 // fkind is the type of a directory entry, as seen without following links.
@@ -65,6 +69,7 @@ type fmeta struct {
 	size     int64
 	perm     os.FileMode
 	owner    string // uid on POSIX; "" when the OS has no simple owner
+	group    string // gid on POSIX
 	hasOwner bool
 	nlink    uint64
 	mtime    time.Time
@@ -85,6 +90,11 @@ type loc struct {
 	// privileged ("" for system locations). Files are checked against the
 	// owner their reader passes; directory listings against this.
 	uid string
+	// inHome is set when the path lies inside the account's home (the home
+	// itself, or a project below it): files there are read only when the
+	// account or root owns them and nobody else can write them, whether
+	// or not the scan is privileged (see checkFile).
+	inHome bool
 }
 
 func (l loc) String() string {
@@ -128,6 +138,13 @@ type gate struct {
 	cache     map[string]cachedFile
 	cacheSize int64
 	expired   bool
+
+	// adminUID is root's uid ("0"; the package's tests substitute their
+	// own). untrusted, when set, hears about every file checkFile refuses.
+	adminUID  string
+	untrusted func(l loc, m fmeta, why string)
+	acctOnce  sync.Once
+	acct      *acctDB
 }
 
 type cachedFile struct {
@@ -144,6 +161,7 @@ func newGate(ctx context.Context, led *ledger, hostRoot string, priv bool, goos 
 	return &gate{
 		ctx: ctx, led: led, op: op, priv: priv, goos: goos, hostRoot: hostRoot,
 		entries: maxEntries, hashLeft: maxHashBytes, scopeName: "machine-wide scan", cache: map[string]cachedFile{},
+		adminUID: "0",
 	}, nil
 }
 
@@ -254,7 +272,7 @@ func (g *gate) account(l loc, err error) error {
 	case errors.Is(err, errPersonal):
 		g.led.denied()
 		g.led.note("personal directory not inspected: " + homeRelNote(l))
-	case errors.Is(err, fs.ErrPermission), errors.Is(err, errEscape), errors.Is(err, errOwner):
+	case errors.Is(err, fs.ErrPermission), errors.Is(err, errEscape), errors.Is(err, errOwner), errors.Is(err, errUntrusted):
 		g.led.denied()
 		g.led.note("denied (" + reason(err) + "): " + homeRelNote(l))
 	case errors.Is(err, errSymlink), errors.Is(err, errNotReg), errors.Is(err, errTooLarge), errors.Is(err, errBudget), errors.Is(err, errBadPath):
@@ -268,6 +286,10 @@ func (g *gate) account(l loc, err error) error {
 }
 
 func reason(err error) string {
+	if errors.Is(err, errUntrusted) {
+		// The wrapped text names the owner or the mode at fault.
+		return err.Error()
+	}
 	for _, e := range []error{errEscape, errOwner, errSymlink, errNotReg, errTooLarge, errBudget, errBadPath} {
 		if errors.Is(err, e) {
 			return e.Error()
@@ -296,8 +318,8 @@ func (g *gate) checkOwner(l loc, m fmeta, owner string) error {
 	return nil
 }
 
-// readFile reads a whole regular file of at most max bytes. When the scan
-// runs privileged and owner is set, the file must belong to that uid. The
+// readFile reads a whole regular file of at most max bytes. When owner is
+// set the file must pass checkFile for that uid. The
 // result is cached for the rest of the scan, so the many probes that look
 // at one settings file open it once.
 func (g *gate) readFile(l loc, owner string, max int64) ([]byte, fmeta, error) {
@@ -371,7 +393,9 @@ func (g *gate) open(l loc, owner string) (*os.File, fmeta, error) {
 		f.Close()
 		return nil, m, errNotReg
 	}
-	if err := g.checkOwner(l, m, owner); err != nil {
+	// Checked on the open descriptor, before anything is read: a refused
+	// file's content is never seen.
+	if err := g.checkFile(l, m, owner); err != nil {
 		f.Close()
 		return nil, m, err
 	}

@@ -17,9 +17,13 @@ import (
 // byte belongs to at most one value.
 const scanWindow = 64 << 10
 
-// fp8 is the house fingerprint: first 8 hex digits of SHA-256. It lets an
-// analyst see that two redacted values are the same credential without
-// seeing either.
+// fp8 is the house fingerprint: first 8 hex digits of an UNKEYED SHA-256.
+// It lets an analyst on the endpoint see that two redacted values are the
+// same credential without seeing either. It may appear only inside a
+// classify-shaped marker ("[REDACTED:<kind>:<fp8>]", outputMark): that exact
+// shape is what package privacy rewrites on the way out (keyed with the
+// tenant key, or removed), because an unkeyed fingerprint of a short secret
+// is an offline guessing oracle. Anywhere else, use runFP8.
 func fp8(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:4])
@@ -51,24 +55,24 @@ func window(s string) string {
 	return s
 }
 
-var (
+func buildReferencePatterns(t *tables) {
 	// reRef matches a value that is nothing but a reference to a secret kept
 	// elsewhere: ${VAR}, ${env:VAR}, ${input:id} (VS Code prompts), $VAR,
 	// %VAR%, {env:VAR} / {file:path} (opencode), ${{ secrets.X }} (Continue).
 	// ${VAR:-default} is deliberately not matched: the default is a literal
 	// and has to be scanned.
-	reRef = regexp.MustCompile(`^(?:\$\{\{[^{}]*\}\}|\$\{[A-Za-z_][\w.]*(?::[A-Za-z_][\w./\-]*)?\}|\$[A-Za-z_]\w*|\$env:[A-Za-z_]\w*|%[A-Za-z_]\w*%|\{(?:env|file|input|secret|secrets):[^{}]*\})$`)
+	t.reRef = regexp.MustCompile(`^(?:\$\{\{[^{}]*\}\}|\$\{[A-Za-z_][\w.]*(?::[A-Za-z_][\w./\-]*)?\}|\$[A-Za-z_]\w*|\$env:[A-Za-z_]\w*|%[A-Za-z_]\w*%|\{(?:env|file|input|secret|secrets):[^{}]*\})$`)
 	// reAuthScheme strips "Bearer " and friends so "Bearer ${TOKEN}" counts
 	// as a reference.
-	reAuthScheme = regexp.MustCompile(`^(?i)(?:bearer|basic|token|bot|apikey|api-key|key|digest)\s+`)
-)
+	t.reAuthScheme = regexp.MustCompile(`^(?i)(?:bearer|basic|token|bot|apikey|api-key|key|digest)\s+`)
+}
 
 // isReference reports whether v only points at a secret (a variable, an
 // input prompt, a secret-store lookup) instead of containing one.
 func isReference(v string) bool {
 	v = strings.TrimSpace(v)
-	v = reAuthScheme.ReplaceAllString(v, "")
-	return reRef.MatchString(strings.TrimSpace(v))
+	v = tab().reAuthScheme.ReplaceAllString(v, "")
+	return tab().reRef.MatchString(strings.TrimSpace(v))
 }
 
 // isDocPlaceholder recognises the stand-ins documentation uses where a
@@ -122,24 +126,27 @@ func nameWords(name string) []string {
 	return words
 }
 
-var (
-	secretWords = map[string]bool{
+func buildSecretWords(t *tables) {
+	t.secretWords = map[string]bool{
 		"token": true, "secret": true, "secrets": true, "password": true, "passwd": true,
 		"pwd": true, "passphrase": true, "credential": true, "credentials": true,
 		"apikey": true, "bearer": true, "jwt": true, "pat": true, "cookie": true,
 		"authorization": true,
 	}
 	// keyQualifiers turn the neutral word "key" into a credential name.
-	keyQualifiers = map[string]bool{
+	t.keyQualifiers = map[string]bool{
 		"api": true, "access": true, "private": true, "secret": true, "auth": true,
 		"encryption": true, "signing": true, "master": true, "license": true, "ssh": true,
 		"account": true, "subscription": true, "service": true,
 	}
-	secretStems = []string{"password", "passwd", "secret", "apikey", "accesskey", "privatekey",
-		"credential", "accesstoken", "authtoken", "bearer"}
 	// paramWords are additionally treated as credentials in a URL query,
 	// where short names are the norm (SAS "sig", "?key=").
-	paramWords = map[string]bool{"auth": true, "sig": true, "signature": true, "key": true, "code": true}
+	t.paramWords = map[string]bool{"auth": true, "sig": true, "signature": true, "key": true, "code": true}
+}
+
+var (
+	secretStems = []string{"password", "passwd", "secret", "apikey", "accesskey", "privatekey",
+		"credential", "accesstoken", "authtoken", "bearer"}
 )
 
 // isSecretName reports whether a variable, flag or header name conventionally
@@ -152,13 +159,13 @@ func isSecretName(name string) bool {
 	words := nameWords(name)
 	hasKey, hasQual := false, false
 	for _, w := range words {
-		if secretWords[w] {
+		if tab().secretWords[w] {
 			return true
 		}
 		if w == "key" || w == "keys" {
 			hasKey = true
 		}
-		if keyQualifiers[w] {
+		if tab().keyQualifiers[w] {
 			hasQual = true
 		}
 	}
@@ -179,7 +186,7 @@ func isSecretParam(name string) bool {
 		return true
 	}
 	for _, w := range nameWords(name) {
-		if paramWords[w] {
+		if tab().paramWords[w] {
 			return true
 		}
 	}
@@ -241,15 +248,15 @@ type marker func(kind, secret string) string
 func outputMark(kind, secret string) string { return "[REDACTED:" + kind + ":" + fp8(secret) + "]" }
 func hashMark(string, string) string        { return "[REDACTED]" }
 
-var (
-	reURLInText = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.\-]{1,24}://[^\s"'<>` + "`" + `]+`)
+func buildTextPatterns(t *tables) {
+	t.reURLInText = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.\-]{1,24}://[^\s"'<>` + "`" + `]+`)
 	// reAssign finds NAME=value where NAME is checked by isSecretName.
-	reAssign = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_.\-]*)=("[^"]*"|'[^']*'|[^\s"';&|]+)`)
+	t.reAssign = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_.\-]*)=("[^"]*"|'[^']*'|[^\s"';&|]+)`)
 	// reAuthHeader finds an Authorization header written inline (curl -H ...).
-	reAuthHeader = regexp.MustCompile(`(?i)((?:proxy-)?authorization["']?\s*[:=]\s*["']?(?:(?:bearer|basic|token|digest)\s+)?)([^\s"'\\]+)`)
-	reHeaderLine = regexp.MustCompile(`^\s*([A-Za-z0-9_\-]+)\s*[:=]\s*(.*)$`)
-	reEnvName    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.\-]*$`)
-)
+	t.reAuthHeader = regexp.MustCompile(`(?i)((?:proxy-)?authorization["']?\s*[:=]\s*["']?(?:(?:bearer|basic|token|digest)\s+)?)([^\s"'\\]+)`)
+	t.reHeaderLine = regexp.MustCompile(`^\s*([A-Za-z0-9_\-]+)\s*[:=]\s*(.*)$`)
+	t.reEnvName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.\-]*$`)
+}
 
 // redactURL removes what a URL carries as credential: userinfo, values of
 // secret-named query parameters and, when paths is set, opaque path tokens.
@@ -344,12 +351,12 @@ func (r redactor) text(s string) string {
 	// Each rule is gated on a literal it cannot match without. The hash
 	// runs these rules over whole arguments, which can be megabytes.
 	if strings.Contains(s, "://") {
-		s = reURLInText.ReplaceAllStringFunc(s, func(m string) string {
+		s = tab().reURLInText.ReplaceAllStringFunc(s, func(m string) string {
 			return redactURL(m, r.mark, r.scan)
 		})
 	}
 	if strings.Contains(s, "=") {
-		s = reAssign.ReplaceAllStringFunc(s, func(m string) string {
+		s = tab().reAssign.ReplaceAllStringFunc(s, func(m string) string {
 			k, v, _ := strings.Cut(m, "=")
 			bare := strings.Trim(v, `"'`)
 			if !isSecretName(k) || bare == "" || isReference(bare) || marked(bare) {
@@ -359,8 +366,8 @@ func (r redactor) text(s string) string {
 		})
 	}
 	if containsFold(s, "authorization") {
-		s = reAuthHeader.ReplaceAllStringFunc(s, func(m string) string {
-			sub := reAuthHeader.FindStringSubmatch(m)
+		s = tab().reAuthHeader.ReplaceAllStringFunc(s, func(m string) string {
+			sub := tab().reAuthHeader.FindStringSubmatch(m)
 			if sub == nil || isReference(sub[2]) || marked(sub[2]) {
 				return m
 			}
@@ -430,13 +437,13 @@ func (r redactor) value(kind, v string) string {
 
 // headerLine redacts "Name: value" as passed to --header.
 func (r redactor) headerLine(line string) string {
-	m := reHeaderLine.FindStringSubmatch(line)
+	m := tab().reHeaderLine.FindStringSubmatch(line)
 	if m == nil {
 		return r.text(line)
 	}
 	name, val := m[1], m[2]
 	if isSecretName(name) || isSecretParam(name) {
-		scheme := reAuthScheme.FindString(val)
+		scheme := tab().reAuthScheme.FindString(val)
 		return name + ": " + scheme + r.value("header", strings.TrimSpace(val[len(scheme):]))
 	}
 	return name + ": " + r.text(val)
@@ -446,7 +453,7 @@ func (r redactor) headerLine(line string) string {
 // emitted, wherever it is written.
 func (r redactor) envPair(kv string) string {
 	k, v, ok := strings.Cut(kv, "=")
-	if !ok || !reEnvName.MatchString(k) {
+	if !ok || !tab().reEnvName.MatchString(k) {
 		return r.text(kv)
 	}
 	return k + "=" + r.value("env", v)
@@ -472,7 +479,7 @@ func (r redactor) args(args []string, container bool) []string {
 			out[i] = r.headerLine(a)
 		case container && (prev == "-e" || prev == "--env"):
 			out[i] = r.envPair(a)
-		case container && strings.HasPrefix(a, "-e") && len(a) > 2 && !strings.HasPrefix(a, "-e=") && reEnvAssign.MatchString(a[2:]):
+		case container && strings.HasPrefix(a, "-e") && len(a) > 2 && !strings.HasPrefix(a, "-e=") && tab().reEnvAssign.MatchString(a[2:]):
 			out[i] = "-e" + r.envPair(a[2:]) // attached form: -eNAME=value
 		case strings.HasPrefix(a, "-") && strings.Contains(a, "="):
 			flag, v, _ := strings.Cut(a, "=")
@@ -487,7 +494,7 @@ func (r redactor) args(args []string, container bool) []string {
 			default:
 				out[i] = flag + "=" + r.text(v)
 			}
-		case r.scan && len(a) >= 32 && !isFlag(a) && opaqueToken(a) && !reHex.MatchString(a) && !reUUID.MatchString(a):
+		case r.scan && len(a) >= 32 && !isFlag(a) && opaqueToken(a) && !tab().reHex.MatchString(a) && !tab().reUUID.MatchString(a):
 			// A long random word passed as an argument is a credential more
 			// often than not. With no pattern to confirm it, it is withheld
 			// from output (when in doubt, redact) but raises no flag.

@@ -10,8 +10,19 @@ import (
 	"strconv"
 )
 
-// IsPrivileged reports whether the process runs as root.
-func IsPrivileged() bool { return os.Geteuid() == 0 }
+// IsPrivileged reports whether the process can read every account's files
+// and processes: it runs as root, or (Linux) its effective capability set
+// holds both CAP_DAC_READ_SEARCH and CAP_SYS_PTRACE, which is how the
+// Kubernetes node sensor runs (uid 65532, file capabilities). It answers
+// for reading only; IsAdmin says whether the process may also create files
+// for other accounts and change their owner.
+func IsPrivileged() bool { return os.Geteuid() == 0 || capPrivileged() }
+
+// IsAdmin reports whether the process runs as root, which is what creating
+// another account's spool directory and chowning it to that account need.
+// A capability-only sensor (IsPrivileged without IsAdmin) reads everything
+// but can only write files it owns.
+func IsAdmin() bool { return os.Geteuid() == 0 }
 
 // CurrentUser returns the account this process runs as. Home is the account
 // database's home directory when it exists, otherwise $HOME; it is empty when

@@ -113,12 +113,13 @@ func isAbsLogical(p string) bool {
 func (s *scanner) locFor(full string, uc *userCtx, project string) loc {
 	if project != "" {
 		if rel, ok := relLogical(project, full, s.goos); ok {
-			return loc{root: cleanLogical(project), rel: rel, user: true, uid: uidOf(uc)}
+			inHome := uc != nil && uc.home != "" && withinLogical(uc.home, project, s.goos)
+			return loc{root: cleanLogical(project), rel: rel, user: true, uid: uidOf(uc), inHome: inHome}
 		}
 	}
 	if uc != nil && uc.home != "" {
 		if rel, ok := relLogical(uc.home, full, s.goos); ok {
-			return loc{root: uc.home, rel: rel, home: true, user: true, uid: uc.u.UID}
+			return loc{root: uc.home, rel: rel, home: true, user: true, uid: uc.u.UID, inHome: true}
 		}
 		// A user-context path outside the home came from the user's own
 		// data (a relocated state directory in their environment, a path in

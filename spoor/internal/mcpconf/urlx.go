@@ -19,12 +19,14 @@ type urlParts struct {
 	fragment string // without "#"
 }
 
-var reScheme = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.\-]*://`)
+func buildScheme(t *tables) {
+	t.reScheme = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.\-]*://`)
+}
 
 func splitURL(raw string) urlParts {
 	var u urlParts
 	s := strings.TrimSpace(raw)
-	if m := reScheme.FindString(s); m != "" {
+	if m := tab().reScheme.FindString(s); m != "" {
 		u.scheme = strings.ToLower(m[:len(m)-3])
 		s = s[len(m):]
 	}
@@ -141,17 +143,17 @@ func urlCredential(raw string) bool {
 	return false
 }
 
-var (
-	reUUID = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
-	reHex  = regexp.MustCompile(`(?i)^[0-9a-f]+$`)
-	reTok  = regexp.MustCompile(`^[A-Za-z0-9_\-.~+=]+$`)
-)
+func buildTokenPatterns(t *tables) {
+	t.reUUID = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	t.reHex = regexp.MustCompile(`(?i)^[0-9a-f]+$`)
+	t.reTok = regexp.MustCompile(`^[A-Za-z0-9_\-.~+=]+$`)
+}
 
 // opaqueToken reports whether s reads as machine-generated: long, one run of
 // token characters, a mix of letters and digits, high entropy and few
 // separators. Hyphenated names ("prod-us-east-1-cluster-2024") are not opaque.
 func opaqueToken(s string) bool {
-	if len(s) < 24 || !reTok.MatchString(s) || isReference(s) {
+	if len(s) < 24 || !tab().reTok.MatchString(s) || isReference(s) {
 		return false
 	}
 	var digits, letters, seps int
@@ -172,7 +174,7 @@ func opaqueToken(s string) bool {
 // identifierShaped reports a UUID or a short hex id: opaque, but more often
 // a tenant or workspace id than a credential.
 func identifierShaped(s string) bool {
-	return reUUID.MatchString(s) || (reHex.MatchString(s) && len(s) <= 40)
+	return tab().reUUID.MatchString(s) || (tab().reHex.MatchString(s) && len(s) <= 40)
 }
 
 // pathToken classifies one URL path segment.

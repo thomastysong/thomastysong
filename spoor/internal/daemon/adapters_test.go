@@ -336,6 +336,47 @@ func TestAdapterInodeReuseNotARename(t *testing.T) {
 	}
 }
 
+// TestAdapterAdmissionCoarseClock is the regression test for a flake of
+// TestAdapterHardLinkReadOnce (1 run in 200: map[control:2 linked:2], the
+// first record of a new file lost). The kernel stamps mtime from a coarse
+// clock that trails time.Now by a few milliseconds, and a pattern's
+// admission is kept in whole seconds: a pattern admitted in the first
+// milliseconds of a second and a file created right after it got an mtime
+// in the previous second and was taken for content older than the
+// admission. Simulated here deterministically with that mtime.
+func TestAdapterAdmissionCoarseClock(t *testing.T) {
+	a := newAdapterFixture(t, "*.ndjson")
+	a.r.step() // admits the pattern
+	var admitted int64
+	for _, at := range a.r.pats {
+		admitted = at
+	}
+	if admitted == 0 {
+		t.Fatal("pattern not admitted")
+	}
+	fresh := a.path("fresh.ndjson")
+	mustWrite(t, fresh, a.rec("just-after"), 0o600)
+	// The coarse clock was 1 ms behind the second admission was taken in.
+	lag := time.Unix(admitted, 0).Add(-time.Millisecond)
+	if err := os.Chtimes(fresh, lag, lag); err != nil {
+		t.Fatal(err)
+	}
+	old := a.path("moved.ndjson")
+	mustWrite(t, old, a.rec("moved-in-old"), 0o600)
+	past := time.Unix(admitted-admitSlack-1, 0)
+	if err := os.Chtimes(old, past, past); err != nil {
+		t.Fatal(err)
+	}
+	a.r.step()
+	got := a.counts()
+	if got["just-after"] == 0 {
+		t.Errorf("a file written right after admission, its mtime a tick behind, was skipped: %v", got)
+	}
+	if got["moved-in-old"] != 0 {
+		t.Errorf("content older than the admission was collected: %v", got)
+	}
+}
+
 // TestAdapterHardLinkReadOnce: two names of one file are read once.
 func TestAdapterHardLinkReadOnce(t *testing.T) {
 	if runtime.GOOS == "windows" {

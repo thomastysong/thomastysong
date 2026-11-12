@@ -29,6 +29,10 @@ var (
 	currentVal     UserHome
 )
 
+// IsAdmin is IsPrivileged on Windows: an elevated token both reads every
+// profile and sets other accounts' ACLs.
+func IsAdmin() bool { return IsPrivileged() }
+
 // IsPrivileged reports whether the process token is elevated (an
 // administrator past UAC, or LocalSystem). Elevation cannot change during
 // the life of a process, so the answer is cached.

@@ -131,6 +131,11 @@ type Options struct {
 	OsqueryInterval time.Duration
 	// NoOsquery turns the osquery exec provider off.
 	NoOsquery bool
+	// SelfExes are absolute paths of spoor binaries whose hook processes
+	// are spoor's own and never reported (self.go): the installed binary
+	// the agents' hooks name, when it is not the one this process runs.
+	// They are compared by file identity, never by path.
+	SelfExes []string
 }
 
 // Stats are counters since New, for the heartbeat.
@@ -165,6 +170,18 @@ type Stats struct {
 	Osquery     string // osqexec status
 	OsqueryEvts uint64
 	Errors      uint64
+	// ProcsTotal is the number of live user-space processes in the table
+	// (kernel threads left out) at the last full scan; ProcsUnreadable how
+	// many of them refused the monitor with EACCES or EPERM. A sensor
+	// without the privilege to read other accounts' processes (no root, no
+	// CAP_SYS_PTRACE) sees their names but not their environment, and
+	// attributes none of them: this pair makes that visible in the
+	// heartbeat.
+	ProcsTotal      uint64
+	ProcsUnreadable uint64
+	// SelfExcluded counts spoor's own hook processes that were not
+	// reported (self.go).
+	SelfExcluded uint64
 }
 
 // Internal limits.
@@ -240,6 +257,8 @@ type Monitor struct {
 	idx   atomic.Pointer[catIndex]
 	idxAt atomic.Int64
 
+	selfSet atomic.Pointer[selfSet]
+
 	mu       sync.Mutex
 	nodes    map[int]*node
 	roots    map[procKey]*root
@@ -261,6 +280,7 @@ type counters struct {
 	queueDropped, overflows, readMisses, tableFull, errors         atomic.Uint64
 	canaryRuns, canaryHits, osqEvents                              atomic.Uint64
 	lastCanary                                                     atomic.Int64
+	procsTotal, procsUnreadable, selfExcluded                      atomic.Uint64
 }
 
 // New returns a Monitor. It does not start anything; Run does. Agents and
@@ -396,6 +416,10 @@ func (m *Monitor) Stats() Stats {
 		CanaryHits:   m.st.canaryHits.Load(),
 		OsqueryEvts:  m.st.osqEvents.Load(),
 		Errors:       m.st.errors.Load(),
+
+		ProcsTotal:      m.st.procsTotal.Load(),
+		ProcsUnreadable: m.st.procsUnreadable.Load(),
+		SelfExcluded:    m.st.selfExcluded.Load(),
 	}
 	if ns := m.st.lastCanary.Load(); ns != 0 {
 		s.LastCanary = time.Unix(0, ns)

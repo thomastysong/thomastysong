@@ -121,12 +121,13 @@ func runWorker(stdin io.Reader, stdout io.Writer, o opts, env Env) int {
 
 // adoptSupervisorRead folds in what the supervisor knows about stdin: that
 // it stopped waiting for the agent to close it (the payload may be a
-// prefix), and the size and digest of bytes it drained past the cap.
+// prefix), and the size (--stdin-bytes) and digest (envStdinSHA256, not
+// argv: see there) of bytes it drained past the cap.
 func (w *work) adoptSupervisorRead() {
 	if w.o.stdinCut {
 		w.in.timedOut = true
 	}
-	n, sum := w.o.stdinBytes, strings.ToLower(w.o.stdinSHA256)
+	n, sum := w.o.stdinBytes, strings.ToLower(handoffDigest(w.env.Getenv))
 	if n > int64(len(w.in.b)) && n >= w.in.total && isHexSHA256(sum) {
 		w.in.total, w.in.sum = n, sum
 	}

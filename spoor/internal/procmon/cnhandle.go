@@ -87,6 +87,10 @@ func (m *Monitor) cnFork(ppid, pid int) {
 	if p := m.nodes[ppid]; p != nil {
 		n.comm, n.name, n.exe, n.uid, n.user = p.comm, p.name, p.exe, p.uid, p.user
 		n.env = p.env
+		// Until it runs exec it is the parent's image: spoor's own hook if
+		// the parent was, a kernel thread if kthreadd forked it, and as
+		// readable as the parent.
+		n.self, n.kthread, n.unreadable = p.self, p.kthread, p.unreadable
 		if p.root != nil {
 			n.owner = p.root
 		} else {

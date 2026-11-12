@@ -31,6 +31,7 @@ type fakeProc struct {
 	cgroup    string
 	cwd       string
 	children  []int
+	flags     uint64 // stat field 9; 0 means an ordinary user process
 }
 
 const fixtureBoot = 1_800_000_000 // btime of the fixture host
@@ -82,8 +83,11 @@ func (h *fakeHost) add(p fakeProc) {
 	// Fields after the name: state ppid pgrp session tty tpgid flags minflt
 	// cminflt majflt cmajflt utime stime cutime cstime priority nice
 	// threads itreal starttime ...
-	stat := fmt.Sprintf("%d (%s) %c %d %d %d 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 %d 1000 10 18446744073709551615\n",
-		p.pid, p.comm, p.state, p.ppid, p.pid, p.pid, p.ticks)
+	if p.flags == 0 {
+		p.flags = 4194560 // PF_RANDOMIZE | PF_SUPERPRIV, as an ordinary shell has
+	}
+	stat := fmt.Sprintf("%d (%s) %c %d %d %d 0 -1 %d 0 0 0 0 0 0 0 0 20 0 1 0 %d 1000 10 18446744073709551615\n",
+		p.pid, p.comm, p.state, p.ppid, p.pid, p.pid, p.flags, p.ticks)
 	h.write(rel(d, h.root, "stat"), stat)
 	h.write(rel(d, h.root, "cmdline"), strings.Join(p.args, "\x00")+"\x00")
 	h.write(rel(d, h.root, "status"), fmt.Sprintf("Name:\t%s\nState:\t%c\nPPid:\t%d\nUid:\t%s\t%s\t%s\t%s\n", p.comm, p.state, p.ppid, p.uid, p.uid, p.uid, p.uid))

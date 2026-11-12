@@ -31,26 +31,49 @@ const (
 // on spaces from the left would let it forge every later field. state is the
 // one-letter process state; startTicks is field 22.
 func parseStat(b []byte) (comm string, state byte, ppid int, startTicks uint64, ok bool) {
+	st, ok := parseStatFields(b)
+	return st.comm, st.state, st.ppid, st.start, ok
+}
+
+// pfKThread is PF_KTHREAD (include/linux/sched.h), set in the flags field
+// of every kernel thread. Kernel threads have no user memory, so their
+// environ, exe and cwd say nothing about readability.
+const pfKThread = 0x00200000
+
+// statFields are the fields of /proc/<pid>/stat the monitor uses.
+type statFields struct {
+	comm    string
+	state   byte
+	ppid    int
+	start   uint64 // field 22, clock ticks since boot
+	kthread bool   // PF_KTHREAD in field 9 (flags)
+}
+
+func parseStatFields(b []byte) (st statFields, ok bool) {
 	open := bytes.IndexByte(b, '(')
 	end := bytes.LastIndexByte(b, ')')
 	if open < 0 || end < open || end+2 > len(b) {
-		return "", 0, 0, 0, false
+		return statFields{}, false
 	}
-	comm = string(b[open+1 : end])
+	comm := string(b[open+1 : end])
 	f := bytes.Fields(b[end+1:])
-	// f[0] state, f[1] ppid, ..., f[19] starttime.
+	// f[0] state, f[1] ppid, ..., f[6] flags, ..., f[19] starttime.
 	if len(f) < 20 || len(f[0]) != 1 {
-		return "", 0, 0, 0, false
+		return statFields{}, false
 	}
 	pp, err := strconv.Atoi(string(f[1]))
 	if err != nil || pp < 0 || pp > maxPID {
-		return "", 0, 0, 0, false
+		return statFields{}, false
 	}
-	st, err := strconv.ParseUint(string(f[19]), 10, 64)
+	start, err := strconv.ParseUint(string(f[19]), 10, 64)
 	if err != nil {
-		return "", 0, 0, 0, false
+		return statFields{}, false
 	}
-	return comm, f[0][0], pp, st, true
+	// An unparsable flags field leaves the process counted as user space:
+	// a kernel's own stat file is well formed, so only a user process could
+	// be odd here, and it should not leave the readability count.
+	flags, _ := strconv.ParseUint(string(f[6]), 10, 64)
+	return statFields{comm: comm, state: f[0][0], ppid: pp, start: start, kthread: flags&pfKThread != 0}, true
 }
 
 // parseStatusUID returns the real uid from the "Uid:" line of

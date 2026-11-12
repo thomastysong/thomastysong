@@ -19,6 +19,10 @@ type ident struct {
 	// Linux procfs, Unix nanoseconds elsewhere. 0 means unknown.
 	key  uint64
 	comm string
+	// kthread marks a kernel thread (Linux PF_KTHREAD; pid 0 elsewhere).
+	// It has no user memory to read, so it is left out of the readability
+	// counts.
+	kthread bool
 }
 
 // source is a process-table backend. Implementations must be safe for
@@ -43,6 +47,10 @@ type source interface {
 	// backend cannot enumerate children without a full listing.
 	children(pid int) (kids []int, ok bool)
 	cwd(pid int) string
+	// exeID is the file identity (platform.FileID) of the process's
+	// executable, "" when it cannot be read. exe is the path the record
+	// names, for backends without a kernel link to the image.
+	exeID(pid int, exe string) string
 	workload(pid int) (id, runtime, pod string)
 }
 
@@ -95,7 +103,10 @@ func (platformSource) list() ([]ident, map[int]*platform.Proc, error) {
 }
 
 func identFromProc(p *platform.Proc) ident {
-	return ident{pid: p.PID, ppid: p.PPID, key: timeKey(p.Start), comm: p.Name}
+	// pid 0 is the kernel (macOS kernel_task, the Windows idle process);
+	// on Windows pid 4 is the System process, the kernel's threads.
+	kernel := p.PID == 0 || (runtime.GOOS == "windows" && p.PID == 4)
+	return ident{pid: p.PID, ppid: p.PPID, key: timeKey(p.Start), comm: p.Name, kthread: kernel}
 }
 
 // timeKey turns a start time into an identity key; 0 stays "unknown".
@@ -147,6 +158,20 @@ func (platformSource) cwd(pid int) string {
 		return ""
 	}
 	return cleanPath(c)
+}
+
+// exeID stats the executable path the process table reports. On macOS
+// and Windows that path is in the one namespace every process shares;
+// UNVERIFIED there: compiled, not executed in the build environment.
+func (platformSource) exeID(_ int, exe string) string {
+	if exe == "" || !filepath.IsAbs(exe) {
+		return ""
+	}
+	fi, err := os.Stat(exe)
+	if err != nil || !fi.Mode().IsRegular() {
+		return ""
+	}
+	return platform.FileID(fi, exe)
 }
 
 func (platformSource) workload(pid int) (string, string, string) {

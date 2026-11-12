@@ -1,10 +1,13 @@
 package procmon
 
 import (
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -403,9 +406,9 @@ func (m *Monitor) execEvent(n *node, o *observed, owner *root, marker string, no
 		args, cut = emitArgs(rec.Args)
 	}
 	ev := m.newEvent(event.TypeProcessExec, ts, now)
-	// The id is an unkeyed hash, so it covers only what the event shows: a
-	// digest of the raw command line would let a reader test guesses about
-	// the credentials redaction removed.
+	// The id covers the emitted (redacted) arguments only, through a keyed
+	// digest (argsDigest): a digest of the raw command line would let a
+	// reader test guesses about the credentials redaction removed.
 	ev.ID = event.StableID(ev.TS.Time, event.TypeProcessExec, strconv.Itoa(n.pid), strconv.FormatUint(n.key, 10), n.exe, argsDigest(args))
 	product := marker
 	attribution := "env_marker"
@@ -468,12 +471,31 @@ func (m *Monitor) execAncestors(n *node, owner *root) []string {
 	return out
 }
 
-// argsDigest summarises emitted (redacted) arguments for an event id. The
-// fingerprints in classify's markers are unkeyed hashes of the secrets
-// (the privacy layer rewrites them before anything leaves), so they are
-// left out: the id would otherwise carry them past that rewrite.
+// argsKey is this process's key for argsDigest: 32 random bytes drawn once.
+// It is not stored, so a process.exec id is stable within one run of the
+// sensor (the same exec seen by the connector and by a rescan gets one id)
+// and differs between runs; deduplication across a restart rests on pid,
+// start time and executable, which are in the record.
+var argsKey = sync.OnceValue(func() []byte {
+	k := make([]byte, 32)
+	// crypto/rand.Read does not fail on the supported systems (Go 1.24+
+	// aborts the process instead of returning short), so k is always full.
+	_, _ = rand.Read(k)
+	return k
+})
+
+// argsDigest summarises emitted arguments for an event id with an HMAC
+// under argsKey. The arguments are procmon's own redaction of the command
+// line; the privacy stage may redact more before a record leaves (a
+// stricter profile, a pattern only it knows). An unkeyed digest of
+// procmon's form would then be a guessing oracle: anyone holding the
+// shipped record could hash candidate values for what privacy removed and
+// compare with the id. Keyed, the id confirms nothing. The fingerprints in
+// classify's markers are left out as well: they are unkeyed hashes of the
+// secrets, and two runs of one command with different secrets are the same
+// action as far as the id is concerned.
 func argsDigest(args []string) string {
-	h := sha256.New()
+	h := hmac.New(sha256.New, argsKey())
 	for _, a := range args {
 		h.Write([]byte(stripFingerprints(a)))
 		h.Write([]byte{0})

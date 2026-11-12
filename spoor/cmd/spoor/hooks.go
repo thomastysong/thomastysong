@@ -129,6 +129,11 @@ type planResult struct {
 	DryRun bool       `json:"dry_run"`
 	Binary string     `json:"binary,omitempty"`
 	Plans  []planJSON `json:"plans"`
+	// Reinstall is set by --only-installed: one entry per hook file that
+	// held spoor entries, and what was done with it.
+	Reinstall []reinstallJSON `json:"reinstall,omitempty"`
+	// Guard is the configuration change --guard makes (guard.mode).
+	Guard  *guardJSON `json:"guard,omitempty"`
 	Errors []string   `json:"errors,omitempty"`
 }
 
@@ -140,32 +145,55 @@ func (a *app) hooksUninstall(args []string) int {
 	return a.hooksChange("uninstall", args)
 }
 
-func (a *app) hooksChange(verb string, args []string) int {
-	name := "hooks " + verb
-	about := `Registers ` + "`<binary> hook --agent <id>`" + ` in each agent's hook file for the scope,
+const hooksInstallAbout = `Registers ` + "`<binary> hook --agent <id>`" + ` in each agent's hook file for the scope,
 preserving every other key and hook. Files are replaced atomically with a
 timestamped backup beside them. --dry-run prints the plan and a diff of the
-changed lines only, with secrets redacted.`
+changed lines only, with secrets redacted.
+
+--only-installed rewrites spoor's entries only in the files that already
+hold them (package upgrades and the Fleet install scripts run it: entries
+an earlier release wrote report "modified" until install runs again). The
+options each file was installed with (--fail-closed, --timeout) are read
+back from its entries and kept unless given here; entries that no options
+reproduce (edited by hand) are listed and left alone. Nothing to do is not
+an error.
+
+--guard: guard mode (rules with response ask or block answer the agent) is
+not part of the hook registration but the setting guard.mode in the
+configuration every hook reads on each call, ` + "`<system config dir>/spoor.yaml`" + `
+(below --root when given). With --scope managed (or system) --guard sets
+guard.mode: advisory there, keeping the rest of the file as it is; when the
+file cannot be edited safely nothing is written and the exact change is
+printed. With --scope user it changes no machine configuration and prints
+the change for the administrator. In hook files --guard only allows
+--fail-closed.`
+
+func (a *app) hooksChange(verb string, args []string) int {
+	name := "hooks " + verb
+	about := hooksInstallAbout
+	usage := name + " [--scope managed|user|system] [--agents a,b] [--only-installed] [--guard [--fail-closed]] [--dry-run] [--json]"
 	if verb == "uninstall" {
 		about = `Removes spoor's registrations (and native telemetry settings spoor wrote)
 from each agent's hook file for the scope; foreign hooks and keys stay.
 A file that held nothing but spoor's entries is removed (kept as a backup).`
+		usage = name + " [--scope managed|user|system] [--agents a,b] [--dry-run] [--json]"
 	}
-	fs := a.newFlags(name, name+" [--scope managed|user|system] [--agents a,b] [--dry-run] [--json]", about)
+	fs := a.newFlags(name, usage, about)
 	var h hookFlags
 	h.register(fs, scopeInstallHelp)
 	dry := fs.Bool("dry-run", false, "print the plan and diffs, change nothing")
-	var guard, failClosed, coexist, force *bool
+	var guard, failClosed, coexist, force, onlyInstalled *bool
 	var timeout *int
 	var otel, binary *string
 	if verb == "install" {
-		guard = fs.Bool("guard", false, "guard mode registration (allows --fail-closed)")
+		guard = fs.Bool("guard", false, "turn guard mode on: set guard.mode advisory in the configuration every hook reads (managed scope; see above)")
 		failClosed = fs.Bool("fail-closed", false, "with --guard, block the tool call when the hook fails (Claude Code, Cursor only)")
-		timeout = fs.Int("timeout", 10, "hook timeout in seconds registered with the agent")
+		timeout = fs.Int("timeout", defaultHookTimeout, "hook timeout in seconds registered with the agent")
 		coexist = fs.Bool("coexist", false, "install next to another sensor's hook (numbat, Agent Beacon, Snyk)")
 		otel = fs.String("otel", "", "also switch on the agents' native OpenTelemetry to this OTLP/HTTP endpoint")
 		force = fs.Bool("force", false, "patch JSONC files (comments, trailing commas) in place")
 		binary = fs.String("binary", "", "absolute path of the spoor binary the hook runs (default: this binary)")
+		onlyInstalled = fs.Bool("only-installed", false, "rewrite spoor's entries only where a file at the scope already holds them, keeping their options")
 	}
 	pos, code, done := a.parse(fs, args)
 	if done {
@@ -182,7 +210,10 @@ A file that held nothing but spoor's entries is removed (kept as a backup).`
 	if err != nil {
 		return a.usageErr(name, "%v", err)
 	}
+	res := planResult{DryRun: *dry}
 	var plans []hookinstall.Plan
+	var ge *guardEdit
+	only := false
 	if verb == "install" {
 		o.Guard, o.FailClosed, o.Timeout = *guard, *failClosed, *timeout
 		o.Coexist, o.OTel, o.Force = *coexist, *otel, *force
@@ -200,7 +231,43 @@ A file that held nothing but spoor's entries is removed (kept as a backup).`
 		if inTempDir(o.Binary) {
 			a.warn(name, "the hook will run %s, which is in a temporary directory; install the binary first or pass --binary", o.Binary)
 		}
-		plans, err = hookinstall.PlanInstall(cat, o)
+		if *guard {
+			ge = planGuardMode(hookConfigPath(o.Root), guardWrites(o.Scope))
+			res.Guard = &ge.guardJSON
+			if ge.Action == guardManual && guardWrites(o.Scope) {
+				// The administrator asked for guard mode and it cannot be
+				// switched on: refuse rather than register hooks that
+				// would silently only observe.
+				if h.asJSON {
+					a.printJSON(res)
+				}
+				fmt.Fprintf(a.stderr, "spoor %s: --guard: nothing was written: %s", name, ge.Note)
+				return exitError
+			}
+		}
+		if only = *onlyInstalled; only {
+			ex := explicitOpts{}
+			fs.Visit(func(f *flag.Flag) {
+				switch f.Name {
+				case "guard":
+					ex.guard = true
+				case "fail-closed":
+					ex.failClosed = true
+				case "timeout":
+					ex.timeout = true
+				}
+			})
+			rps, err := planReinstall(cat, o, ex)
+			if err != nil {
+				return a.usageErr(name, "%v", err)
+			}
+			for _, rp := range rps {
+				res.Reinstall = append(res.Reinstall, rp.row)
+				plans = append(plans, rp.plans...)
+			}
+		} else {
+			plans, err = hookinstall.PlanInstall(cat, o)
+		}
 	} else {
 		o.Force = false
 		plans, err = hookinstall.PlanUninstall(cat, o)
@@ -208,7 +275,7 @@ A file that held nothing but spoor's entries is removed (kept as a backup).`
 	if err != nil {
 		return a.usageErr(name, "%v", err)
 	}
-	res := planResult{DryRun: *dry, Binary: o.Binary}
+	res.Binary = o.Binary
 	for _, p := range plans {
 		pj := planJSON{Agent: p.AgentID, Scope: p.Scope, Path: p.Path, Action: p.Action, Note: p.Note}
 		if p.Action != hookinstall.ActionUnchanged && p.Action != hookinstall.ActionUnsupported {
@@ -216,7 +283,18 @@ A file that held nothing but spoor's entries is removed (kept as a backup).`
 		}
 		res.Plans = append(res.Plans, pj)
 	}
+	if res.Plans == nil {
+		res.Plans = []planJSON{}
+	}
 	if !*dry {
+		// The configuration first: hooks registered while guard mode
+		// stays off would only observe.
+		if ge != nil {
+			if err := ge.apply(); err != nil {
+				res.Errors = append(res.Errors, "guard.mode: "+err.Error())
+				plans = nil
+			}
+		}
 		if err := hookinstall.Apply(plans); err != nil {
 			for _, e := range unjoin(err) {
 				res.Errors = append(res.Errors, e.Error())
@@ -228,7 +306,12 @@ A file that held nothing but spoor's entries is removed (kept as a backup).`
 			return c
 		}
 	} else {
-		a.printPlans(res, *dry)
+		if only {
+			a.printReinstall(res, o.Scope, *dry)
+		} else {
+			a.printPlans(res, *dry)
+		}
+		a.printGuard(name, ge, *dry)
 	}
 	if len(res.Errors) > 0 {
 		if !h.asJSON {
@@ -239,6 +322,37 @@ A file that held nothing but spoor's entries is removed (kept as a backup).`
 		return exitError
 	}
 	return exitOK
+}
+
+// printGuard reports the guard.mode part of `hooks install --guard`.
+func (a *app) printGuard(name string, ge *guardEdit, dry bool) {
+	if ge == nil {
+		return
+	}
+	p := sanitize(ge.Path)
+	switch ge.Action {
+	case guardUnchanged:
+		fmt.Fprintf(a.stdout, "guard: guard.mode is already advisory in %s\n", p)
+	case guardSet, guardCreate:
+		verb := "set"
+		if dry {
+			verb = "would set"
+		}
+		how := "was " + term(ge.Was)
+		if ge.Action == guardCreate {
+			how = "file created from the default configuration"
+		}
+		fmt.Fprintf(a.stdout, "guard: %s guard.mode: advisory in %s (%s); every spoor hook reads it on each call\n", verb, p, how)
+		if dry {
+			for _, l := range ge.Diff {
+				fmt.Fprintf(a.stdout, "    %s\n", sanitize(l))
+			}
+		}
+	case guardManual:
+		// A user-scope install: the hooks are registered, guard mode is
+		// not on. Said on stderr so a script sees it.
+		a.warn(name, "--guard: guard mode is NOT on: %s", strings.TrimSpace(ge.Note))
+	}
 }
 
 func (a *app) printPlans(res planResult, dry bool) {

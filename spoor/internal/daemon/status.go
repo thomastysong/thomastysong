@@ -180,7 +180,7 @@ func status(cfg *config.Config, env statusEnv) (Snapshot, error) {
 		s.Host.ID, s.Host.Source = cfg.HostID, "config"
 	}
 	if !s.Privileged {
-		s.problem("not running privileged: the daemon must run as root (Administrator) to see every user's agents")
+		s.problem("not running privileged: the daemon must run as root (Administrator), or on Linux with CAP_DAC_READ_SEARCH and CAP_SYS_PTRACE, to see every user's agents")
 	}
 	if s.KillSwitch.Engaged {
 		s.problem("the kill switch is engaged (" + s.KillSwitch.Path + "): collectors are idle and hooks exit at once")

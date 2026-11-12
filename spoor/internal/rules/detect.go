@@ -172,7 +172,7 @@ func (e *Engine) detection(r *rule, ev *event.Event, fields map[string]any, used
 			Maturity:   r.Maturity,
 			Category:   r.Category,
 			Tags:       tags,
-			Evidence:   e.evidence(r, fields, memo),
+			Evidence:   e.inheritedEvidence(e.evidence(r, fields, memo), fields, memo),
 			EventIDs:   ids,
 			Flags:      flagNames,
 			Response:   r.response,

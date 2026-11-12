@@ -295,6 +295,7 @@ func metaOfStat(st *unix.Stat_t) fmeta {
 		size:     st.Size,
 		perm:     os.FileMode(st.Mode & 0o7777),
 		owner:    strconv.FormatUint(uint64(st.Uid), 10),
+		group:    strconv.FormatUint(uint64(st.Gid), 10),
 		hasOwner: true,
 		nlink:    uint64(st.Nlink),
 		mtime:    timespecTime(st),
@@ -319,6 +320,7 @@ func metaOf(fi os.FileInfo) fmeta {
 	}
 	if st, ok := fi.Sys().(*syscall.Stat_t); ok && st != nil {
 		m.owner = strconv.FormatUint(uint64(st.Uid), 10)
+		m.group = strconv.FormatUint(uint64(st.Gid), 10)
 		m.hasOwner = true
 		m.nlink = uint64(st.Nlink)
 	}

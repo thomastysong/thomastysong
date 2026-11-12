@@ -529,7 +529,12 @@ func TestOversizeAnomalyDescribesWholePayload(t *testing.T) {
 		t.Fatal("no anomaly record")
 	}
 	// The worker refuses a hand-off digest that is not one.
-	w := &work{in: inputResult{b: []byte("x"), total: 1}, o: opts{stdinBytes: 99, stdinSHA256: "not-hex"}}
+	w := &work{in: inputResult{b: []byte("x"), total: 1}, o: opts{stdinBytes: 99}, env: Env{Getenv: func(k string) string {
+		if k == envStdinSHA256 {
+			return "not-hex"
+		}
+		return ""
+	}}}
 	w.adoptSupervisorRead()
 	if w.in.total != 1 || w.in.sum != "" {
 		t.Fatalf("bad hand-off adopted: %+v", w.in)

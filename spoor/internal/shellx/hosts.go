@@ -123,9 +123,22 @@ func validHost(s string) bool {
 	return true
 }
 
-// redactUserinfo replaces URL credentials with a fingerprint. Facts may be
-// quoted in detection evidence, and "https://user:token@host" is the most
+// userinfoKind is the marker kind package classify gives credentials in a
+// URL's userinfo (classify.KindBasicAuthURL). shellx does not import
+// classify; TestUserinfoMarkerMatchesClassify keeps the two in step.
+const userinfoKind = "basic_auth_url"
+
+// redactUserinfo replaces URL credentials with a redaction marker. Facts may
+// be quoted in detection evidence, and "https://user:token@host" is the most
 // common way a secret ends up inside an otherwise harmless fact.
+//
+// The marker is classify's, byte for byte: "[REDACTED:basic_auth_url:<fp>]"
+// with fp the first 8 hex digits of an UNKEYED SHA-256 of the userinfo. That
+// fingerprint is an offline guessing oracle for a short password, so it must
+// not leave the endpoint as written; using classify's exact shape is what
+// makes package privacy rewrite it on the way out (keyed with the tenant
+// key, or removed when there is none), exactly as it does for classify's
+// own markers. Any other shape would pass through privacy untouched.
 func redactUserinfo(u string) string {
 	i := strings.Index(u, "://")
 	if i < 0 {
@@ -146,7 +159,7 @@ func redactUserinfo(u string) string {
 		return u
 	}
 	sum := sha256.Sum256([]byte(info))
-	return u[:i+3] + "[redacted:" + hex.EncodeToString(sum[:4]) + "]" + rest[at:]
+	return u[:i+3] + "[REDACTED:" + userinfoKind + ":" + hex.EncodeToString(sum[:4]) + "]" + rest[at:]
 }
 
 func (a *analyzer) url(u string) {

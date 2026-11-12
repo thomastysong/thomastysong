@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/thomastysong/spoor/internal/catalog"
@@ -61,6 +62,14 @@ type scanner struct {
 	// unprivileged substitute their own uid, since they cannot create
 	// root-owned fixtures.
 	adminUID string
+
+	// Files of a home the owner rule refused (trust.go), and the project
+	// directories scanned per uid, which decide how each is reported.
+	untrustedMu   sync.Mutex
+	untrusted     []untrustedFile
+	untrustedSeen map[string]bool
+	untrustedDone map[string]bool
+	projDirs      map[string][]string
 }
 
 type docResult struct {
@@ -99,6 +108,10 @@ func Scan(ctx context.Context, o Options) (res *Result, err error) {
 		s.scanUser(uc)
 	}
 	s.buildProducts()
+	// Last: building the products reads settings files too.
+	for _, uc := range s.users {
+		s.reportUntrusted(uc, uc.home, false)
+	}
 	return s.finish(true), nil
 }
 
@@ -173,10 +186,12 @@ func newScanner(ctx context.Context, o Options) (*scanner, context.CancelFunc, e
 		sysEv: map[string]*evidence{}, userEv: map[*userCtx]map[string]*evidence{},
 		managed: map[string]*managedFacts{}, docs: map[string]docResult{}, projSeen: map[string]bool{},
 		projectHits: map[string]map[string]bool{}, adminUID: "0",
+		untrustedSeen: map[string]bool{}, untrustedDone: map[string]bool{}, projDirs: map[string][]string{},
 	}
 	if o.adminUID != "" {
 		s.adminUID = o.adminUID
 	}
+	g.adminUID, g.untrusted = s.adminUID, s.recordUntrusted
 	if o.Host != nil {
 		s.host = *o.Host
 	} else {
@@ -321,11 +336,13 @@ func (s *scanner) scanProject(uc *userCtx, dir string) {
 		s.led.note("project directory not accessible: " + dir)
 		return
 	}
+	s.projDirs[uc.u.UID] = append(s.projDirs[uc.u.UID], cleanLogical(dir))
 	s.scanMCPFiles(uc, dir)
 	s.scanHookFiles(uc, dir)
 	s.scanContent(uc, dir)
 	s.scanProjectConfig(uc, dir)
 	s.scanWorkflows(uc, dir)
+	s.reportUntrusted(uc, dir, true)
 }
 
 // skipLink counts a symbolic link met in a listing where a declared item

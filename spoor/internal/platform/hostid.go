@@ -19,6 +19,17 @@ import (
 // EnvHostID overrides the host id for this process.
 const EnvHostID = "SPOOR_HOST_ID"
 
+// EnvHostName overrides the host name for this process. In a Kubernetes pod
+// the kernel's host name is the pod's name, not the node's; the node sensor
+// DaemonSet sets this from spec.nodeName (the downward API), as it does
+// SPOOR_HOST_ID. A value that is not a plausible host name (empty, longer
+// than 253 bytes, characters outside letters, digits and "-_.") is ignored.
+const EnvHostName = "SPOOR_HOST_NAME"
+
+// maxHostNameLen is the longest DNS name (RFC 1035 as Kubernetes applies it
+// to node names).
+const maxHostNameLen = 253
+
 // HostIDFileName is the override file inside the config directory. The
 // osquery extension writes osquery's own system_info.uuid there (see
 // WriteHostIDFile) so that every spoor process, privileged or not, reports
@@ -89,8 +100,36 @@ var hostIDState struct {
 // events join to Fleet hosts. ID is empty when nothing is derivable.
 func HostInfo() event.Host {
 	id, _ := resolveHostID()
+	return event.Host{ID: id, Name: hostName(), OS: runtime.GOOS, Arch: runtime.GOARCH}
+}
+
+// hostName is SPOOR_HOST_NAME when it is set to a plausible name, else the
+// kernel's host name. Like SPOOR_HOST_ID it is only as trustworthy as the
+// process environment: a privileged daemon reads its own (set by the
+// service manager or the pod spec), never a hook client's.
+func hostName() string {
+	if v := sanitizeHostName(os.Getenv(EnvHostName)); v != "" {
+		return v
+	}
 	name, _ := os.Hostname()
-	return event.Host{ID: id, Name: name, OS: runtime.GOOS, Arch: runtime.GOARCH}
+	return name
+}
+
+func sanitizeHostName(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" || len(s) > maxHostNameLen {
+		return ""
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '-' || c == '_' || c == '.':
+		default:
+			return ""
+		}
+	}
+	return s
 }
 
 // HostIDSource reports where the id returned by HostInfo came from: one of

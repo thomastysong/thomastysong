@@ -34,6 +34,9 @@ func (m *Monitor) osqAttribute(pid, ppid int) (agentID, sessionID string, ok boo
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if n := m.lookup(pid); n != nil {
+		if n.self {
+			return "", "", false // spoor's own hook (self.go)
+		}
 		if n.root != nil {
 			if n.owner != nil {
 				return n.owner.ap.AgentID, "", true

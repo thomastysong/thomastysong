@@ -140,8 +140,12 @@
 // by one final "[TRUNCATED:<n>B]" placeholder counting their bytes, and an
 // argument cut by the 256 KiB command-line read limit is never emitted;
 // every cut is listed in Truncated. The process.exec id covers the emitted
-// arguments with the redaction fingerprints left out, so it is no oracle
-// for the removed values. Process names get the same redaction (split on
+// arguments through an HMAC under a key drawn at random once per process
+// (32 bytes, crypto/rand), with the redaction fingerprints left out: the
+// privacy stage may redact more than the monitor does, and an unkeyed
+// digest of the monitor's form would let a reader of the shipped record
+// test guesses for what privacy removed. The id is therefore stable within
+// one run of the sensor and not across restarts. Process names get the same redaction (split on
 // white space) wherever they are kept or emitted (Process.Name, Ancestors,
 // AgentProc.Name): a Node process title or setproctitle(3) writes the
 // whole command line over argv[0], and the name refined from it, or the
@@ -188,7 +192,17 @@
 //     from root, which blinds marker attribution there.
 //   - Reading another user's environment needs root (or CAP_SYS_PTRACE);
 //     unprivileged, only the monitor's own user's processes have markers,
-//     session ids and config homes.
+//     session ids and config homes. Stats.ProcsTotal and
+//     Stats.ProcsUnreadable (the daemon's heartbeat counters procs_total
+//     and procs_unreadable) count, at every full scan, the live user-space
+//     processes (kernel threads left out) and those whose environment read
+//     was refused with EACCES or EPERM, so a sensor that is missing the
+//     privilege shows it. On Windows protected processes always count as
+//     unreadable; macOS and Windows counts are UNVERIFIED (not executed).
+//   - spoor's own hook processes (`spoor hook`, `spoor hook --worker`,
+//     recognised by argv[1] and the file identity of the executable, see
+//     self.go) are kept in the table but never reported; other spoor
+//     commands an agent runs are reported like any program.
 //   - cn_proc reports exec after it happened; a process that exits within
 //     microseconds can be gone before /proc is read (Stats.ReadMisses).
 //   - HookFree cannot see Gemini CLI's hooksConfig.enabled=false: it is a

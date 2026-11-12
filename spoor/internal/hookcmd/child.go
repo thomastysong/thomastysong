@@ -6,6 +6,7 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -37,10 +38,11 @@ func selfExe(env Env) (string, error) {
 }
 
 // runChild starts the worker with the payload on stdin, its stdout on a
-// pipe and its stderr on the null device, and waits until deadline. It
+// pipe and its stderr on the null device, and waits until deadline. env is
+// the worker's environment (workerEnv); nil inherits this process's. It
 // uses os.StartProcess directly: the only program ever started is this
 // binary, so there is nothing for os/exec's path lookup to do.
-func runChild(exe string, argv []string, payload []byte, capOut int, deadline time.Time) (res childResult) {
+func runChild(exe string, argv, env []string, payload []byte, capOut int, deadline time.Time) (res childResult) {
 	res.code = -1
 	inR, inW, err := os.Pipe()
 	if err != nil {
@@ -63,7 +65,7 @@ func runChild(exe string, argv []string, payload []byte, capOut int, deadline ti
 		res.startErr = err
 		return res
 	}
-	p, err := os.StartProcess(exe, argv, &os.ProcAttr{Files: []*os.File{inR, outW, null}, Sys: sysProcAttr()})
+	p, err := os.StartProcess(exe, argv, &os.ProcAttr{Env: env, Files: []*os.File{inR, outW, null}, Sys: sysProcAttr()})
 	// The child holds its own copies; ours must close so EOF and EPIPE
 	// reach the right side.
 	inR.Close()
@@ -155,8 +157,9 @@ func runChild(exe string, argv []string, payload []byte, capOut int, deadline ti
 // parent pid (the agent, or the shell the agent started) so the worker
 // records the right caller, plus its start time and hard deadline, asks
 // for a framed reply, and says what it knows about stdin that the payload
-// itself cannot: that the agent had not closed it in time, and the size
-// and digest of what was drained past the cap.
+// itself cannot: that the agent had not closed it in time, and the size of
+// what was drained past the cap. The digest of those bytes goes through
+// the environment instead (workerEnv): see envStdinSHA256.
 func workerArgs(o opts, cfgPath string, ppid int, t0, deadline time.Time, in inputResult) []string {
 	a := []string{"spoor", "hook", "--worker", "--framed", "--config", cfgPath,
 		"--ppid", strconv.Itoa(ppid),
@@ -165,8 +168,8 @@ func workerArgs(o opts, cfgPath string, ppid int, t0, deadline time.Time, in inp
 	if in.timedOut {
 		a = append(a, "--stdin-cut")
 	}
-	if in.sum != "" && in.total > int64(len(in.b)) {
-		a = append(a, "--stdin-bytes", strconv.FormatInt(in.total, 10), "--stdin-sha256", in.sum)
+	if overCap(in) {
+		a = append(a, "--stdin-bytes", strconv.FormatInt(in.total, 10))
 	}
 	if o.agent != "" {
 		a = append(a, "--agent", o.agent)
@@ -175,4 +178,54 @@ func workerArgs(o opts, cfgPath string, ppid int, t0, deadline time.Time, in inp
 		a = append(a, "--event", o.event)
 	}
 	return a
+}
+
+// envStdinSHA256 carries the SHA-256 of an over-cap payload from the
+// supervisor to its worker, which reports it on the payload-anomaly record
+// (where package privacy keys it before anything ships).
+//
+// It used to be the worker's --stdin-sha256 argument. A process's argument
+// vector is readable by every local user (/proc/<pid>/cmdline is
+// world-readable on Linux unless /proc is mounted with hidepid, and ps shows
+// it), and an unkeyed digest of the agent's payload is a guessing oracle for
+// what the agent was doing. The environment is not: /proc/<pid>/environ is
+// readable only by the process's owner and root (ptrace access rules), and
+// the owner is the user who sent the payload. UNVERIFIED: the same holds on
+// macOS (KERN_PROCARGS2) and Windows (the PEB needs PROCESS_VM_READ); on
+// both the argument vector was the weaker of the two in any case.
+const envStdinSHA256 = "SPOOR_HOOK_STDIN_SHA256"
+
+// overCap reports whether the supervisor read more than it passes on, so
+// the worker cannot see the payload's size and digest for itself.
+func overCap(in inputResult) bool { return in.sum != "" && in.total > int64(len(in.b)) }
+
+// workerEnv is the worker's environment: base (this process's, normally
+// os.Environ()) without any inherited envStdinSHA256, so an agent cannot
+// plant a digest, plus the supervisor's own when the payload was over the
+// cap. Names are compared case-insensitively because Windows does.
+func workerEnv(base []string, in inputResult) []string {
+	out := make([]string, 0, len(base)+1)
+	for _, kv := range base {
+		name, _, _ := strings.Cut(kv, "=")
+		if strings.EqualFold(name, envStdinSHA256) {
+			continue
+		}
+		out = append(out, kv)
+	}
+	if overCap(in) {
+		out = append(out, envStdinSHA256+"="+in.sum)
+	}
+	return out
+}
+
+// workerEnviron is workerEnv over this process's environment.
+func workerEnviron(in inputResult) []string { return workerEnv(os.Environ(), in) }
+
+// handoffDigest is the worker's side of envStdinSHA256: the digest its
+// supervisor passed, or "" (adoptSupervisorRead validates it).
+func handoffDigest(getenv func(string) string) string {
+	if getenv == nil {
+		return ""
+	}
+	return getenv(envStdinSHA256)
 }

@@ -62,7 +62,7 @@ func supervise(stdin io.Reader, stdout io.Writer, o opts, env Env) int {
 		return s.fallback(stdout)
 	}
 	argv := workerArgs(o, cfgPath, env.PPID, t0, deadline, in)
-	res := runChild(exe, argv, in.b, MaxReply+len(replyEnd), deadline)
+	res := runChild(exe, argv, workerEnviron(in), in.b, MaxReply+len(replyEnd), deadline)
 	if res.startErr != nil {
 		s.note(ReasonWorkerStart, "worker could not be started")
 		return s.fallback(stdout)

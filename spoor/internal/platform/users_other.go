@@ -10,7 +10,11 @@ import (
 )
 
 // IsPrivileged reports whether the process runs as root.
-func IsPrivileged() bool { return os.Geteuid() == 0 }
+func IsPrivileged() bool { return os.Geteuid() == 0 || capPrivileged() }
+
+// IsAdmin reports whether the process runs as root (see the Linux and
+// macOS IsAdmin).
+func IsAdmin() bool { return os.Geteuid() == 0 }
 
 // CurrentUser returns the account this process runs as.
 func CurrentUser() UserHome {

@@ -106,11 +106,46 @@
 // strings, 1 MiB): mcp.arg_paths, mcp.arg_path_classes, mcp.arg_hosts,
 // mcp.arg_host_classes, mcp.arg_secret_kinds.
 //
+// # Scripts written, then run (WrittenScripts, AnalyzeScript, Inherit)
+//
+// A command written into a script by a file tool and run in a second event
+// ("sh /tmp/x.sh") would hide every shell fact from single-event rules.
+// WrittenScripts takes a file_write or file_edit event (Write, Edit,
+// MultiEdit, Copilot create/str_replace, Codex apply_patch split per file)
+// and, for each file whose content is a script, returns ScriptFacts: the
+// shell.* and net.* features a shell event carrying that content would
+// get. A script is content with a #! line naming a known interpreter, a
+// file with a script extension (.sh .bash .zsh .ksh .command .ps1 .psm1
+// .bat .cmd .py .pyw .js .mjs .cjs .ts .mts .cts .rb .pl .pm .php .lua),
+// or a file with no extension (or one that is not a document, data or
+// compiled-language source format) whose content parses as POSIX shell.
+// Shell, PowerShell and cmd content is analysed in its dialect; Python,
+// JavaScript, Ruby, Perl, PHP and Lua content as the code of an
+// interpreter one-liner (what shellx sees through: shell commands handed to
+// exec-style calls, URLs, decoded payloads, reads), minus what the
+// synthetic wrapper itself contributes, plus a POSIX analysis when the text
+// parses as shell ("bash x.py"). ScriptFacts are bounded (3 KiB of strings,
+// 96 commands of 32 arguments, 64 entries per list; duplicate and inert
+// commands go first, cuts are recorded) and validated as hostile input
+// when they come back from a session state file.
+//
+// The rule engine keeps them per normalized path and, when a later shell
+// command or process.exec runs that path, calls Inherit: the script's
+// facts are merged into the executing event's features (lists unioned,
+// booleans ORed, commands appended to shell.cmds), shell.inherited_kinds
+// is set to written_script, and output.untrusted is recomputed for a shell
+// result. The same parsed-fact rules then fire on the execution event. No
+// file is ever opened: the content is what the tool call carried, so a
+// script changed outside the agent's file tools (a shell redirect, an
+// editor, a download) is known only by the facts of the last tool write.
+//
 // # Filled by the rule engine
 //
 // session.flags, session.tool_calls, session.prompts, session.age_s,
 // session.first_event, session.runs_written_file and
 // session.written_exec_path (write-then-run across events),
+// shell.inherited_kinds (the event's shell facts include a written
+// script's, see above),
 // session.secret_flow and session.secret_flow_kinds (a value read from a
 // credential-class path leaves in a later command, URL or MCP argument),
 // session.secret_flow_truncated (that outbound data was too large to scan

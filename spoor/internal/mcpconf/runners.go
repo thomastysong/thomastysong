@@ -10,22 +10,22 @@ import (
 // and "docker run -e K=V --rm image" names the wrong image. Options not
 // listed are switches. "--opt=value" never needs the table.
 
-var (
+func buildRunnerFlags(t *tables) {
 	// npx, npm exec, pnpm dlx, yarn dlx, bunx. --package/-p and --call/-c
 	// are handled in code because they carry meaning.
-	nodePkgValueFlags = set("--node-options", "--registry", "--cache", "--userconfig", "--prefix",
+	t.nodePkgValueFlags = set("--node-options", "--registry", "--cache", "--userconfig", "--prefix",
 		"--workspace", "-w", "--loglevel", "--node-arg", "-n", "--shell", "--script-shell",
 		"--allow-build", "--cwd", "--config")
 
-	nodeValueFlags = set("-r", "--require", "--import", "--loader", "--experimental-loader",
+	t.nodeValueFlags = set("-r", "--require", "--import", "--loader", "--experimental-loader",
 		"--env-file", "--env-file-if-exists", "--inspect-port", "-C", "--conditions",
 		"--input-type", "--title", "--watch-path", "--project", "-P", "--tsconfig")
 
-	bunValueFlags = set("--cwd", "--env-file", "--preload", "-r", "--config", "-c", "--define",
+	t.bunValueFlags = set("--cwd", "--env-file", "--preload", "-r", "--config", "-c", "--define",
 		"-d", "--loader", "-l", "--port", "--tsconfig-override")
 
 	// uv / uvx. --from, --with and friends are handled in code.
-	uvValueFlags = set("--python", "-p", "--index-url", "-i", "--extra-index-url", "--index",
+	t.uvValueFlags = set("--python", "-p", "--index-url", "-i", "--extra-index-url", "--index",
 		"--default-index", "--find-links", "-f", "--constraints", "-c", "--overrides",
 		"--build-constraints", "-b", "--env-file", "--cache-dir", "--config-file", "--color",
 		"--refresh-package", "--upgrade-package", "-P", "--reinstall-package", "--index-strategy",
@@ -35,26 +35,26 @@ var (
 		"--only-group", "--no-group", "--package", "--with-requirements", "--with-editable",
 		"--directory", "--project", "--from", "--with", "--script-name")
 
-	pipxValueFlags = set("--python", "--index-url", "-i", "--pip-args", "--spec", "--backend")
+	t.pipxValueFlags = set("--python", "--index-url", "-i", "--pip-args", "--spec", "--backend")
 
-	pipValueFlags = set("--index-url", "-i", "--extra-index-url", "--find-links", "-f", "--target",
+	t.pipValueFlags = set("--index-url", "-i", "--extra-index-url", "--find-links", "-f", "--target",
 		"-t", "--requirement", "-r", "--constraint", "-c", "--prefix", "--root", "--python",
 		"--trusted-host", "--cert", "--client-cert", "--proxy", "--platform", "--python-version",
 		"--implementation", "--abi", "--only-binary", "--no-binary", "--upgrade-strategy",
 		"--editable", "-e", "--src", "--cache-dir", "--config-settings", "-C")
 
-	denoValueFlags = set("--config", "-c", "--import-map", "--lock", "--cert", "--location",
+	t.denoValueFlags = set("--config", "-c", "--import-map", "--lock", "--cert", "--location",
 		"--seed", "--log-level", "-L", "--ext", "--preload")
 
-	goValueFlags = set("-C", "-exec", "-mod", "-modfile", "-tags", "-ldflags", "-gcflags",
+	t.goValueFlags = set("-C", "-exec", "-mod", "-modfile", "-tags", "-ldflags", "-gcflags",
 		"-asmflags", "-overlay", "-pkgdir", "-p", "-toolexec", "-buildmode", "-compiler",
 		"-coverpkg", "-covermode")
 
-	dockerGlobalValueFlags = set("--context", "-c", "--host", "-H", "--config", "--log-level", "-l",
+	t.dockerGlobalValueFlags = set("--context", "-c", "--host", "-H", "--config", "--log-level", "-l",
 		"--tlscacert", "--tlscert", "--tlskey", "--connection", "--url", "--identity", "--root",
 		"--runroot", "--storage-driver", "--storage-opt", "--tmpdir", "--cgroup-manager")
 
-	dockerRunValueFlags = set("--add-host", "--annotation", "--attach", "--blkio-weight",
+	t.dockerRunValueFlags = set("--add-host", "--annotation", "--attach", "--blkio-weight",
 		"--blkio-weight-device", "--cap-add", "--cap-drop", "--cgroup-parent", "--cgroupns",
 		"--cidfile", "--cpu-period", "--cpu-quota", "--cpu-rt-period", "--cpu-rt-runtime",
 		"--cpu-shares", "--cpus", "--cpuset-cpus", "--cpuset-mems", "--detach-keys", "--device",
@@ -73,14 +73,14 @@ var (
 		"--workdir", "--secret", "--arch", "--os", "--variant", "--authfile", "--pod", "--systemd",
 		"--timeout", "--tz", "--umask", "--uidmap", "--gidmap", "--subuidname", "--subgidname")
 
-	// dockerShortValue are the one-letter docker run options that take a
-	// value, for clusters ("-itv /a:/b") and attached values ("-eK=V").
-	dockerShortValue = "acehlmpuvw"
-
 	// scriptRunnerPackages are npm packages whose first operand is the file
 	// to run, so "npx tsx src/index.ts" executes a local script.
-	scriptRunnerPackages = set("tsx", "ts-node", "esno", "jiti", "vite-node", "nodemon", "babel-node", "zx")
-)
+	t.scriptRunnerPackages = set("tsx", "ts-node", "esno", "jiti", "vite-node", "nodemon", "babel-node", "zx")
+}
+
+// dockerShortValue are the one-letter docker run options that take a
+// value, for clusters ("-itv /a:/b") and attached values ("-eK=V").
+const dockerShortValue = "acehlmpuvw"
 
 // cutFlag splits "--name=value".
 func cutFlag(a string) (name, value string, hasValue bool) {
@@ -153,7 +153,7 @@ func (l *launch) nodePackage(runner string, args []string) {
 			l.inline = append(l.inline, v)
 		case name == "--no-install" || name == "--offline" || name == "--no":
 			online = false
-		case nodePkgValueFlags[name] && !hasEq:
+		case tab().nodePkgValueFlags[name] && !hasEq:
 			i++
 		}
 	}
@@ -170,7 +170,7 @@ func (l *launch) nodePackage(runner string, args []string) {
 		return
 	}
 	l.setSpecs(specs, parseNpmSpec, online)
-	if scriptRunnerPackages[strings.ToLower(l.spec.name)] {
+	if tab().scriptRunnerPackages[strings.ToLower(l.spec.name)] {
 		// With -p the operand is the runner's own bin and the file follows it.
 		for _, r := range l.rest {
 			if !isFlag(r) {
@@ -242,7 +242,7 @@ func (l *launch) uvTool(args []string) {
 			with = append(with, splitList(v)...)
 		case name == "--offline":
 			online = false
-		case uvValueFlags[name] && !hasEq:
+		case tab().uvValueFlags[name] && !hasEq:
 			i++
 		}
 	}
@@ -280,7 +280,7 @@ func (l *launch) uv(args []string, depth int) {
 			var v string
 			v, i = flagValue(args, i)
 			l.dir = joinPath(l.dir, v)
-		} else if uvValueFlags[name] && !hasEq {
+		} else if tab().uvValueFlags[name] && !hasEq {
 			i++
 		}
 	}
@@ -326,7 +326,7 @@ func (l *launch) uvRun(args []string, depth int) {
 			module = true
 		case name == "--offline":
 			online = false
-		case uvValueFlags[name] && !hasEq:
+		case tab().uvValueFlags[name] && !hasEq:
 			i++
 		}
 	}
@@ -391,7 +391,7 @@ func (l *launch) pipx(args []string) {
 		name, _, hasEq := cutFlag(a)
 		if name == "--spec" {
 			spec, i = flagValue(args, i)
-		} else if pipxValueFlags[name] && !hasEq {
+		} else if tab().pipxValueFlags[name] && !hasEq {
 			i++
 		}
 	}
@@ -419,7 +419,7 @@ func (l *launch) pip(args []string) {
 		a := args[i]
 		if isFlag(a) {
 			name, _, hasEq := cutFlag(a)
-			if pipValueFlags[name] && !hasEq {
+			if tab().pipValueFlags[name] && !hasEq {
 				i++
 			}
 			continue
@@ -478,7 +478,7 @@ func (l *launch) deno(args []string) {
 			break
 		}
 		name, _, hasEq := cutFlag(a)
-		if denoValueFlags[name] && !hasEq {
+		if tab().denoValueFlags[name] && !hasEq {
 			i++
 		}
 	}
@@ -517,7 +517,7 @@ func (l *launch) goRun(args []string) {
 			break
 		}
 		name, _, hasEq := cutFlag(a)
-		if goValueFlags[name] && !hasEq {
+		if tab().goValueFlags[name] && !hasEq {
 			i++
 		}
 	}
@@ -565,7 +565,7 @@ func (l *launch) containerRun(runner string, args []string) {
 	i := 0
 	for ; i < len(args) && isFlag(args[i]); i++ {
 		name, _, hasEq := cutFlag(args[i])
-		if dockerGlobalValueFlags[name] && !hasEq {
+		if tab().dockerGlobalValueFlags[name] && !hasEq {
 			i++
 		}
 	}
@@ -644,7 +644,7 @@ func dockerFlag(args []string, i int) (name, val string, hasVal bool, used int) 
 		if hasVal {
 			return name, val, true, 1
 		}
-		if dockerRunValueFlags[name] && i+1 < len(args) {
+		if tab().dockerRunValueFlags[name] && i+1 < len(args) {
 			return name, args[i+1], true, 2
 		}
 		return name, "", false, 1

@@ -86,11 +86,11 @@ func (s *procfsSource) identOf(pid int) (ident, bool) {
 	if err != nil {
 		return ident{}, false
 	}
-	comm, state, ppid, ticks, ok := parseStat(b)
-	if !ok || state == 'Z' || state == 'X' || state == 'x' {
+	st, ok := parseStatFields(b)
+	if !ok || st.state == 'Z' || st.state == 'X' || st.state == 'x' {
 		return ident{}, false
 	}
-	return ident{pid: pid, ppid: ppid, key: ticks + 1, comm: comm}, true
+	return ident{pid: pid, ppid: st.ppid, key: st.start + 1, comm: st.comm, kthread: st.kthread}, true
 }
 
 func (s *procfsSource) read(pid int) (platform.Proc, ident, bool) {
@@ -129,11 +129,12 @@ func (s *procfsSource) readOwn(pid int) (platform.Proc, ident, bool) {
 	if err != nil {
 		return platform.Proc{}, ident{}, false
 	}
-	comm, state, ppid, ticks, ok := parseStat(stat)
-	if !ok || state == 'Z' || state == 'X' || state == 'x' {
+	st, ok := parseStatFields(stat)
+	if !ok || st.state == 'Z' || st.state == 'X' || st.state == 'x' {
 		return platform.Proc{}, ident{}, false
 	}
-	id := ident{pid: pid, ppid: ppid, key: ticks + 1, comm: comm}
+	comm, ppid, ticks := st.comm, st.ppid, st.start
+	id := ident{pid: pid, ppid: ppid, key: ticks + 1, comm: comm, kthread: st.kthread}
 	p := platform.Proc{PID: pid, PPID: ppid, Name: comm, Start: s.startTime(ticks)}
 	if b, err := readRootCapped(root, "cmdline", maxCmdlineBytes); err == nil {
 		p.Args = splitNUL(b, maxRawArgs)
@@ -276,6 +277,20 @@ func (s *procfsSource) children(pid int) ([]int, bool) {
 		kids = parseChildren(b, kids)
 	}
 	return kids, true
+}
+
+// exeID is the file identity (device and inode) of the image the process
+// runs. Stat follows the magic /proc/<pid>/exe link to the file the kernel
+// mapped, in whatever mount namespace the process lives, so a path that
+// names another file in this namespace cannot pass for it; a replaced or
+// deleted binary keeps its identity while it runs.
+func (s *procfsSource) exeID(pid int, _ string) string {
+	p := filepath.Join(s.pidDir(pid), "exe")
+	fi, err := os.Stat(p)
+	if err != nil || !fi.Mode().IsRegular() {
+		return ""
+	}
+	return platform.FileID(fi, p)
 }
 
 func (s *procfsSource) cwd(pid int) string {

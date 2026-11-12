@@ -329,8 +329,9 @@ func lookupFold(m map[string]string, lowerKey string) (string, bool) {
 }
 
 // capString cuts s to at most max bytes on a rune boundary. A cut value ends
-// in a fingerprint of the full value so two different long names stay
-// distinguishable and the cut is visible.
+// in "~" and a digest of the full value keyed per process (runFP8), so two
+// different long names stay distinguishable and the cut is visible, while
+// nothing in the output lets a reader confirm a guess about the cut tail.
 func capString(s string, max int) string {
 	if len(s) <= max {
 		return s
@@ -342,7 +343,7 @@ func capString(s string, max int) string {
 	for cut > 0 && !utf8.RuneStart(s[cut]) {
 		cut--
 	}
-	return s[:cut] + "~" + fp8(s)
+	return s[:cut] + "~" + runFP8(s)
 }
 
 // listEntryName names an entry of a list-shaped declaration.

@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/thomastysong/spoor/internal/event"
+	"github.com/thomastysong/spoor/internal/features"
 )
 
 // Per-session bounds. A session can run for days and the agent decides how
@@ -124,6 +125,7 @@ type sessionState struct {
 	threadOrder   []string                        // least recently used first
 	sflags        map[string]flagEntry            // flags set with scope: session
 	written       []string                        // digests of written paths, oldest first
+	scripts       []scriptRec                     // facts of written scripts, oldest first (scripts.go)
 	salt          []byte
 	secrets       []secretFP
 	counters      map[string][]hit
@@ -402,6 +404,7 @@ type exportState struct {
 	Order    []string                         `json:"o,omitempty"`
 	Session  map[string]exportFlag            `json:"sf,omitempty"`
 	Written  []string                         `json:"w,omitempty"`
+	Scripts  []exportScript                   `json:"sc,omitempty"`
 	Salt     string                           `json:"salt,omitempty"`
 	Secrets  []exportSecret                   `json:"s,omitempty"`
 	Counters map[string][]exportHit           `json:"t,omitempty"`
@@ -411,6 +414,17 @@ type exportState struct {
 	// host itself is not stored: on import they are bound to whoever the
 	// session's next event names.
 	Scoped map[string][]exportHit `json:"st,omitempty"`
+}
+
+// exportScript is a remembered script: its path digest, when it was
+// written, its facts and what its outbound scan found.
+type exportScript struct {
+	D    string                `json:"d"`
+	At   int64                 `json:"a"`
+	F    *features.ScriptFacts `json:"f"`
+	Flow []string              `json:"k,omitempty"`
+	Chk  bool                  `json:"c,omitempty"`
+	Cut  bool                  `json:"t,omitempty"`
 }
 
 type exportFlag struct {
@@ -458,6 +472,11 @@ func (s *sessionState) export() exportState {
 			x.Session[k] = exportFlag{Exp: ms(v.exp), At: ms(v.at), Ev: v.ev}
 		}
 	}
+	for _, r := range s.scripts {
+		x.Scripts = append(x.Scripts, exportScript{
+			D: r.d, At: ms(r.at), F: r.f, Flow: append([]string(nil), r.flow...), Chk: r.flowChk, Cut: r.flowCut,
+		})
+	}
 	if len(s.salt) > 0 {
 		x.Salt = hex.EncodeToString(s.salt)
 	}
@@ -502,7 +521,8 @@ func scopedName(rule, by string) string { return rule + "/" + by }
 
 // marshalBounded encodes the state and, if it exceeds maxExport, sheds the
 // least valuable state first (threshold history, then dedup memory, then
-// the oldest written paths) until it fits.
+// the oldest remembered scripts, then the oldest written paths) until it
+// fits.
 func marshalBounded(x exportState) ([]byte, error) {
 	for round := 0; round < 64; round++ {
 		b, err := json.Marshal(x)
@@ -537,6 +557,8 @@ func marshalBounded(x exportState) ([]byte, error) {
 				}
 				n++
 			}
+		case len(x.Scripts) > 0:
+			x.Scripts = x.Scripts[(len(x.Scripts)+1)/2:]
 		case len(x.Written) > 0:
 			x.Written = x.Written[len(x.Written)/2:]
 		case len(x.Recent) > 0:
@@ -677,6 +699,25 @@ func importState(key string, data []byte, now time.Time) (*sessionState, error) 
 		}
 	}
 	st.written = x.Written
+	if len(x.Scripts) > maxScripts {
+		return nil, badState("too many scripts")
+	}
+	for _, sc := range x.Scripts {
+		if !isHex(sc.D, 16) || !okTime(sc.At) || st.script(sc.D) != nil || len(sc.Flow) > maxFlowKinds {
+			return nil, badState("invalid script record")
+		}
+		if err := sc.F.Validate(); err != nil {
+			return nil, badState("invalid script facts: %v", err)
+		}
+		for _, k := range sc.Flow {
+			if len(k) > 64 || !utf8.ValidString(k) {
+				return nil, badState("invalid script flow kind")
+			}
+		}
+		st.scripts = append(st.scripts, scriptRec{
+			d: sc.D, at: fromMS(sc.At), f: sc.F, flow: sc.Flow, flowChk: sc.Chk, flowCut: sc.Cut,
+		})
+	}
 	if x.Salt != "" {
 		if !isHex(x.Salt, 32) {
 			return nil, badState("invalid salt")

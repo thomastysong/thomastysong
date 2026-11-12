@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +24,7 @@ import (
 type scanner struct {
 	d     *daemon
 	projQ chan projectReq
+	mnt   *mountView // whose working directories mean the same here (mountview.go)
 
 	mu       sync.Mutex
 	recent   map[string]time.Time // uid + cwd -> when queued
@@ -54,6 +56,7 @@ func newScanner(d *daemon) *scanner {
 	return &scanner{
 		d:       d,
 		projQ:   make(chan projectReq, projectQueue),
+		mnt:     newMountView("/proc"),
 		recent:  map[string]time.Time{},
 		perUser: map[string]*hourCount{},
 		projIDs: map[string]bool{},
@@ -95,26 +98,46 @@ func (s *scanner) noteSessions(evs []*event.Event) {
 		if ev.Agent != nil {
 			probe.Agent = &event.Agent{ID: ev.Agent.ID}
 		}
-		s.queueProject(probe)
+		// No process to check the mount namespace of: these records come
+		// from spools and logs under this sensor's own file system (in
+		// node mode, from accounts of the sensor's own image), whose paths
+		// name directories in its view.
+		s.queueProject(probe, 0)
 	}
 }
 
 // queueProject applies the privacy exclusions (an excluded session's
 // project is never read), the per-directory and per-account rate limits,
-// and queues the scan without blocking.
-func (s *scanner) queueProject(probe *event.Event) {
+// and queues the scan without blocking. pid is the process whose working
+// directory this is, when the process monitor saw it: a process that does
+// not share the sensor's file system view (another container, seen through
+// the host's pid namespace) is never scanned, because its path names
+// something else here (mountview.go).
+func (s *scanner) queueProject(probe *event.Event, pid int) {
 	cwd, uid := probe.Session.CWD, probe.User.ID
 	if !filepath.IsAbs(cwd) || filepath.Clean(cwd) != cwd || len(cwd) > 4096 {
 		return
 	}
 	now := s.d.env.now()
 	key := uid + "\x00" + cwd
+	// A refusal is remembered per process, so the same path from a process
+	// that does share the view is still scanned.
+	foreignKey := key + "\x00pid:" + strconv.Itoa(pid)
 	s.mu.Lock()
 	if t, ok := s.recent[key]; ok && now.Sub(t) < projectAgain {
 		s.mu.Unlock()
 		return
 	}
+	if t, ok := s.recent[foreignKey]; ok && pid > 0 && now.Sub(t) < projectAgain {
+		s.mu.Unlock()
+		return
+	}
 	s.mu.Unlock()
+	if pid > 0 && !s.mnt.same(pid) {
+		s.d.board.add("scan.project_foreign_ns", 1)
+		s.mark(foreignKey, now)
+		return
+	}
 	if s.d.policy.Excluded(probe) {
 		s.d.board.add("scan.project_excluded", 1)
 		s.mark(key, now)
@@ -173,13 +196,14 @@ func (s *scanner) noteAgents(agents []agentCWD) {
 			User:    &event.User{Name: a.user.Name, ID: a.user.ID},
 			Session: &event.Session{CWD: a.cwd},
 			Agent:   &event.Agent{ID: a.agent},
-		})
+		}, a.pid)
 	}
 }
 
 type agentCWD struct {
 	agent, cwd string
 	user       event.User
+	pid        int
 }
 
 // projectWorker runs the queued project scans one at a time.

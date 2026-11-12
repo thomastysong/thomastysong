@@ -110,25 +110,26 @@ func splitCommandLine(line string) (string, []string) {
 }
 
 func knownLauncher(base string) bool {
-	if _, ok := wrappers[base]; ok {
+	t := tab()
+	if _, ok := t.wrappers[base]; ok {
 		return true
 	}
-	return shells[base] || interpreters[base] || runners[base] || isPython(base)
+	return t.shells[base] || t.interpreters[base] || t.runners[base] || isPython(base)
 }
 
-var (
-	shells = map[string]bool{"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true,
+func buildLaunchers(t *tables) {
+	t.shells = map[string]bool{"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true,
 		"ash": true, "fish": true}
-	runners = map[string]bool{"npx": true, "pnpx": true, "bunx": true, "npm": true, "pnpm": true,
+	t.runners = map[string]bool{"npx": true, "pnpx": true, "bunx": true, "npm": true, "pnpm": true,
 		"yarn": true, "bun": true, "uvx": true, "uv": true, "pipx": true, "pip": true, "pip3": true,
 		"node": true, "nodejs": true, "tsx": true, "ts-node": true, "deno": true, "docker": true,
 		"podman": true, "go": true, "cmd": true, "powershell": true, "pwsh": true}
-	interpreters = map[string]bool{"ruby": true, "perl": true, "php": true, "lua": true,
+	t.interpreters = map[string]bool{"ruby": true, "perl": true, "php": true, "lua": true,
 		"rscript": true, "osascript": true, "java": true, "dotnet": true}
-	rePython = regexp.MustCompile(`^(?:python|pypy)[0-9.]*$`)
-)
+	t.rePython = regexp.MustCompile(`^(?:python|pypy)[0-9.]*$`)
+}
 
-func isPython(base string) bool { return base == "py" || rePython.MatchString(base) }
+func isPython(base string) bool { return base == "py" || tab().rePython.MatchString(base) }
 
 func isFlag(a string) bool { return len(a) > 1 && a[0] == '-' }
 
@@ -140,7 +141,7 @@ func (l *launch) resolve(cmd string, args []string, depth int) {
 		return
 	}
 	base := cmdBase(cmd)
-	if w, ok := wrappers[base]; ok {
+	if w, ok := tab().wrappers[base]; ok {
 		if next := w.unwrap(args); len(next) > 0 {
 			l.resolve(next[0], next[1:], depth+1)
 			return
@@ -151,7 +152,7 @@ func (l *launch) resolve(cmd string, args []string, depth int) {
 	switch {
 	case base == "cmd":
 		l.cmdExe(args, depth)
-	case shells[base]:
+	case tab().shells[base]:
 		l.posixShell(args, depth)
 	case base == "powershell" || base == "pwsh":
 		l.powerShell(args, depth)
@@ -169,9 +170,9 @@ func (l *launch) resolve(cmd string, args []string, depth int) {
 		if len(args) > 0 && args[0] == "run" {
 			args = args[1:]
 		}
-		l.nodeScript(args, bunValueFlags)
+		l.nodeScript(args, tab().bunValueFlags)
 	case base == "node" || base == "nodejs" || base == "tsx" || base == "ts-node":
-		l.nodeScript(args, nodeValueFlags)
+		l.nodeScript(args, tab().nodeValueFlags)
 	case base == "uvx":
 		l.uvTool(args)
 	case base == "uv":
@@ -188,7 +189,7 @@ func (l *launch) resolve(cmd string, args []string, depth int) {
 		l.containerRun(base, args)
 	case base == "go":
 		l.goRun(args)
-	case interpreters[base]:
+	case tab().interpreters[base]:
 		l.interpreter(args)
 	default:
 		l.binary(cmd, args)
@@ -224,45 +225,49 @@ func set(keys ...string) map[string]bool {
 }
 
 // wrappers is deliberately data: adding one is a table entry.
-var wrappers = map[string]wrapSpec{
-	"env":        {value: set("-u", "--unset", "-C", "--chdir", "-S", "--split-string"), assigns: true},
-	"sudo":       {value: set("-u", "--user", "-g", "--group", "-h", "--host", "-p", "--prompt", "-C", "-D", "--chdir", "-R", "-r", "-t", "-T"), assigns: true},
-	"doas":       {value: set("-u", "-C")},
-	"nohup":      {},
-	"exec":       {value: set("-a")},
-	"command":    {},
-	"time":       {value: set("-o", "-f")},
-	"setsid":     {},
-	"winpty":     {},
-	"unbuffer":   {},
-	"nice":       {value: set("-n", "--adjustment")},
-	"ionice":     {value: set("-c", "-n", "-p")},
-	"stdbuf":     {},
-	"timeout":    {value: set("-s", "--signal", "-k", "--kill-after"), operands: 1},
-	"arch":       {value: set("-e", "-d")},
-	"caffeinate": {value: set("-t", "-w")},
-	"xvfb-run":   {value: set("-n", "--server-num", "-s", "--server-args", "-e", "--error-file", "-f", "--auth-file", "-p", "--xauth-protocol", "-w", "--wait")},
-	"wsl":        {value: set("-d", "--distribution", "-u", "--user", "--cd", "--shell-type")},
-	"busybox":    {next: true},
-	"corepack":   {next: true},
-	"dotenv":     {value: set("-e", "-v")},
-	"direnv":     {sub: []string{"exec"}, operands: 1},
-	"envchain":   {operands: 1},
-	"volta":      {sub: []string{"run"}, value: set("--node", "--npm", "--yarn", "--pnpm", "--env")},
-	// Secret injectors. Their own flags vary by version, so the wrapped
-	// command is only trusted after an explicit "--".
-	"op":        {dashDash: true},
-	"doppler":   {dashDash: true},
-	"infisical": {dashDash: true},
-	"aws-vault": {dashDash: true},
-	"dotenvx":   {dashDash: true},
-	"chamber":   {dashDash: true},
-	"mise":      {dashDash: true},
-	"fnm":       {dashDash: true},
-	"teller":    {dashDash: true},
+func buildWrappers(t *tables) {
+	t.wrappers = map[string]wrapSpec{
+		"env":        {value: set("-u", "--unset", "-C", "--chdir", "-S", "--split-string"), assigns: true},
+		"sudo":       {value: set("-u", "--user", "-g", "--group", "-h", "--host", "-p", "--prompt", "-C", "-D", "--chdir", "-R", "-r", "-t", "-T"), assigns: true},
+		"doas":       {value: set("-u", "-C")},
+		"nohup":      {},
+		"exec":       {value: set("-a")},
+		"command":    {},
+		"time":       {value: set("-o", "-f")},
+		"setsid":     {},
+		"winpty":     {},
+		"unbuffer":   {},
+		"nice":       {value: set("-n", "--adjustment")},
+		"ionice":     {value: set("-c", "-n", "-p")},
+		"stdbuf":     {},
+		"timeout":    {value: set("-s", "--signal", "-k", "--kill-after"), operands: 1},
+		"arch":       {value: set("-e", "-d")},
+		"caffeinate": {value: set("-t", "-w")},
+		"xvfb-run":   {value: set("-n", "--server-num", "-s", "--server-args", "-e", "--error-file", "-f", "--auth-file", "-p", "--xauth-protocol", "-w", "--wait")},
+		"wsl":        {value: set("-d", "--distribution", "-u", "--user", "--cd", "--shell-type")},
+		"busybox":    {next: true},
+		"corepack":   {next: true},
+		"dotenv":     {value: set("-e", "-v")},
+		"direnv":     {sub: []string{"exec"}, operands: 1},
+		"envchain":   {operands: 1},
+		"volta":      {sub: []string{"run"}, value: set("--node", "--npm", "--yarn", "--pnpm", "--env")},
+		// Secret injectors. Their own flags vary by version, so the wrapped
+		// command is only trusted after an explicit "--".
+		"op":        {dashDash: true},
+		"doppler":   {dashDash: true},
+		"infisical": {dashDash: true},
+		"aws-vault": {dashDash: true},
+		"dotenvx":   {dashDash: true},
+		"chamber":   {dashDash: true},
+		"mise":      {dashDash: true},
+		"fnm":       {dashDash: true},
+		"teller":    {dashDash: true},
+	}
 }
 
-var reEnvAssign = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
+func buildEnvAssign(t *tables) {
+	t.reEnvAssign = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
+}
 
 // unwrap returns the wrapped command line, or nil when there is none.
 func (w wrapSpec) unwrap(args []string) []string {
@@ -287,7 +292,7 @@ func (w wrapSpec) unwrap(args []string) []string {
 			if w.value[a] {
 				i++
 			}
-		case w.assigns && reEnvAssign.MatchString(a):
+		case w.assigns && tab().reEnvAssign.MatchString(a):
 		case len(sub) > 0:
 			if a != sub[0] {
 				return nil
@@ -400,7 +405,7 @@ func (l *launch) powerShell(args []string, depth int) {
 				l.rest = args[i+2:]
 			}
 			return
-		case psValueFlags[la]:
+		case tab().psValueFlags[la]:
 			i++
 		case strings.HasPrefix(a, "-"):
 		default:
@@ -415,9 +420,11 @@ func (l *launch) powerShell(args []string, depth int) {
 	}
 }
 
-var psValueFlags = set("-executionpolicy", "-ep", "-ex", "-exec", "-windowstyle", "-w",
-	"-workingdirectory", "-wd", "-configurationname", "-inputformat", "-outputformat",
-	"-version", "-psconsolefile", "-settingsfile", "-custompipename")
+func buildPSValueFlags(t *tables) {
+	t.psValueFlags = set("-executionpolicy", "-ep", "-ex", "-exec", "-windowstyle", "-w",
+		"-workingdirectory", "-wd", "-configurationname", "-inputformat", "-outputformat",
+		"-version", "-psconsolefile", "-settingsfile", "-custompipename")
+}
 
 func (l *launch) inlineShell(script string, depth int) {
 	l.shell = true
@@ -498,7 +505,7 @@ func cleanSimpleCommand(c []string) []string {
 		case w == "", w == "!":
 			c = c[1:]
 			continue
-		case reEnvAssign.MatchString(w):
+		case tab().reEnvAssign.MatchString(w):
 			c = c[1:]
 			continue
 		}
@@ -528,18 +535,20 @@ func cleanSimpleCommand(c []string) []string {
 // curl ... | sh, bash <(curl ...), sh -c "$(wget ...)", iex (iwr ...).
 // It is a text heuristic on purpose; precise shell analysis is package
 // shellx's job and this package must not depend on it.
-var reFetchPipe = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\b(?:curl|wget|fetch|iwr|irm|invoke-webrequest|invoke-restmethod)\b[^|;&\n]*\|\s*(?:sudo\s+)?(?:env\s+)?(?:[\w./\\-]*/)?(?:sh|bash|zsh|dash|ksh|fish|python[0-9.]*|node|perl|ruby|php|pwsh|powershell|iex|invoke-expression)\b`),
-	regexp.MustCompile(`(?i)\b(?:sh|bash|zsh|dash|ksh|eval|source|python[0-9.]*|node)\b[^|;&\n]*(?:<\(|\$\(|` + "`" + `)\s*(?:curl|wget)\b`),
-	regexp.MustCompile(`(?i)\b(?:iex|invoke-expression)\b[^;\n]*\b(?:iwr|irm|invoke-webrequest|invoke-restmethod|downloadstring|net\.webclient)\b`),
-	regexp.MustCompile(`(?i)\b(?:iwr|irm|invoke-webrequest|invoke-restmethod|downloadstring)\b[^;\n]*\|\s*(?:iex|invoke-expression)\b`),
+func buildFetchPipe(t *tables) {
+	t.reFetchPipe = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)\b(?:curl|wget|fetch|iwr|irm|invoke-webrequest|invoke-restmethod)\b[^|;&\n]*\|\s*(?:sudo\s+)?(?:env\s+)?(?:[\w./\\-]*/)?(?:sh|bash|zsh|dash|ksh|fish|python[0-9.]*|node|perl|ruby|php|pwsh|powershell|iex|invoke-expression)\b`),
+		regexp.MustCompile(`(?i)\b(?:sh|bash|zsh|dash|ksh|eval|source|python[0-9.]*|node)\b[^|;&\n]*(?:<\(|\$\(|` + "`" + `)\s*(?:curl|wget)\b`),
+		regexp.MustCompile(`(?i)\b(?:iex|invoke-expression)\b[^;\n]*\b(?:iwr|irm|invoke-webrequest|invoke-restmethod|downloadstring|net\.webclient)\b`),
+		regexp.MustCompile(`(?i)\b(?:iwr|irm|invoke-webrequest|invoke-restmethod|downloadstring)\b[^;\n]*\|\s*(?:iex|invoke-expression)\b`),
+	}
 }
 
 func fetchPipe(script string) bool {
 	if len(script) > maxScript {
 		script = script[:maxScript]
 	}
-	for _, re := range reFetchPipe {
+	for _, re := range tab().reFetchPipe {
 		if re.MatchString(script) {
 			return true
 		}
@@ -552,14 +561,16 @@ func fetchPipe(script string) bool {
 // inventorying.
 // UNVERIFIED: names are from memory of the npm (mcp-remote, supergateway)
 // and PyPI (mcp-proxy) registries, not re-checked against them today.
-var bridges = set("mcp-remote", "supergateway", "mcp-proxy")
+func buildBridges(t *tables) {
+	t.bridges = set("mcp-remote", "supergateway", "mcp-proxy")
+}
 
 func (l *launch) findBridge() {
 	name := cmdBase(l.cmd)
 	if l.has {
 		name = strings.ToLower(baseName(l.spec.name))
 	}
-	if !bridges[name] {
+	if !tab().bridges[name] {
 		return
 	}
 	for _, a := range l.rest {

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
@@ -47,8 +48,13 @@ const (
 // to run the daemon against a fake home without root.
 type runEnv struct {
 	users      func() ([]platform.UserHome, error)
-	disabled   func() bool
+	disabled func() bool
+	// privileged: the process can read every account's files and
+	// processes (root, or CAP_DAC_READ_SEARCH and CAP_SYS_PTRACE).
 	privileged bool
+	// admin: it can also create files for other accounts and chown them
+	// (root): the per-account spool directories need it.
+	admin      bool
 	now        func() time.Time
 	host       func() (event.Host, string)
 	hookStatus func(c *catalog.Catalog, o hookinstall.Options) ([]hookinstall.State, error)
@@ -65,6 +71,7 @@ func defaultEnv() runEnv {
 		users:      platform.Users,
 		disabled:   platform.Disabled,
 		privileged: platform.IsPrivileged(),
+		admin:      platform.IsAdmin(),
 		now:        time.Now,
 		host:       func() (event.Host, string) { return platform.HostInfo(), platform.HostIDSource() },
 		hookStatus: hookinstall.Status,
@@ -184,11 +191,16 @@ func newDaemon(cfg *config.Config, log *slog.Logger, env runEnv) (_ *daemon, err
 	if cfg.HostID != "" {
 		d.host.ID, d.hostIDSource = cfg.HostID, "config"
 	}
-	if !env.privileged {
+	switch {
+	case !env.privileged:
 		log.Warn("spoor is not running privileged: only this account's agents are visible, and records are user-integrity")
+	case !env.admin:
+		// The node sensor: uid 65532 with CAP_DAC_READ_SEARCH and
+		// CAP_SYS_PTRACE reads every account but owns only its own files.
+		log.Info("spoor reads every account through capabilities but does not run as root: spool directories are made for this account only")
 	}
 
-	if d.layout, err = prepareLayout(cfg, env.privileged, log); err != nil {
+	if d.layout, err = prepareLayout(cfg, env.admin, log); err != nil {
 		return nil, err
 	}
 	if err := d.refreshUsers(); err != nil {
@@ -227,6 +239,7 @@ func newDaemon(cfg *config.Config, log *slog.Logger, env runEnv) (_ *daemon, err
 			OsquerySocket:   cfg.Sources.OsqueryExec.Socket,
 			OsqueryInterval: cfg.Sources.OsqueryExec.Interval.D(),
 			NoOsquery:       !config.On(cfg.Sources.OsqueryExec.Enabled, true),
+			SelfExes:        selfExePaths(cfg.HostRoot, runtime.GOOS),
 		})
 	}
 	if cfg.Sources.OTLP.Enabled {
@@ -540,7 +553,7 @@ func (d *daemon) refreshUsers() error {
 		list = ownAccount(list, currentUID(), os.UserHomeDir)
 	}
 	for _, u := range list {
-		if err := ensureUserSpool(d.layout, u, d.env.privileged); err != nil {
+		if err := ensureUserSpool(d.layout, u, d.env.admin); err != nil {
 			d.board.add("spool.dir_errors", 1)
 			d.log.Warn("cannot prepare spool directory", "uid", u.UID, "error", err)
 		}
@@ -605,7 +618,7 @@ func (d *daemon) refreshProcs() {
 	cwds := make([]agentCWD, 0, len(agents))
 	for _, a := range agents {
 		if a.CWD != "" {
-			cwds = append(cwds, agentCWD{agent: a.AgentID, cwd: a.CWD, user: a.User})
+			cwds = append(cwds, agentCWD{agent: a.AgentID, cwd: a.CWD, user: a.User, pid: a.PID})
 		}
 	}
 	d.scans.noteAgents(cwds)
@@ -620,12 +633,44 @@ func (d *daemon) refreshProcs() {
 	d.board.set("procmon.queue_dropped", st.QueueDropped)
 	d.board.set("procmon.overflows", st.Overflows)
 	d.board.set("procmon.read_misses", st.ReadMisses)
+	d.board.set("procmon.self_excluded", st.SelfExcluded)
+	// A sensor missing the privilege to look into other accounts'
+	// processes (no root, no CAP_SYS_PTRACE) shows it here.
+	d.board.set("procs_total", st.ProcsTotal)
+	d.board.set("procs_unreadable", st.ProcsUnreadable)
 	if d.otel != nil {
 		d.board.surface(d.otel.Surface())
 	}
 	for _, s := range d.shippers {
 		s.report(d.board)
 	}
+}
+
+// selfExePaths are the installed locations of the spoor binary the
+// agents' hooks run (packaging: deb/rpm /usr/bin/spoor, macOS pkg
+// /usr/local/bin/spoor, the Windows installer %ProgramFiles%\spoor), for
+// the process monitor to recognise spoor's own hook processes. They are
+// compared by file identity (procmon self.go), so listing a path that does
+// not exist, or holds something else, hides nothing. With a host root the
+// host's copies are looked at under it.
+func selfExePaths(hostRoot, goos string) []string {
+	var paths []string
+	switch goos {
+	case "windows":
+		if pf := os.Getenv("ProgramFiles"); pf != "" && filepath.IsAbs(pf) {
+			paths = append(paths, filepath.Join(pf, "spoor", "spoor.exe"))
+		}
+	case "darwin":
+		paths = append(paths, "/usr/local/bin/spoor")
+	default:
+		paths = append(paths, "/usr/bin/spoor", "/usr/local/bin/spoor")
+	}
+	if hostRoot != "" && goos != "windows" {
+		for i, p := range paths {
+			paths[i] = filepath.Join(hostRoot, p)
+		}
+	}
+	return paths
 }
 
 func boolGauge(b bool) uint64 {
@@ -662,6 +707,9 @@ func monitorSurface(st procmon.Stats) event.SurfaceStatus {
 		s.Status, s.Reason = "degraded", "exec_source_poll"
 	case !st.ExecHealthy && !st.LastCanary.IsZero():
 		s.Status, s.Reason = "degraded", "exec_selftest_failed"
+	case st.ProcsUnreadable > 0:
+		// Processes it may not look into: their agents are invisible.
+		s.Status, s.Reason = "degraded", "procs_unreadable"
 	}
 	if !st.LastCanary.IsZero() {
 		s.LastEvent = event.At(st.LastCanary)

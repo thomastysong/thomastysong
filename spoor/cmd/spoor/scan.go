@@ -26,6 +26,9 @@ files and (with projects on) the control files of projects agents worked in,
 then evaluates the inventory rules (posture). Nothing found on disk is
 executed. Output passes through the configured privacy profile.
 
+With --host-root /proc/<pid>/root (a node sensor looking into a container
+through a process in it) every record carries that process's container id.
+
 --state also records the result in the state database that the osquery
 extension and Fleet read (with a heartbeat, so the fail-closed Fleet
 policies see a live sensor): this is tier 2, a scheduled scan without the
@@ -77,9 +80,15 @@ func (a *app) cmdScan(args []string) int {
 	}
 	ctx, stop := signal.NotifyContext(a.ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	res, err := a.scan(ctx, cfg, scanOptions{state: *withState, outbox: *withOutbox, projects: *projects, full: *full, deadline: *deadline})
+	so := scanOptions{state: *withState, outbox: *withOutbox, projects: *projects, full: *full, deadline: *deadline}
+	var ctrNote string
+	so.container, ctrNote = scanContainer(cfg.HostRoot)
+	res, err := a.scan(ctx, cfg, so)
 	if err != nil {
 		return a.fail("scan", err)
+	}
+	if ctrNote != "" {
+		res.Notes = append(res.Notes, ctrNote)
 	}
 	switch {
 	case *asJSON:
@@ -101,6 +110,9 @@ func (a *app) cmdScan(args []string) int {
 type scanOptions struct {
 	state, outbox, projects, full bool
 	deadline                      time.Duration
+	// container is stamped on every record: the scan looks into a
+	// container's root through /proc/<pid>/root.
+	container *event.Container
 }
 
 type scanResult struct {
@@ -184,7 +196,7 @@ func (a *app) scan(ctx context.Context, cfg *config.Config, o scanOptions) (*sca
 	res := &scanResult{Started: started.UTC(), Disabled: disabled, Counts: map[string]int{}, Notes: notes}
 	dres, err := discovery.Scan(ctx, discovery.Options{
 		Catalog: cat, HostRoot: cfg.HostRoot, Projects: o.projects, Deadline: o.deadline,
-		Prev: prev, Full: o.full || prev == nil, Host: &host, Now: a.now,
+		Prev: prev, Full: o.full || prev == nil, Host: &host, Now: a.now, Container: o.container,
 	})
 	if err != nil {
 		return nil, err

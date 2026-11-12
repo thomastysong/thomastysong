@@ -94,10 +94,10 @@ type opts struct {
 	// stdinCut: the supervisor stopped waiting for the agent to close
 	// stdin, so the payload on the worker's stdin may be a prefix.
 	stdinCut bool
-	// stdinBytes and stdinSHA256 describe everything the supervisor read
-	// from stdin when that was more than it passed on (over the cap).
-	stdinBytes  int64
-	stdinSHA256 string
+	// stdinBytes is the size of everything the supervisor read from stdin
+	// when that was more than it passed on (over the cap). Its digest comes
+	// through the environment, never argv (child.go, envStdinSHA256).
+	stdinBytes int64
 }
 
 // parseArgs reads `--name value` and `--name=value` forms. Unknown flags
@@ -142,8 +142,6 @@ func parseArgs(args []string) opts {
 			o.stdinCut = true
 		case "stdin-bytes":
 			o.stdinBytes, _ = strconv.ParseInt(next(), 10, 64)
-		case "stdin-sha256":
-			o.stdinSHA256 = next()
 		}
 	}
 	return o

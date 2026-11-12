@@ -1,8 +1,6 @@
 package osqexec
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"runtime"
 	"sort"
 	"strconv"
@@ -145,13 +143,10 @@ func parseRows(t *tableSpec, rows []map[string]string) []rec {
 			x.eid = n
 			x.key = strconv.FormatUint(n, 10)
 		} else {
-			// No usable event id: identify the row by its content.
-			h := sha256.New()
-			for _, f := range []string{r["time"], r["pid"], r["path"], r["cmdline"]} {
-				h.Write([]byte(f))
-				h.Write([]byte{0})
-			}
-			x.key = "h" + hex.EncodeToString(h.Sum(nil)[:12])
+			// No usable event id: identify the row by its content, keyed
+			// (runkey.go) because the key becomes part of the event id and
+			// the command line in it is unredacted.
+			x.key = contentRowKey(r["time"], r["pid"], r["path"], r["cmdline"])
 		}
 		out = append(out, x)
 	}
@@ -190,7 +185,9 @@ func (s *Source) convert(t *tableSpec, r *rec) *event.Event {
 	ev := event.New(event.KindActivity, event.TypeProcessExec, event.SourceOsquery)
 	ev.TS = event.At(ts)
 	// Deterministic: a replayed poll (sensor restart inside the lookback)
-	// produces the same id and collapses downstream.
+	// produces the same id and collapses downstream. A row without an eid
+	// is the exception: its key is keyed per process (runkey.go), so its id
+	// is stable only until the sensor restarts.
 	ev.ID = event.StableID(ts, event.TypeProcessExec, "osquery", t.name, r.key, strconv.Itoa(r.pid))
 	ev.Fidelity = event.FidelityObserved
 	ev.Integrity = s.integrity

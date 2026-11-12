@@ -29,9 +29,20 @@
 // leaves the machine.
 //
 // HostInfo in an unprivileged process is only as trustworthy as that
-// process's environment: SPOOR_HOST_ID and the per-user host_id file are the
-// user's to set. A privileged daemon should stamp host identity itself
-// rather than accept it from a hook client.
+// process's environment: SPOOR_HOST_ID, SPOOR_HOST_NAME and the per-user
+// host_id file are the user's to set. A privileged daemon should stamp host
+// identity itself rather than accept it from a hook client.
+//
+// # Privilege
+//
+// IsPrivileged answers "can this process read every account's files and
+// processes": uid 0 (an elevated token on Windows), or on Linux an
+// effective capability set holding both CAP_DAC_READ_SEARCH and
+// CAP_SYS_PTRACE, which is how the Kubernetes node sensor runs (uid 65532
+// with file capabilities). IsAdmin answers "can it create files for other
+// accounts and give them away" (uid 0, an elevated token): the daemon's
+// per-account spool directories need it, reading does not. The capability
+// set is read once from /proc/self/status.
 //
 // # What each OS provides
 //

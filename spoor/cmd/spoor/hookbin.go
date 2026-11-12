@@ -38,26 +38,9 @@ func installedBinaries(path string) (bins []string, err error) {
 			bins, err = nil, fmt.Errorf("%s: internal error while reading the hook entries", path)
 		}
 	}()
-	f, err := platform.OpenNoFollow(path)
+	doc, b, err := readHookDoc(path)
 	if err != nil {
 		return nil, err
-	}
-	defer f.Close()
-	b, err := io.ReadAll(io.LimitReader(f, maxHookFile+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(b) > maxHookFile {
-		return nil, fmt.Errorf("%s: larger than %d bytes", path, maxHookFile)
-	}
-	var doc any
-	if strings.EqualFold(filepath.Ext(path), ".toml") {
-		var m map[string]any
-		if _, err := toml.Decode(string(b), &m); err == nil {
-			doc = m
-		}
-	} else if json.Unmarshal(b, &doc) != nil {
-		doc = nil
 	}
 	seen := map[string]bool{}
 	var out []string
@@ -81,6 +64,102 @@ func installedBinaries(path string) (bins []string, err error) {
 		}
 	}
 	return out, nil
+}
+
+// readHookDoc reads one hook or settings file without following a final
+// link and decodes it (JSON, or TOML for .toml). doc is nil when the file
+// does not decode (JSONC, damage); raw is returned either way.
+func readHookDoc(path string) (doc any, raw []byte, err error) {
+	f, err := platform.OpenNoFollow(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, maxHookFile+1))
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(b) > maxHookFile {
+		return nil, nil, fmt.Errorf("%s: larger than %d bytes", path, maxHookFile)
+	}
+	if strings.EqualFold(filepath.Ext(path), ".toml") {
+		var m map[string]any
+		if _, err := toml.Decode(string(b), &m); err == nil {
+			doc = m
+		}
+	} else if json.Unmarshal(b, &doc) != nil {
+		doc = nil
+	}
+	return doc, b, nil
+}
+
+// installedTimeouts returns the distinct timeouts, in seconds, written in
+// the hook handlers of one file: "timeout" (seconds for Claude Code, Codex
+// and Cursor, milliseconds for Gemini CLI) and "timeoutSec" (Copilot).
+// A value that is a whole number of thousands is also offered divided by
+// 1000, since the file does not say which dialect wrote it. They are
+// candidates for recovering the --timeout an installation used; the
+// caller confirms each one against what install would write.
+func installedTimeouts(path string) []int {
+	doc, _, err := readHookDoc(path)
+	if err != nil || doc == nil {
+		return nil
+	}
+	root, ok := doc.(map[string]any)
+	if !ok {
+		return nil
+	}
+	seen := map[int]bool{}
+	var out []int
+	add := func(n int) {
+		if n >= 1 && n <= 3600 && !seen[n] && len(out) < 16 {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
+	var walk func(v any, depth int)
+	walk = func(v any, depth int) {
+		if depth > 64 {
+			return
+		}
+		switch t := v.(type) {
+		case map[string]any:
+			for k, x := range t {
+				if k == "timeout" || k == "timeoutSec" {
+					var n int64
+					switch y := x.(type) {
+					case float64:
+						if y != float64(int64(y)) || y < 0 || y > 3600*1000 {
+							continue
+						}
+						n = int64(y)
+					case int64:
+						n = y
+					default:
+						continue
+					}
+					if n > 0 && n%1000 == 0 {
+						add(int(n / 1000))
+					}
+					if n <= 3600 {
+						add(int(n))
+					}
+					continue
+				}
+				walk(x, depth+1)
+			}
+		case []any:
+			for _, x := range t {
+				walk(x, depth+1)
+			}
+		case []map[string]any:
+			for _, x := range t {
+				walk(x, depth+1)
+			}
+		}
+	}
+	walk(root["hooks"], 0)
+	return out
 }
 
 // hookCommandKeys are the handler fields hookinstall writes a command line

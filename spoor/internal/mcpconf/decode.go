@@ -118,11 +118,11 @@ func pathExt(path string) string {
 	return ""
 }
 
-var (
-	reTOMLHeader = regexp.MustCompile(`^\[\[?\s*[A-Za-z0-9_\-."' ]+\s*\]\]?\s*(#.*)?$`)
-	reTOMLAssign = regexp.MustCompile(`^[A-Za-z0-9_\-."']+\s*=\s*\S`)
-	reYAMLLine   = regexp.MustCompile(`line (\d+)`)
-)
+func buildDecodeTables(t *tables) {
+	t.reTOMLHeader = regexp.MustCompile(`^\[\[?\s*[A-Za-z0-9_\-."' ]+\s*\]\]?\s*(#.*)?$`)
+	t.reTOMLAssign = regexp.MustCompile(`^[A-Za-z0-9_\-."']+\s*=\s*\S`)
+	t.reYAMLLine = regexp.MustCompile(`line (\d+)`)
+}
 
 // looksLikeTOML inspects the head of a file whose name gives no hint.
 func looksLikeTOML(text []byte) bool {
@@ -143,7 +143,7 @@ func looksLikeTOML(text []byte) bool {
 		if len(line) == 0 || line[0] == '#' {
 			continue
 		}
-		if reTOMLHeader.Match(line) || reTOMLAssign.Match(line) {
+		if tab().reTOMLHeader.Match(line) || tab().reTOMLAssign.Match(line) {
 			return true
 		}
 	}
@@ -262,7 +262,7 @@ func decodeTOML(text []byte) (any, error) {
 func decodeYAML(text []byte) (any, error) {
 	malformed := func(err error) error {
 		line := 0
-		if m := reYAMLLine.FindStringSubmatch(err.Error()); m != nil {
+		if m := tab().reYAMLLine.FindStringSubmatch(err.Error()); m != nil {
 			line, _ = strconv.Atoi(m[1])
 		}
 		return &SyntaxError{Syntax: string(synYAML), Line: line, Reason: "malformed"}

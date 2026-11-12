@@ -13,16 +13,18 @@ import (
 // process loads or where its traffic goes. They are not secrets, and
 // changing one is the cheapest way to hijack a server without touching its
 // command line, so their values take part in the definition hash.
-var loaderVars = set(
-	"PATH", "NODE_OPTIONS", "NODE_PATH", "NODE_EXTRA_CA_CERTS", "NODE_TLS_REJECT_UNAUTHORIZED",
-	"ELECTRON_RUN_AS_NODE", "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT",
-	"DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH", "DYLD_FRAMEWORK_PATH",
-	"PYTHONPATH", "PYTHONSTARTUP", "PYTHONHOME", "PERL5LIB", "PERL5OPT", "RUBYOPT", "RUBYLIB",
-	"JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS", "DOTNET_STARTUP_HOOKS",
-	"BASH_ENV", "ENV", "NPM_CONFIG_REGISTRY", "PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL",
-	"UV_INDEX_URL", "UV_DEFAULT_INDEX", "UV_EXTRA_INDEX_URL", "HTTP_PROXY", "HTTPS_PROXY",
-	"ALL_PROXY", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "ANTHROPIC_BASE_URL", "OPENAI_BASE_URL",
-)
+func buildLoaderVars(t *tables) {
+	t.loaderVars = set(
+		"PATH", "NODE_OPTIONS", "NODE_PATH", "NODE_EXTRA_CA_CERTS", "NODE_TLS_REJECT_UNAUTHORIZED",
+		"ELECTRON_RUN_AS_NODE", "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT",
+		"DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH", "DYLD_FRAMEWORK_PATH",
+		"PYTHONPATH", "PYTHONSTARTUP", "PYTHONHOME", "PERL5LIB", "PERL5OPT", "RUBYOPT", "RUBYLIB",
+		"JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS", "DOTNET_STARTUP_HOOKS",
+		"BASH_ENV", "ENV", "NPM_CONFIG_REGISTRY", "PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL",
+		"UV_INDEX_URL", "UV_DEFAULT_INDEX", "UV_EXTRA_INDEX_URL", "HTTP_PROXY", "HTTPS_PROXY",
+		"ALL_PROXY", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "ANTHROPIC_BASE_URL", "OPENAI_BASE_URL",
+	)
+}
 
 // DefinitionHash is a stable SHA-256 over transport, command, args, sorted env NAMES, URL (no userinfo/query), sorted header NAMES. Used for drift ("rug pull") detection of the declaration.
 //
@@ -78,7 +80,7 @@ func DefinitionHash(s Server) (sum string) {
 	put(strconv.Itoa(len(names)))
 	for _, k := range names {
 		put(k)
-		if loaderVars[strings.ToUpper(k)] {
+		if tab().loaderVars[strings.ToUpper(k)] {
 			put("=" + r.text(s.Env[k]))
 		}
 	}

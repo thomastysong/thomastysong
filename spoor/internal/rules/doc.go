@@ -135,7 +135,9 @@
 // transcript file), never a name from the payload. Per session the engine
 // keeps flags, counters, dedup memory, the last 200 paths written by file
 // tools, shell redirections and writing MCP tools (session.runs_written_file
-// is set when a later command executes one of them), and keyed
+// is set when a later command executes one of them), the shell facts of
+// the last 16 scripts written by file tools (see "Scripts written, then
+// run" below), and keyed
 // fingerprints of credential values read from credential-class paths
 // (session.secret_flow is set when one of those values, raw, URL-encoded,
 // base64 or hex, appears in a later outbound command, URL or MCP argument).
@@ -169,6 +171,34 @@
 // UTF-8 of at most 64 bytes and as a digest otherwise, so the engine never
 // exports state it would refuse to import.
 //
+// # Scripts written, then run
+//
+// A command written into a script by a file tool (Write, Edit, MultiEdit,
+// apply_patch) and run in a later event is analysed when it is written:
+// features.WrittenScripts gives the shell.* and net.* facts a shell event
+// carrying the script's content would get (shell, PowerShell and cmd
+// scripts in their dialect; Python, JavaScript, Ruby, Perl, PHP and Lua as
+// interpreter one-liners), and the session keeps them per normalized path
+// (16 scripts, 3 KiB of facts each, least recently written evicted; a
+// write that replaces the file with non-script content or a patch that
+// deletes it forgets it, an edit adds to it, a patch move carries it).
+// When a later shell command or process.exec runs that path (./x.sh, sh
+// x.sh, bash < x.sh, cat x.sh | sh, source x.sh, python3 x.py, node x.js,
+// pwsh -File x.ps1, through sudo, env, timeout and cd), the facts are
+// merged into the executing event before matching (features.Inherit), so
+// the parsed-fact rules fire on "sh /tmp/x.sh" as they would on its
+// content, scripts run by the script included. Detections on such an event
+// carry shell.inherited_kinds = written_script and
+// session.written_exec_path in their evidence, and a guard reason names
+// the script. A path counts as run only when it is the command word or the
+// script argument of an interpreter: chmod targets, syntax checks (sh -n,
+// node --check, perl -c, php -l) and a file handed to a program as data
+// (python3 -c code x.py, python3 - x.py) do not inherit, although they
+// still set session.runs_written_file as before. A script that sends a
+// credential value remembered from an earlier read is scanned when it is
+// written; running it sets session.secret_flow. Nothing is read from disk:
+// what is known about a file is what the agent's file tools wrote into it.
+//
 // # Operator suppressions
 //
 // A suppression applies when its rule glob matches and every match entry
@@ -195,8 +225,20 @@
 //   - Session state of a daemonless hook lives in a file the monitored user
 //     can write; code running as that user can clear its own flags.
 //   - Content hidden behind runtime assembly (eval of built strings,
-//     interpreter one-liners, write-then-run across sessions) is scored by
-//     shell.opaque and session.runs_written_file, not seen through.
+//     interpreter one-liners) is scored by shell.opaque, not seen through.
+//     Write-then-run is seen through only for scripts written by file
+//     tools in the same session: a script written by a shell redirect or
+//     heredoc (cat > x.sh <<EOF), downloaded, unpacked from an archive,
+//     copied or renamed by a shell command (cp, mv), changed by an editor
+//     outside the agent, or written in another session is known only as a
+//     written path (session.runs_written_file) or not at all. A document,
+//     data or source extension (.md, .json, .go ...) without a #! line is
+//     not analysed, so "sh notes.md" inherits nothing. Writing more than 16
+//     other scripts between the write and the run evicts the first, and a
+//     one-shot hook process's 64 KiB state sheds the oldest scripts first
+//     when it is full. A relative path run after a cd that cannot be
+//     resolved statically (cd "$dir") is resolved against the session's
+//     working directory only.
 //   - Novelty baselines are in memory unless Options.Baseline is set, so in
 //     a one-shot hook process every sighting is a first sighting.
 //

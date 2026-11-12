@@ -9,8 +9,9 @@ import (
 )
 
 // Output bounds. A declaration is attacker-sized; an inventory record is not
-// allowed to be. Cuts are visible (a "[+N more]" element, a "~fingerprint"
-// suffix) and the definition hash always covers the full declaration.
+// allowed to be. Cuts are visible (a "[+N more]" element, a "~<8 hex>"
+// suffix keyed per process, see runkey.go) and the definition hash always
+// covers the full declaration.
 const (
 	maxOutArgs    = 64
 	maxOutArg     = 1024
@@ -29,9 +30,11 @@ const (
 // Normalize derives launch facts. Never includes secret values.
 //
 // Command and Args are returned as declared, with credentials replaced by
-// "[REDACTED:<kind>:<fingerprint>]". Command is the full declared path:
-// reducing it to a basename for lower privacy tiers is the redaction stage's
-// decision, and it cannot be undone here.
+// "[REDACTED:<kind>:<fingerprint>]" (classify's marker shape, whose unkeyed
+// fingerprint package privacy keys or removes before anything is shipped).
+// Command is the full declared path: reducing it to a basename for lower
+// privacy tiers is the redaction stage's decision, and it cannot be undone
+// here.
 //
 // Runner follows event.MCP's vocabulary; launchers with the same behaviour
 // are folded (pnpm dlx, yarn dlx, npm exec -> npx; bun x -> bunx; uv tool run

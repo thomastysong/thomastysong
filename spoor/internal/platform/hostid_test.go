@@ -404,3 +404,34 @@ func TestHostInfoReal(t *testing.T) {
 	}
 	t.Logf("host id %q from %q, name %q", h.ID, src, h.Name)
 }
+
+// TestHostNameOverride: in a pod the kernel's host name is the pod's, so
+// the DaemonSet sets SPOOR_HOST_NAME from spec.nodeName. A value that is
+// not a plausible host name is ignored, never copied into records.
+func TestHostNameOverride(t *testing.T) {
+	kernel, _ := os.Hostname()
+	cases := []struct{ env, want string }{
+		{"", kernel},
+		{"node-a.us-east-1.compute.internal", "node-a.us-east-1.compute.internal"},
+		{"  gke-pool-1-abcd  ", "gke-pool-1-abcd"},
+		{"evil\"},{\"x\":\"", kernel},
+		{"two words", kernel},
+		{"tab\tname", kernel},
+		{"line\nbreak", kernel},
+		{"ünïcode", kernel},
+		{strings.Repeat("a", 253), strings.Repeat("a", 253)},
+		{strings.Repeat("a", 254), kernel},
+	}
+	for _, c := range cases {
+		t.Setenv(EnvHostName, c.env)
+		if got := HostInfo().Name; got != c.want {
+			t.Errorf("SPOOR_HOST_NAME=%.40q: Name = %.40q, want %.40q", c.env, got, c.want)
+		}
+	}
+	// The id override is independent of the name override.
+	t.Setenv(EnvHostID, "node-a")
+	t.Setenv(EnvHostName, "node-a")
+	if h := HostInfo(); h.ID != "node-a" || h.Name != "node-a" {
+		t.Errorf("HostInfo = %+v", h)
+	}
+}

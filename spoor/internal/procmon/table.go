@@ -44,6 +44,14 @@ type node struct {
 	owner  *root
 	env    envFacts
 	exited time.Time // set on tombstones
+	// self: spoor's own hook process (self.go), never reported.
+	self bool
+	// kthread: a kernel thread, left out of the readability counts.
+	kthread bool
+	// unreadable: the last full read of the process was refused with
+	// EACCES or EPERM (its environment, which needs the same access as
+	// its executable link and working directory).
+	unreadable bool
 }
 
 // root is one agent root process.
@@ -114,6 +122,10 @@ type observed struct {
 	// (setproctitle, a Node process.title) without running exec.
 	rename bool
 	isNew  bool // first full sighting (set by ingest)
+	// self: spoor's own hook process (self.go).
+	self bool
+	// unreadable: reading the process was refused (EACCES, EPERM).
+	unreadable bool
 }
 
 const (
@@ -124,6 +136,7 @@ const (
 func (n *node) update(o *observed) {
 	if o.id.key != 0 {
 		n.key = o.id.key
+		n.kthread = o.id.kthread
 	}
 	if o.id.comm != "" {
 		n.comm = o.id.comm
@@ -141,6 +154,8 @@ func (n *node) update(o *observed) {
 		n.uid = capString(r.UID, 128)
 		n.user = capString(r.User, 256)
 		n.full = true
+		n.self = o.self
+		n.unreadable = o.unreadable
 		if r.PPID > 0 {
 			n.ppid = r.PPID
 		}
@@ -217,6 +232,9 @@ func (m *Monitor) resolve(n *node, o *observed, now time.Time) (evs []*event.Eve
 		m.settle(parent)
 	}
 	enc := m.enclosing(n)
+	if o.self {
+		return m.resolveSelf(n, o, enc, now), 0
+	}
 	was := n.root
 	if was != nil && was.alive && !o.exec && !o.isNew {
 		// Read again without an exec (the agent renamed itself): it is
@@ -283,6 +301,42 @@ func (m *Monitor) resolve(n *node, o *observed, now time.Time) (evs []*event.Eve
 		promote = parent.pid
 	}
 	return evs, promote
+}
+
+// resolveSelf settles spoor's own hook process: it stays in the table with
+// the agent it belongs to (so whatever it starts is still that agent's) and
+// produces no event. A root that ran exec into it has ended.
+func (m *Monitor) resolveSelf(n *node, o *observed, enc *root, now time.Time) (evs []*event.Event) {
+	if was := n.root; was != nil {
+		evs = m.endRoot(was, now, nil)
+		n.root = nil
+	}
+	if n.owner == nil {
+		n.owner = enc
+	}
+	n.resolved = true
+	if o.exec || o.isNew {
+		m.st.selfExcluded.Add(1)
+	}
+	return evs
+}
+
+// countReadability stores the readability counts of the live user-space
+// processes in the table (Stats.ProcsTotal, Stats.ProcsUnreadable). The
+// caller holds m.mu.
+func (m *Monitor) countReadability() {
+	var total, unreadable uint64
+	for _, n := range m.nodes {
+		if n.kthread || n.pid <= 0 {
+			continue
+		}
+		total++
+		if n.unreadable {
+			unreadable++
+		}
+	}
+	m.st.procsTotal.Store(total)
+	m.st.procsUnreadable.Store(unreadable)
 }
 
 // settle resolves a node seen without an observation of its own (a parent

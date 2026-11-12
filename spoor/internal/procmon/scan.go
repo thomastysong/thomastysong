@@ -1,6 +1,8 @@
 package procmon
 
 import (
+	"errors"
+	"io/fs"
 	"strings"
 	"time"
 
@@ -37,10 +39,18 @@ func (m *Monitor) prepare(id ident, rec *platform.Proc, via string, ts time.Time
 	ix := m.index()
 	env, err := m.src.env(id.pid, ix.keep)
 	if err != nil {
+		// EACCES/EPERM: the process exists and the sensor may not look
+		// into it (counted per scan, see countReadability); anything else
+		// is a process that went away mid-read.
+		o.unreadable = errors.Is(err, fs.ErrPermission)
 		env = nil
 	}
 	o.envF = ix.scanEnv(env)
 	o.name = emitName(rec.Name)
+	if m.isSelfHook(id.pid, rec) {
+		o.self = true
+		return o
+	}
 	if id.pid != m.self {
 		o.cand = m.candidate(rec, env, o.envF)
 	}
@@ -284,6 +294,9 @@ func (m *Monitor) fullScan(now time.Time) {
 	}
 	obs = append(obs, m.observeChanges(changed, recs)...)
 	m.commit(obs, seq0, now)
+	m.mu.Lock()
+	m.countReadability()
+	m.mu.Unlock()
 }
 
 // nameChange is a known process whose kernel name changed, with the

@@ -169,6 +169,7 @@ Measured on Linux x86-64 VMs on 2026-11-12. The conditions and limits are in eac
 
 ## Documentation
 
+- [docs/ARTICLE.md](docs/ARTICLE.md): the write-up: what already existed, what the red team broke, the design that survived and what was measured
 - [docs/DESIGN.md](docs/DESIGN.md): components, trust boundaries, data per privacy profile, decisions
 - [docs/RULES.md](docs/RULES.md): the rule language, signed bundles and the catalogue of shipped packs
 - [docs/EVENTS.md](docs/EVENTS.md): the record format and its JSON schema

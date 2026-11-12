@@ -49,6 +49,11 @@ kubeconform -strict -summary -kubernetes-version 1.31.0 namespace.yaml configmap
 Summary: 4 resources found in 3 files - Valid: 4, Invalid: 0, Errors: 0, Skipped: 0
 ```
 
+That run predates the change of `seccompProfile` from `RuntimeDefault` to
+`Localhost` with `localhostProfile` (PodSecurityContext fields since
+Kubernetes 1.19); it was not repeated because kubeconform is not installed
+where the fixes were made.
+
 The image was built by the test from the repository's `Dockerfile` with the
 module vendored into a copy of the build context (no network in the build),
 on `mirror.gcr.io/library/golang:1.26-bookworm` and

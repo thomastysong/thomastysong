@@ -16,8 +16,11 @@
 #  4. refreshes the osquery extension copy when spoor is registered in
 #     /var/osquery/extensions.load, and restarts osquery detached;
 #  5. (re)loads the launchd job so the new binary runs;
-#  6. rewrites spoor's managed hook entries for agents that already have
-#     them (entries from an earlier release report "modified" until then).
+#  6. rewrites spoor's managed hook entries that are exactly what an
+#     earlier release wrote with install's default options (they report
+#     "modified" until then); entries installed with other options (--guard
+#     --fail-closed, --timeout) or edited are left as they are and reported,
+#     because a rewrite with default options would silently undo them.
 # Reading other users' transcripts needs Full Disk Access for
 # /usr/local/bin/spoor, granted by an MDM PPPC profile (SystemPolicyAllFiles).
 set -eu
@@ -86,19 +89,35 @@ if [ "$ROOT" = "" ]; then
 	launchctl bootstrap system "$PLIST" || warn "launchctl bootstrap failed; see /Library/Logs/spoor/spoor.log"
 fi
 
-# 6. Hooks (see packaging/linux/postinstall.sh for the parsing).
-hooked=$("$BIN" hooks status --scope managed --json 2>/dev/null | awk -F'"' '
-	/"agent":/ { a = $4 }
-	/"status":/ {
-		s = $4
-		if ((s == "managed" || s == "modified" || s == "shadowed" || s == "insecure_permissions") && a != "" && !(a in seen)) {
+# 6. Hooks (see packaging/linux/postinstall.sh for the parsing and the
+# selection).
+sel=$("$BIN" hooks status --scope managed --json 2>/dev/null | awk -F'"' '
+	function flush() {
+		if (a != "" && old && !(a in seen)) {
 			seen[a] = 1
 			out = out (out == "" ? "" : ",") a
+		} else if (a != "" && !old && s == "modified" && !(a in kept)) {
+			kept[a] = 1
+			left = left (left == "" ? "" : ",") a
 		}
+		a = ""
+		s = ""
+		old = 0
 	}
-	END { print out }') || hooked=""
+	/^[ \t]*"agent": "/ { flush(); a = $4 }
+	/^[ \t]*"status": "/ { s = $4 }
+	/^[ \t]*"detail": "/ { if (index($0, "written by an earlier spoor release") > 0) old = 1 }
+	END { flush(); print out; print left }') || sel=""
+hooked=$(printf '%s\n' "$sel" | sed -n 1p)
+left=$(printf '%s\n' "$sel" | sed -n 2p)
 if [ -n "$hooked" ]; then
-	"$BIN" hooks install --scope managed --agents "$hooked" >/dev/null 2>&1 ||
+	if "$BIN" hooks install --scope managed --agents "$hooked" >/dev/null 2>&1; then
+		echo "spoor: managed hooks rewritten for $hooked"
+	else
 		warn "could not rewrite managed hooks for $hooked; run: $BIN hooks install --scope managed --agents $hooked"
+	fi
+fi
+if [ -n "$left" ]; then
+	echo "spoor: managed hooks of $left left as they are: they differ from install's default options (--guard, --fail-closed, --timeout ...) or were edited; if an earlier release wrote them, run $BIN hooks install --scope managed --agents $left with the options they were installed with"
 fi
 exit 0

@@ -37,7 +37,15 @@ import (
 // name: values kept only because they look machine generated are often
 // identifiers (project refs, bucket names) that are legitimately used as
 // subdomains, and short values collide with ordinary labels (measured: one
-// 11-byte value in the benign replay).
+// 11-byte value in the benign replay). For the same reason a run of labels
+// with its dots never matches a value that is itself a host name or URL
+// (SESSION_COOKIE_DOMAIN, AUTH0_DOMAIN): every subdomain of it would.
+//
+// A name is split the way resolvers see it: IDNA processing (curl with
+// libidn2, WHATWG URL parsers, Python's idna codec) maps the ideographic,
+// full-width and half-width full stops to '.' and full-width letters and
+// digits to ASCII before the query, so a name with any non-ASCII byte is
+// also scanned in that form.
 
 const (
 	minSecretValue  = 8
@@ -50,14 +58,27 @@ const (
 
 // Bounds of the outbound scan. Every outbound string is scanned, shortest
 // first, so a padding string sorts after the short value it is meant to
-// hide; a string over flowTextScan is scanned on its head and tail. Hitting
-// any bound sets session.secret_flow_truncated, so a padded request is
-// never silently clean.
+// hide; a string over flowTextScan is scanned on its head and tail. The
+// candidate budget alone does not bound time: label padding ("a.a.a...")
+// yields candidates that are never fingerprinted or decoded yet still
+// cost a loop step and a lookup each, so every step of the scan is also
+// charged to a work budget, and the engine stops the scan at half the
+// per-event deadline whatever the budget says, so the rules always run.
+// Hitting any bound sets session.secret_flow_truncated, so a padded
+// request is never silently clean.
 const (
 	flowTextScan = 64 << 10 // longer strings: head and tail flowTextScan/2 each
 	maxFlowBytes = 1 << 20  // bytes scanned per event
 	maxFlowCands = 1 << 15  // distinct candidates fingerprinted or decoded per event
 	maxFlowTexts = 1024     // MCP argument strings per event
+	// maxFlowWork is the work budget of one event, in steps (see
+	// flowScan.step); a step costs a few nanoseconds, so the budget
+	// bounds a padded event to tens of milliseconds while the largest
+	// benign payloads measured use a small fraction of it.
+	maxFlowWork = 4 << 20
+	// flowClockEvery is how many steps pass between two readings of the
+	// scan's clock.
+	flowClockEvery = 1 << 12
 )
 
 // envLine is compiled on first use, not at package initialisation: every
@@ -276,7 +297,9 @@ func inputStrings(ev *event.Event, limit int) ([]string, bool) {
 // secretFlow returns the kinds of remembered credential values that appear
 // in the event's outbound strings, whether anything was checked, and
 // whether the scan stopped at a bound (some outbound text was not seen).
-func (s *sessionState) secretFlow(ev *event.Event) (kinds []string, checked, truncated bool) {
+// stop, when not nil, is polled during the scan; once it reports true the
+// scan ends as if a bound had been hit.
+func (s *sessionState) secretFlow(ev *event.Event, stop func() bool) (kinds []string, checked, truncated bool) {
 	if len(s.secrets) == 0 || len(s.salt) == 0 {
 		return nil, false, false
 	}
@@ -285,10 +308,10 @@ func (s *sessionState) secretFlow(ev *event.Event) (kinds []string, checked, tru
 		return nil, false, false
 	}
 	want := make(map[string]secretFP, len(s.secrets))
-	sc := &flowScan{budget: maxFlowCands, seen: map[string]uint8{}, lens: map[int]bool{}}
+	sc := &flowScan{budget: maxFlowCands, seen: map[string]uint8{}, lens: make([]bool, maxSecretValue+1), stop: stop}
 	for _, x := range s.secrets {
 		want[x.fp] = x
-		if x.n > 0 {
+		if x.n > 0 && x.n < len(sc.lens) {
 			sc.lens[x.n] = true
 		} else {
 			sc.anyLen = true // state from before lengths were recorded
@@ -403,18 +426,24 @@ func fields(s string, sep *[256]bool, f func(string)) {
 	}
 }
 
-// flowScan carries the candidate budget of one event. A candidate is
-// fingerprinted only when its length is the length of a remembered value,
-// each distinct candidate is considered once per way it was found, and a
-// candidate that can be neither fingerprinted nor decoded costs nothing,
-// so repeated or wrong-length padding spends no budget.
+// flowScan carries the budgets of one event. A candidate is fingerprinted
+// only when its length is the length of a remembered value, each distinct
+// candidate is considered once per way it was found, and a candidate that
+// can be neither fingerprinted nor decoded spends no candidate budget, so
+// repeated or wrong-length padding cannot exhaust it. Time is bounded by
+// the work budget instead: every loop step and every candidate looked up
+// is charged to it (see step), useless ones included.
 type flowScan struct {
 	budget    int
 	seen      map[string]uint8 // candidate -> what was done with it (seen* bits)
-	lens      map[int]bool
+	lens      []bool           // lens[n]: a remembered value is n bytes long
 	anyLen    bool
 	match     func(c string, weakToo bool)
 	exhausted bool
+	// work counts the steps charged so far; stop, when set, is polled
+	// every flowClockEvery steps (at clockAt) and ends the scan.
+	work, clockAt int
+	stop          func() bool
 	// names are the dotted tokens met by the token pass, for the label
 	// pass; named dedups them. The rest is scratch space it reuses.
 	names  []string
@@ -423,6 +452,32 @@ type flowScan struct {
 	pieces []string
 	ok64   []bool
 	buf    []byte
+}
+
+// step charges n units of work. It reports false, and marks the scan
+// exhausted, once the work budget is spent or stop says time is up.
+func (sc *flowScan) step(n int) bool {
+	if sc.exhausted {
+		return false
+	}
+	sc.work += n
+	if sc.work > maxFlowWork {
+		sc.exhausted = true
+		return false
+	}
+	if sc.stop != nil && sc.work >= sc.clockAt {
+		sc.clockAt = sc.work + flowClockEvery
+		if sc.stop() {
+			sc.exhausted = true
+			return false
+		}
+	}
+	return true
+}
+
+// isLen reports whether a candidate of n bytes could be a remembered value.
+func (sc *flowScan) isLen(n int) bool {
+	return sc.anyLen || n >= 0 && n < len(sc.lens) && sc.lens[n]
 }
 
 // What consider did with a candidate.
@@ -481,45 +536,113 @@ func flowCandidates(text string, sc *flowScan) {
 	}
 }
 
-// noteName remembers a token that could be a host name for the label pass.
+// maxFoldName is the longest token that is put through IDNA-style folding
+// for the label pass; it leaves room for a 253-byte name written entirely
+// in three-byte full-width characters.
+const maxFoldName = 1 << 10
+
+// noteName remembers a token that could be a host name for the label pass:
+// the token as written when it has a dot, and its IDNA-folded form when
+// folding changes it and yields a dot (an ideographic full stop between
+// labels resolves like '.').
 func (sc *flowScan) noteName(tok string) {
-	if len(tok) < minSecretValue || strings.IndexByte(tok, '.') < 0 {
+	if len(tok) < minSecretValue {
 		return
 	}
-	if sc.named == nil {
-		sc.named = map[string]bool{}
+	if strings.IndexByte(tok, '.') >= 0 {
+		sc.addName(tok)
 	}
-	if !sc.named[tok] {
-		sc.named[tok] = true
-		sc.names = append(sc.names, tok)
+	if len(tok) <= maxFoldName && !isASCII(tok) && sc.step(1+len(tok)>>3) {
+		if f := foldName(tok); f != tok && len(f) >= minSecretValue && strings.IndexByte(f, '.') >= 0 {
+			sc.addName(f)
+		}
 	}
 }
 
-func (sc *flowScan) consider(c string, mode candMode) {
-	if len(c) < minSecretValue || len(c) > maxSecretValue {
-		return
+func (sc *flowScan) addName(n string) {
+	if sc.named == nil {
+		sc.named = map[string]bool{}
 	}
-	var want uint8
-	if sc.anyLen || sc.lens[len(c)] {
-		switch {
-		case mode == candToken || mode == candDecoded:
-			want = seenAll | seenStrong
-		case len(c) >= minLabelValue:
-			// Raw in a host name: a short value ("staging-api") is as
-			// likely an ordinary label as a leak.
-			want = seenStrong
+	if !sc.named[n] {
+		sc.named[n] = true
+		sc.names = append(sc.names, n)
+	}
+}
+
+// foldName maps a name the way IDNA processing (UTS #46, and the IDNA
+// 2003 nameprep of Python's codec) does before a resolver sees it, as far
+// as the label pass needs: NFKC turns full-width letters and digits into
+// ASCII and the full-width, small and one-dot-leader stops into '.', and
+// the ideographic and half-width ideographic full stops, which NFKC keeps,
+// are label separators too. Case is kept, so a raw value still matches as
+// written; bytes that are not UTF-8 are dropped.
+func foldName(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case '。', '．', '｡':
+			return '.'
+		case utf8.RuneError:
+			return -1
+		}
+		return r
+	}, norm.NFKC.String(s))
+}
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			return false
 		}
 	}
-	if (mode == candToken || mode == candLabel) && len(c) >= 12 {
-		want |= seenDecoded // decodings need 12+ bytes
+	return true
+}
+
+// want returns what consider would do with a candidate of n bytes found
+// in the given way (seen* bits), before the host-name test of dotted runs.
+func (sc *flowScan) want(n int, mode candMode) uint8 {
+	if n < minSecretValue || n > maxSecretValue {
+		return 0
 	}
-	if mode == candLabel && len(c) >= 13 {
-		want |= seenBase32
+	var w uint8
+	if sc.isLen(n) {
+		switch {
+		case mode == candToken || mode == candDecoded:
+			w = seenAll | seenStrong
+		case n >= minLabelValue:
+			// Raw in a host name: a short value ("staging-api") is as
+			// likely an ordinary label as a leak.
+			w = seenStrong
+		}
+	}
+	if (mode == candToken || mode == candLabel) && n >= 12 {
+		w |= seenDecoded // decodings need 12+ bytes
+	}
+	if mode == candLabel && n >= 13 {
+		w |= seenBase32
+	}
+	return w
+}
+
+func (sc *flowScan) consider(c string, mode candMode) {
+	want := sc.want(len(c), mode)
+	if want != 0 && mode == candDotted && hostShaped(c) {
+		// A run of labels that reads as a host name is a parent domain
+		// of the name it came from: a host-valued setting
+		// (SESSION_COOKIE_DOMAIN=app.example.com) matches every one of
+		// its subdomains, while a dotted credential (a JWT) never ends in
+		// a top-level domain.
+		want = 0
+	}
+	if want == 0 {
+		return // neither a possible value nor decodable
+	}
+	if !sc.step(1 + len(c)>>4) {
+		return
 	}
 	have, ok := sc.seen[c]
 	todo := want &^ have
 	if todo == 0 {
-		return // neither a possible value nor decodable, or done already
+		return // done already
 	}
 	if !ok {
 		if sc.budget <= 0 {
@@ -544,7 +667,7 @@ func (sc *flowScan) consider(c string, mode candMode) {
 // Bounds of the label pass over one dotted name.
 const (
 	maxDNSLabel      = 63  // longer labels are also cut into pieces of this size
-	maxLabelRun      = 16  // pieces run together into one candidate
+	maxLabelRun      = 16  // labels or pieces run together into one candidate
 	maxLabelRunBytes = 512 // bytes of one run (a DNS name is at most 253)
 )
 
@@ -552,9 +675,14 @@ const (
 // label over 63 bytes also in 63-byte pieces) and every run of up to 16
 // consecutive pieces joined without the dots, raw and decoded, because an
 // encoder that spreads one value over several labels is undone by
-// concatenation; and every run of whole labels with its dots, raw, for a
-// value that has dots of its own (a JWT).
+// concatenation; and every run of up to 16 whole labels with its dots,
+// raw, for a value that has dots of its own (a JWT). Each run is a step of
+// the work budget whether or not it becomes a candidate, so a name of
+// thousands of one-byte labels costs a bounded, charged amount of time.
 func (sc *flowScan) labelCandidates(name string) {
+	if !sc.step(1 + len(name)>>4) {
+		return
+	}
 	labels := sc.labels[:0] // [start, end) of each label, empty ones included
 	defer func() { sc.labels = labels[:0] }()
 	start := 0
@@ -567,13 +695,18 @@ func (sc *flowScan) labelCandidates(name string) {
 	if len(labels) < 2 {
 		return
 	}
-	for i := 0; i < len(labels) && !sc.exhausted; i++ {
-		for j := i + 1; j < len(labels); j++ {
+	for i := 0; i < len(labels); i++ {
+		for j := i + 1; j < len(labels) && j-i < maxLabelRun; j++ {
+			if !sc.step(1) {
+				return
+			}
 			a, b := labels[i][0], labels[j][1]
 			if b-a > maxLabelRunBytes {
 				break
 			}
-			if i > 0 || j < len(labels)-1 { // the whole name was a token
+			// The whole name was a token of its own; a run of another
+			// length cannot be a remembered value.
+			if (i > 0 || j < len(labels)-1) && b-a >= minLabelValue && sc.isLen(b-a) {
 				sc.consider(name[a:b], candDotted)
 			}
 		}
@@ -596,23 +729,38 @@ func (sc *flowScan) labelCandidates(name string) {
 	buf := sc.buf[:0]
 	defer func() { sc.pieces, sc.ok64, sc.buf = pieces[:0], ok64[:0], buf[:0] }()
 	for i := range pieces {
-		if sc.exhausted {
+		if !sc.step(1) {
 			return
 		}
 		sc.consider(pieces[i], candLabel)
 		buf = append(buf[:0], pieces[i]...)
 		dec := ok64[i]
 		for j := i + 1; j < len(pieces) && j-i < maxLabelRun; j++ {
+			if !sc.step(1) {
+				return
+			}
 			if len(buf)+len(pieces[j]) > maxLabelRunBytes {
 				break
 			}
 			buf = append(buf, pieces[j]...)
 			dec = dec && ok64[j]
 			// Materialise the run only when it could be a value or decode
-			// to text holding one.
-			if sc.anyLen || sc.lens[len(buf)] || dec && len(buf) >= 12 {
-				sc.consider(string(buf), candLabel)
+			// to text holding one, and not again once that was done (the
+			// lookup with string(buf) does not allocate).
+			if !sc.isLen(len(buf)) && !(dec && len(buf) >= 12) {
+				continue
 			}
+			w := sc.want(len(buf), candLabel)
+			if w == 0 {
+				continue
+			}
+			if !sc.step(len(buf) >> 4) {
+				return
+			}
+			if have, ok := sc.seen[string(buf)]; ok && w&^have == 0 {
+				continue
+			}
+			sc.consider(string(buf), candLabel)
 		}
 	}
 }

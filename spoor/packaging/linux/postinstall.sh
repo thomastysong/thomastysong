@@ -18,10 +18,15 @@
 #     adds), refresh the copy osquery runs and restart osquery detached;
 #  5. systemd: reload; enable and start on first install, restart a running
 #     service on upgrade (a service the administrator disabled stays disabled);
-#  6. rewrite spoor's managed hook entries for every agent that already has
-#     them: entries written by an earlier release report "modified" until
-#     `spoor hooks install` runs again. Agents that were never hooked are
-#     left alone; hooking is the administrator's decision.
+#  6. rewrite spoor's managed hook entries written by an earlier release
+#     (they report "modified" until `spoor hooks install` runs again), but
+#     only where they are exactly what that release wrote with install's
+#     default options: the rewrite uses the default options too, so it would
+#     turn an administrator's --guard --fail-closed registration into a
+#     fail-open one and reset a --timeout. Entries installed with other
+#     options or edited by hand are left as they are and reported. Agents
+#     that were never hooked are left alone; hooking is the administrator's
+#     decision.
 # Failures of 3 to 6 are reported and do not fail the package: the binary
 # works with built-in defaults and `spoor doctor` shows what is missing.
 set -e
@@ -125,24 +130,43 @@ else
 	echo "spoor: systemd is not running; start the daemon with: $BIN run --config $CONF"
 fi
 
-# 6. Hooks. `hooks status --json` prints one object per (agent, scope) with
-# "agent" and "status" on lines of their own; catalog ids are [a-z0-9-].
-hooked=$("$BIN" hooks status --scope managed --json 2>/dev/null | awk -F'"' '
-	/"agent":/ { a = $4 }
-	/"status":/ {
-		s = $4
-		if ((s == "managed" || s == "modified" || s == "shadowed" || s == "insecure_permissions") && a != "" && !(a in seen)) {
+# 6. Hooks. `hooks status --json` prints one object per (agent, scope),
+# one key per line, with "agent" first; catalog ids are [a-z0-9-]. Its
+# detail names entries that equal what an earlier release wrote with the
+# default options "written by an earlier spoor release"
+# (internal/hookinstall, legacyPrefix; packaging_test.go holds the two
+# together): only those agents are rewritten (first output line). Agents
+# whose entries differ from install's default output in any other way
+# carry options the administrator chose, or an edit, and are only listed
+# (second line).
+sel=$("$BIN" hooks status --scope managed --json 2>/dev/null | awk -F'"' '
+	function flush() {
+		if (a != "" && old && !(a in seen)) {
 			seen[a] = 1
 			out = out (out == "" ? "" : ",") a
+		} else if (a != "" && !old && s == "modified" && !(a in kept)) {
+			kept[a] = 1
+			left = left (left == "" ? "" : ",") a
 		}
+		a = ""
+		s = ""
+		old = 0
 	}
-	END { print out }') || hooked=""
+	/^[ \t]*"agent": "/ { flush(); a = $4 }
+	/^[ \t]*"status": "/ { s = $4 }
+	/^[ \t]*"detail": "/ { if (index($0, "written by an earlier spoor release") > 0) old = 1 }
+	END { flush(); print out; print left }') || sel=""
+hooked=$(printf '%s\n' "$sel" | sed -n 1p)
+left=$(printf '%s\n' "$sel" | sed -n 2p)
 if [ -n "$hooked" ]; then
 	if "$BIN" hooks install --scope managed --agents "$hooked" >/dev/null 2>&1; then
 		echo "spoor: managed hooks rewritten for $hooked"
 	else
 		warn "could not rewrite managed hooks for $hooked; run: $BIN hooks install --scope managed --agents $hooked"
 	fi
+fi
+if [ -n "$left" ]; then
+	echo "spoor: managed hooks of $left left as they are: they differ from install's default options (--guard, --fail-closed, --timeout ...) or were edited; if an earlier release wrote them, run $BIN hooks install --scope managed --agents $left with the options they were installed with"
 fi
 
 if ! getent group spoor 2>/dev/null | cut -d: -f4 | grep -q .; then

@@ -40,10 +40,17 @@ func (m mode) String() string {
 	return "observe"
 }
 
-// loadConfig reads the configuration, falling back to the built-in defaults
-// (observe mode) when the file cannot be used. A broken config must not
-// break every tool call of every developer; the error is reported on the
-// records instead.
+// loadConfig reads the configuration. A file that cannot be read or
+// parsed falls back to the built-in defaults (observe mode): a broken
+// config must not break every tool call of every developer, and the error
+// is reported on the records instead (label hook_config=invalid).
+//
+// A file that parses but fails validation is NOT replaced by defaults:
+// config.Load returns the decoded configuration with the error, and one bad
+// value (often a daemon-only setting such as heartbeat, which the hook
+// never reads) must not silently drop guard mode, rules.dirs,
+// rules.disable, privacy exclusions or sources.hooks.enabled: false. Only
+// the invalid values the hook reads are repaired (repairForHook).
 func loadConfig(path string) (cfg *config.Config, err error) {
 	dataDir := platform.DefaultDirs().Data
 	defer func() {
@@ -52,13 +59,53 @@ func loadConfig(path string) (cfg *config.Config, err error) {
 		}
 	}()
 	c, err := config.Load(path, dataDir)
-	if err != nil || c == nil {
+	if c == nil {
 		if err == nil {
 			err = errors.New("config: no configuration")
 		}
 		return config.Default(dataDir), err
 	}
-	return c, nil
+	if err != nil {
+		repairForHook(c, config.Default(dataDir))
+	}
+	return c, err
+}
+
+// repairForHook replaces the invalid values among those the hook reads,
+// each in the direction that does not weaken the sensor: an unknown
+// privacy profile becomes minimal, an unknown guard.mode other than empty
+// becomes advisory (the operator configured the guard; an enforcing hook
+// must not turn into observe mode on a typo), the rest take their
+// defaults. Values the hook does not read are left alone.
+func repairForHook(c, def *config.Config) {
+	switch c.Privacy.Profile {
+	case "minimal", "standard", "full":
+	default:
+		c.Privacy.Profile = def.Privacy.Profile
+	}
+	switch c.Guard.Mode {
+	case "off", "advisory":
+	case "":
+		c.Guard.Mode = def.Guard.Mode
+	default:
+		c.Guard.Mode = "advisory"
+	}
+	switch c.Guard.MaxResponse {
+	case "ask", "block":
+	default:
+		c.Guard.MaxResponse = def.Guard.MaxResponse
+	}
+	switch c.Rules.MinClass {
+	case "signal", "finding", "alert":
+	default:
+		c.Rules.MinClass = def.Rules.MinClass
+	}
+	if c.Output.MaxLine < 8<<10 || c.Output.MaxLine > 64<<10 {
+		c.Output.MaxLine = def.Output.MaxLine
+	}
+	if c.DataDir == "" {
+		c.DataDir = def.DataDir
+	}
 }
 
 // hardDeadline is how long the supervisor waits for its worker, measured

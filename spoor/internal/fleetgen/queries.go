@@ -94,11 +94,8 @@ func (g *gen) labelTablesUnavailable() Label {
 	return Label{
 		Name: "spoor tables unavailable",
 		Description: "spoor is installed but osquery has no spoor_health table: the extension is not " +
-			"loaded or the ATC agent options did not reach the host. On fleetd hosts this includes " +
-			"hosts where Fleet manages osquery extensions (the extensions agent option): orbit then " +
-			"points osquery at its own extensions.load, and an extension registered in osquery's " +
-			"default file is not loaded. Every spoor policy shows no response (neither pass nor " +
-			"fail) on such a host.",
+			"loaded (also when Fleet manages osquery extensions on a fleetd host) or the ATC agent " +
+			"options did not arrive. spoor policies get no response from such a host.",
 		Query: "SELECT 1 FROM file\nWHERE " + g.installedPredicate() +
 			"\n  AND NOT EXISTS (SELECT 1 FROM osquery_registry\n" +
 			"    WHERE registry = 'table' AND name = " + sqlString(tbl("health")) + " AND active = 1)\nLIMIT 1;",

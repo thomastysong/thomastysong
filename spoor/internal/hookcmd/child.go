@@ -153,12 +153,21 @@ func runChild(exe string, argv []string, payload []byte, capOut int, deadline ti
 
 // workerArgs is the worker's command line. The supervisor passes its own
 // parent pid (the agent, or the shell the agent started) so the worker
-// records the right caller, plus its start time and hard deadline.
-func workerArgs(o opts, cfgPath string, ppid int, t0, deadline time.Time) []string {
-	a := []string{"spoor", "hook", "--worker", "--config", cfgPath,
+// records the right caller, plus its start time and hard deadline, asks
+// for a framed reply, and says what it knows about stdin that the payload
+// itself cannot: that the agent had not closed it in time, and the size
+// and digest of what was drained past the cap.
+func workerArgs(o opts, cfgPath string, ppid int, t0, deadline time.Time, in inputResult) []string {
+	a := []string{"spoor", "hook", "--worker", "--framed", "--config", cfgPath,
 		"--ppid", strconv.Itoa(ppid),
 		"--t0", strconv.FormatInt(t0.UnixNano(), 10),
 		"--deadline", strconv.FormatInt(deadline.UnixNano(), 10)}
+	if in.timedOut {
+		a = append(a, "--stdin-cut")
+	}
+	if in.sum != "" && in.total > int64(len(in.b)) {
+		a = append(a, "--stdin-bytes", strconv.FormatInt(in.total, 10), "--stdin-sha256", in.sum)
+	}
 	if o.agent != "" {
 		a = append(a, "--agent", o.agent)
 	}

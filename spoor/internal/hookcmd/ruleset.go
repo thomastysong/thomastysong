@@ -93,15 +93,18 @@ func suppressions(in []config.Suppression) (out []rules.Suppression, degraded bo
 	return out, degraded
 }
 
-// parseExpiry reads RFC 3339 or a bare date. A bare date expires at the
-// start of that day in UTC: the earlier reading, so an exception never
-// outlives what the operator wrote.
+// parseExpiry reads RFC 3339 or a bare date the way the daemon reads the
+// same config entry (internal/engine options.go): a bare date means
+// "through the end of that day" (UTC). The hook and the daemon judge one
+// event by the same exceptions; a guard that blocked on the expiry date
+// while the daemon still honoured the exception would disagree with its
+// own findings.
 func parseExpiry(s string) (time.Time, bool) {
 	if t, err := time.Parse(time.RFC3339, s); err == nil {
-		return t, true
+		return t.UTC(), true
 	}
 	if t, err := time.Parse("2006-01-02", s); err == nil {
-		return t.UTC(), true
+		return t.Add(24 * time.Hour).UTC(), true
 	}
 	return time.Time{}, false
 }

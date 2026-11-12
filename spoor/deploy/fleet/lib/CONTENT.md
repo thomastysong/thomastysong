@@ -35,7 +35,7 @@ For any osquery 5 host (fleetd or not) with the spoor sensor, reading spoor's ta
 - **spoor installed**: The spoor binary or its state database exists at the path a system install uses (binary or state database; exact paths, no wildcards). Uses only osquery's file table, so it works before any spoor table is available and can scope the rollout.
 - **AI agents present**: spoor's inventory lists at least one AI agent, AI app or IDE extension, AI browser or local model runtime that has not been removed.
 - **spoor sensor unhealthy**: spoor is installed but its heartbeat is older than 30 minutes or missing. A host whose spoor tables are not loaded at all cannot answer this query; it appears in "spoor tables unavailable" instead.
-- **spoor tables unavailable**: spoor is installed but osquery has no spoor_health table: the extension is not loaded or the ATC agent options did not reach the host. On fleetd hosts this includes hosts where Fleet manages osquery extensions (the extensions agent option): orbit then points osquery at its own extensions.load, and an extension registered in osquery's default file is not loaded. Every spoor policy shows no response (neither pass nor fail) on such a host.
+- **spoor tables unavailable**: spoor is installed but osquery has no spoor_health table: the extension is not loaded (also when Fleet manages osquery extensions on a fleetd host) or the ATC agent options did not arrive. spoor policies get no response from such a host.
 
 ### Policies
 
@@ -70,7 +70,7 @@ For hosts running Fleet's agent (fleetd 1.59.0 or later): inventory questions al
 - **spoor installed**: The spoor binary or its state database exists at the path a system install uses (binary or state database; exact paths, no wildcards). Uses only osquery's file table, so it works before any spoor table is available and can scope the rollout.
 - **AI agents present**: Fleet's ai_tools table (fleetd 1.59.0 or later) lists an AI agent, app, IDE plugin, MCP server or browser extension. Needs no spoor table, so it can scope the spoor rollout.
 - **spoor sensor unhealthy**: spoor is installed but its heartbeat is older than 30 minutes or missing. A host whose spoor tables are not loaded at all cannot answer this query; it appears in "spoor tables unavailable" instead.
-- **spoor tables unavailable**: spoor is installed but osquery has no spoor_health table: the extension is not loaded or the ATC agent options did not reach the host. On fleetd hosts this includes hosts where Fleet manages osquery extensions (the extensions agent option): orbit then points osquery at its own extensions.load, and an extension registered in osquery's default file is not loaded. Every spoor policy shows no response (neither pass nor fail) on such a host.
+- **spoor tables unavailable**: spoor is installed but osquery has no spoor_health table: the extension is not loaded (also when Fleet manages osquery extensions on a fleetd host) or the ATC agent options did not arrive. spoor policies get no response from such a host.
 
 ### Policies
 

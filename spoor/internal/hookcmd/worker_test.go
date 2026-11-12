@@ -242,9 +242,12 @@ func TestInputCap(t *testing.T) {
 	if r.code != 0 {
 		t.Fatalf("exit %d", r.code)
 	}
+	// Size and digest describe the whole payload, not the kept prefix.
 	acts := s.ofKind(t, event.KindActivity)
+	sum := sha256.Sum256(big)
 	if len(acts) != 1 || acts[0].Type != TypePayloadAnomaly || acts[0].Labels["hook_error"] != anomalyTooLarge ||
-		acts[0].Labels["payload_bytes"] != strconv.Itoa(65536+1) || acts[0].Session.ID != "s-claude" {
+		acts[0].Labels["payload_bytes"] != strconv.Itoa(len(big)) || acts[0].Tool.InputSHA256 != hex.EncodeToString(sum[:]) ||
+		acts[0].Session.ID != "s-claude" {
 		t.Fatalf("%+v", acts)
 	}
 	if inputCap(&config.Config{Limits: config.Limits{MaxHookInput: 10}}) != minInputCap ||

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 
@@ -242,3 +243,34 @@ func TestHumanWindows(t *testing.T) {
 }
 
 func parseDur(s string) (d time.Duration, err error) { return time.ParseDuration(s) }
+
+// TestFleetFieldLimits: Fleet refuses a label whose description exceeds 255
+// characters ("description may not exceed 255 characters", fleetctl 4.94.1
+// gitops dry run), and names are VARCHAR(255) columns.
+func TestFleetFieldLimits(t *testing.T) {
+	c := mustBuild(t, Options{})
+	check := func(what, name, desc string, descLimit bool) {
+		if n := utf8.RuneCountInString(name); n > 255 {
+			t.Errorf("%s %q: name has %d characters, Fleet allows 255", what, name, n)
+		}
+		if n := utf8.RuneCountInString(desc); descLimit && n > 255 {
+			t.Errorf("%s %q: description has %d characters, Fleet allows 255", what, name, n)
+		}
+	}
+	for _, p := range c.Profiles {
+		for _, l := range p.Labels {
+			check("label", l.Name, l.Description, true)
+		}
+		for _, q := range p.Policies {
+			check("policy", q.Name, q.Description, false)
+		}
+		for _, r := range p.Reports {
+			check("report", r.Name, r.Description, false)
+		}
+	}
+	for _, l := range readPremiumExample(t).Labels {
+		name, _ := l["name"].(string)
+		desc, _ := l["description"].(string)
+		check("example label", name, desc, true)
+	}
+}

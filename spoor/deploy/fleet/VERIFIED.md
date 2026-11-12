@@ -459,26 +459,31 @@ extensions.load now: []
 `TestFleetInstallScripts` runs the shell scripts in a throwaway Debian 12
 container (`mirror.gcr.io/library/redis:7`) with fake `systemctl` and
 `spoor` binaries under a `SPOOR_ROOT` prefix: wrong SHA-256 installs
-nothing; install writes binary, extension, unit, data dir 0750 and the
-default `extensions.load` (an existing line is kept) and schedules a detached
-osquery restart; a second run changes nothing and only starts the service;
-with orbit present orbit is what restarts; `SPOOR_TIER=atc` unregisters;
-`register-extension.sh` is idempotent; uninstall twice keeps data and other
-autoload lines; a pre-existing `/opt/orbit/extensions.load` is never touched.
+nothing; with orbit's `/opt/orbit/extensions.load` in use (non-empty) the
+extension tier and `register-extension.sh` refuse with the reason and change
+nothing; with orbit's file empty, install writes binary, extension, unit,
+the `Group=spoor` drop-in, data dir 0750 and the default `extensions.load`,
+keeping an existing last line that has no newline (it was glued to spoor's
+path before the fix), and schedules a detached osquery restart; a second run
+changes nothing and only starts the service; with orbit present orbit is
+what restarts, and the atc tier works while orbit's file is in use and
+unregisters spoor; `register-extension.sh` is idempotent; uninstall twice
+keeps data and other autoload lines and removes the drop-in; orbit's
+`extensions.load` is never written.
 
 ```
 $ SPOOR_E2E_FLEET=1 go test -tags e2e ./test/e2e -run FleetInstallScripts -v
-    fleet_test.go:612: install:
+    fleet_test.go:641: install:
         spoor install: osquery (osqueryd) restarts in 10 s to load /work/root/usr/lib/spoor/spoor.ext
         spoor install: spoor-fake-1 installed at /work/root/usr/bin/spoor (tier extension)
---- PASS: TestFleetInstallScripts (1.24s)
+--- PASS: TestFleetInstallScripts (1.44s)
 PASS
-ok  	github.com/thomastysong/spoor/test/e2e	1.247s
+ok  	github.com/thomastysong/spoor/test/e2e	1.448s
 ```
 
-Script sizes (Fleet's limit is 10,000 characters): install-spoor.sh 8,354,
-install-spoor.ps1 5,531, uninstall-spoor.sh 2,439, uninstall-spoor.ps1
-1,700, register-extension.sh 1,758, register-extension.ps1 1,602.
+Script sizes (Fleet's limit is 10,000 characters): install-spoor.sh 9,405,
+install-spoor.ps1 7,279, uninstall-spoor.sh 2,528, uninstall-spoor.ps1
+1,950, register-extension.sh 2,441, register-extension.ps1 2,175.
 
 ## 5. Unit tests (no network, every OS)
 
@@ -488,16 +493,53 @@ TEXT plus a `path` column, as ATC does; once typed, as the extension does)
 and the osquery tables the content reads as stubs. It covers every policy
 against 23 scenarios in both flavours and both spoor profiles, the labels
 (including a POSIX path on Windows not counting as installed), every report,
-the opt-in reports' depth-1/depth-2 attribution, the catalog flag
-classification, a real project scan producing every auto-run flag, the
-agent options merge, the golden files, the scripts and examples. Worst-case
-packed report sizes with maximum-length values full of characters JSON must
-escape (Fleet drops host results of 512 KiB or more):
+the opt-in reports' depth-1/depth-2 attribution (also when the depth-1
+parent's exec event was in an earlier run, through `processes`, and not for
+a reused pid), the catalog flag classification, a real project scan
+producing every auto-run flag, the agent options merge, the golden files,
+Fleet's 255-character label description limit, the Premium install
+policies (fail with only the state database present) and family labels,
+one tier per GitOps example, path validation (glob characters, unclean
+paths), and the scripts: the exact `extensions.load` registration blocks
+run by `sh` against existing files with and without a final newline, the
+orbit refusal blocks, `verify.sh`'s polling with a fake fleetctl that first
+answers nothing, and every `sc.exe`/`icacls.exe` call of the PowerShell
+scripts through a model of Windows PowerShell 5.1's native argument passing
+(which reproduces the old `binPath=` failure). Worst-case packed report
+sizes with maximum-length values full of characters JSON must escape
+(Fleet drops host results of 512 KiB or more):
 
 ```
     semantics_test.go:464: stock/spoor - AI inventory (packed): 369492 bytes
     semantics_test.go:464: fleetd/spoor - AI inventory (packed, with ai_tools): 223264 bytes
     semantics_test.go:464: builtin/AI tools (packed): 124326 bytes
+```
+
+## 6. osquery path handling (local osquery 5.19.0)
+
+Why custom state database paths must be clean and pattern-free: ATC resolves
+its `path` as a glob (`?`, `[...]` and, with brace expansion, `{A,B}`) and
+reports the canonical path, while the `file` table that the "spoor
+installed" label reads reports a path exactly as written. Run with
+`osqueryd -S --config_path=cfg.json` over three one-row databases
+`$W/db/spoorA`, `spoorB`, `spoorC`. The last probe shows `processes.start_time`
+is in Unix seconds, like the event tables' `time`, which the opt-in reports
+compare.
+
+```
+$ ATC path $W/db/spoor?/state.db
+[{"v":"A","path":"$W/db/spoorA/state.db"},{"v":"B","path":"$W/db/spoorB/state.db"},{"v":"C","path":"$W/db/spoorC/state.db"}]
+$ ATC path $W/db/spoor[AB]/state.db
+[{"v":"A","path":"$W/db/spoorA/state.db"},{"v":"B","path":"$W/db/spoorB/state.db"}]
+$ ATC path $W/db/spoor{A,B}/state.db
+[{"v":"A","path":"$W/db/spoorA/state.db"},{"v":"B","path":"$W/db/spoorB/state.db"}]
+$ ATC path $W/db//spoorA/state.db
+[{"v":"A","path":"$W/db/spoorA/state.db"}]
+$ osqueryd -S "SELECT path FROM file WHERE path = '$W/db//spoorA/state.db'"
+[{"path":"$W/db//spoorA/state.db"}]
+$ osqueryd -S "SELECT pid, parent, start_time FROM processes WHERE pid = 1"; date +%s
+[{"parent":"0","pid":"1","start_time":"1794454940"}]
+1794462130
 ```
 
 ## Not verified here
@@ -510,12 +552,19 @@ escape (Fleet drops host results of 512 KiB or more):
   blocks on a real host, `es_process_events` / `process_etw_events` (columns
   from Fleet's osquery schema JSON), the `osquery_info.build_platform` values
   `darwin` and `windows` used by the "installed" label (only `linux` was
-  observed), the PowerShell scripts (no `pwsh` here; checked statically for
-  size, hash verification and autoload path), and the macOS branch of the
-  shell scripts (`dseditgroup`, `launchctl`).
-- **fleetd/orbit**: the detached orbit restart and the assumption that orbit
-  leaves osquery's default `extensions.load` alone while its own file is
-  empty (research/fleet.md section 1, from orbit's code) were not run.
+  observed), the PowerShell scripts (no PowerShell here: checked statically
+  and through the PowerShell 5.1 argument-passing model; `New-Service`,
+  `Win32_Service.Change` and the `sc.exe` exit codes were not run), and the
+  macOS branch of the shell scripts (`dseditgroup`, `launchctl`).
+- **fleetd/orbit**: the detached orbit restart, and orbit's handling of its
+  own `extensions.load` (an `--extensions_autoload` flag only while the file
+  is non-empty, `orbit/cmd/orbit/orbit.go` 1586-1603), were read from code,
+  not run; the scripts' refusal on a non-empty orbit file ran in the
+  container (section 4).
+- **systemd**: the container has a fake `systemctl`, so the `Group=spoor`
+  drop-in was checked as a file, not on a running systemd; the re-owning of
+  `StateDirectory=` it counters is systemd's documented behaviour, not
+  observed here.
 - **Fleet Premium**: package YAMLs, install-on-failure policies, per-fleet
   files (dry run refused on a Free server, see section 2).
 - **A real sensor**: the state databases came from the harness, not from

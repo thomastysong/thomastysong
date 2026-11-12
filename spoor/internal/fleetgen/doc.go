@@ -66,7 +66,10 @@
 // fragment as it stands drops existing ATC tables, decorators and options.
 // Content.MergeAgentOptions performs the merge (verify.sh uses it against
 // the live server's options) and StripAgentOptions undoes it;
-// agent-options.example.yml shows the merged result on a typical base.
+// agent-options.example.yml shows the merged result on a typical base, and
+// agent-options.base.example.yml the same base without spoor's tables: the
+// agent options of the extension tier, which must not carry them (osquery
+// refuses the extension when ATC already provides the spoor_* tables).
 // ApplySpecs renders a profile as prefixed `fleetctl apply` documents for
 // verification on a shared server, where `fleetctl gitops` (which resets
 // everything a file omits) must not be used.

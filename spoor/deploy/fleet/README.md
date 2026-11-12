@@ -266,4 +266,6 @@ membership after a refetch, and the same with the spoor extension instead of
 ATC. Objects are applied one by one under a unique prefix and deleted
 afterwards; it never runs `fleetctl gitops` without `--dry-run`. The state
 database comes from the harness in `test/e2e/fleet_test.go` unless
-`SPOOR_BIN` points at a spoor binary. See [VERIFIED.md](VERIFIED.md).
+`SPOOR_BIN` points at a spoor binary. A poll the host does not answer counts
+as an error result and is retried, not a reason to stop the run. See
+[VERIFIED.md](VERIFIED.md).

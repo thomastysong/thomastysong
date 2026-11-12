@@ -176,7 +176,9 @@ func TestSuppressionsFromConfig(t *testing.T) {
 		{Rule: "SPR-C-001"},
 		{Rule: "SPR-D-001", Expires: "next tuesday"},
 	})
-	if !degraded || len(sup) != 3 || !sup[0].Expires.Equal(time.Date(2027, 1, 2, 0, 0, 0, 0, time.UTC)) || !sup[2].Expires.IsZero() {
+	// A bare date runs through the end of that day, as in the daemon.
+	if !degraded || len(sup) != 3 || !sup[0].Expires.Equal(time.Date(2027, 1, 3, 0, 0, 0, 0, time.UTC)) ||
+		!sup[1].Expires.Equal(time.Date(2027, 1, 2, 3, 4, 5, 0, time.UTC)) || !sup[2].Expires.IsZero() {
 		t.Fatalf("%v %+v", degraded, sup)
 	}
 }

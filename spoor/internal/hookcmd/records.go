@@ -161,10 +161,13 @@ func (s *stamper) naturalKey(e *event.Event, i int, dup bool) string {
 }
 
 // anomalyRecord stands in for a payload that produced no usable event. It
-// carries only what can be said without decoding: size, a digest of the raw
-// bytes (in Tool.InputSHA256, which the privacy stage keys or drops before
-// anything ships), and the top-level identifiers when they could be read.
-func anomalyRecord(agentID, code string, payload []byte) *event.Event {
+// carries only what can be said without decoding: size and a digest of the
+// raw bytes the agent sent (size and digest, from inputResult.rawDigest,
+// cover bytes drained past the input cap too; the digest goes in
+// Tool.InputSHA256, which the privacy stage keys or drops before anything
+// ships), and the top-level identifiers when they could be read from the
+// kept prefix.
+func anomalyRecord(agentID, code string, payload []byte, size int64, digest string) *event.Event {
 	e := event.New(event.KindActivity, TypePayloadAnomaly, event.SourceHook)
 	e.Fidelity = event.FidelityObserved
 	if agentID == "" {
@@ -183,11 +186,10 @@ func anomalyRecord(agentID, code string, payload []byte) *event.Event {
 	if cwd := f["cwd"]; cwd != "" && len(cwd) <= 4096 && !strings.ContainsAny(cwd, "\x00\n\r") {
 		e.Session.CWD = cwd
 	}
-	sum := sha256.Sum256(payload)
-	e.Tool = &event.Tool{InputSHA256: hex.EncodeToString(sum[:])}
+	e.Tool = &event.Tool{InputSHA256: digest}
 	e.Labels = map[string]string{
 		"hook_error":    code,
-		"payload_bytes": strconv.Itoa(len(payload)),
+		"payload_bytes": strconv.FormatInt(size, 10),
 	}
 	if n := token(firstOf(f["hook_event_name"], f["hookEventName"]), 64); n != "" {
 		e.Labels["hook_event"] = n

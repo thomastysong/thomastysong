@@ -94,6 +94,16 @@ type opts struct {
 	ppid     int
 	t0       time.Time
 	deadline time.Time
+	// framed: end the reply with replyEnd, so the supervisor can tell a
+	// finished decision (even an empty one) from a worker that died first.
+	framed bool
+	// stdinCut: the supervisor stopped waiting for the agent to close
+	// stdin, so the payload on the worker's stdin may be a prefix.
+	stdinCut bool
+	// stdinBytes and stdinSHA256 describe everything the supervisor read
+	// from stdin when that was more than it passed on (over the cap).
+	stdinBytes  int64
+	stdinSHA256 string
 }
 
 // parseArgs reads `--name value` and `--name=value` forms. Unknown flags
@@ -132,6 +142,14 @@ func parseArgs(args []string) opts {
 			o.t0 = unixNano(next())
 		case "deadline":
 			o.deadline = unixNano(next())
+		case "framed":
+			o.framed = true
+		case "stdin-cut":
+			o.stdinCut = true
+		case "stdin-bytes":
+			o.stdinBytes, _ = strconv.ParseInt(next(), 10, 64)
+		case "stdin-sha256":
+			o.stdinSHA256 = next()
 		}
 	}
 	return o

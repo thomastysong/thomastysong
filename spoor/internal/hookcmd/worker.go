@@ -1,9 +1,12 @@
 package hookcmd
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/thomastysong/spoor/internal/config"
@@ -23,7 +26,28 @@ const (
 	// deadline; the watchdog covers a supervisor that was itself killed by
 	// the agent, so an orphaned worker cannot linger.
 	watchdogSlack = time.Second
+	// stdinGrace is how long past the hard deadline a worker still waits
+	// for its stdin to close, and for its spool appends. Under a supervisor
+	// neither ever waits (the supervisor writes the payload and closes the
+	// pipe; it kills the worker at the deadline); the bound is for a worker
+	// run by hand.
+	stdinGrace = watchdogSlack / 2
+
+	// Session state is saved under a lock with a bounded wait, retrying
+	// the evaluation when another hook of the session saved in between.
+	stateLockName    = ".hook-state.lock"
+	stateLockWait    = 50 * time.Millisecond
+	lockPoll         = time.Millisecond
+	maxStateAttempts = 4
+	minRetryBudget   = 2 * replyMargin
 )
+
+// replyEnd ends a framed worker reply (--framed, set by the supervisor):
+// the decision is final, whether the reply before it is empty or not, and
+// whatever the worker does afterwards (append, crash, hang on a lock) does
+// not change it. A NUL byte never occurs in JSON text, so the marker
+// cannot be part of a reply.
+const replyEnd = "\x00spoor-reply-end\x00"
 
 // Test seams. All are no-ops or the real thing in production; the fault
 // hook can only be set from this package's tests, never from the
@@ -56,6 +80,7 @@ type work struct {
 	envMap   map[string]string
 	markers  []string
 	spool    *spool.Writer
+	spoolDir string
 	spoolErr error
 	policy   *privacy.Policy
 }
@@ -78,11 +103,54 @@ func runWorker(stdin io.Reader, stdout io.Writer, o opts, env Env) int {
 		armWatchdog(w.deadline)
 	}
 	if !w.m.enabled {
+		w.answer(stdout, nil)
 		return exitOK
 	}
 	fault("start")
-	w.in = readBounded(stdin, inputCap(w.cfg), time.Until(w.deadline)-replyMargin)
+	// The wait is not cut to the guard budget: a worker that starts late
+	// must still read the payload its supervisor already wrote (an empty
+	// read would decide "allow"). The evaluation budget, not the read,
+	// shrinks with the time left, and an evaluation without time answers
+	// "ask".
+	w.in = readBounded(stdin, inputCap(w.cfg), time.Until(w.deadline)+stdinGrace)
+	w.adoptSupervisorRead()
 	return w.run(stdout)
+}
+
+// adoptSupervisorRead folds in what the supervisor knows about stdin: that
+// it stopped waiting for the agent to close it (the payload may be a
+// prefix), and the size and digest of bytes it drained past the cap.
+func (w *work) adoptSupervisorRead() {
+	if w.o.stdinCut {
+		w.in.timedOut = true
+	}
+	n, sum := w.o.stdinBytes, strings.ToLower(w.o.stdinSHA256)
+	if n > int64(len(w.in.b)) && n >= w.in.total && isHexSHA256(sum) {
+		w.in.total, w.in.sum = n, sum
+	}
+}
+
+func isHexSHA256(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// answer writes the reply in one write. Under a supervisor (--framed) it
+// ends with replyEnd, so an empty reply ("proceed") is as final as a deny.
+func (w *work) answer(stdout io.Writer, reply []byte) {
+	if w.o.framed {
+		reply = append(append(make([]byte, 0, len(reply)+len(replyEnd)), reply...), replyEnd...)
+	}
+	if len(reply) > 0 {
+		_, _ = stdout.Write(reply)
+	}
 }
 
 func armWatchdog(deadline time.Time) {
@@ -107,7 +175,8 @@ func (w *work) run(stdout io.Writer) int {
 	st.payload = payload
 	st.salt = loadSalt(w.spool)
 	if anomaly != "" {
-		evs = append(evs, anomalyRecord(w.agentID, anomaly, payload))
+		size, digest := w.in.rawDigest()
+		evs = append(evs, anomalyRecord(w.agentID, anomaly, payload, size, digest))
 	}
 	stampAll(st, evs)
 
@@ -122,6 +191,7 @@ func (w *work) run(stdout io.Writer) int {
 	if len(evs) == 0 {
 		// Excluded sessions leave no record and get no decision: exclusion
 		// happens before any content processing.
+		w.answer(stdout, nil)
 		return exitOK
 	}
 
@@ -141,16 +211,16 @@ func (w *work) run(stdout io.Writer) int {
 		reply = r
 	}
 	fault("reply")
-	if len(reply) > 0 {
-		// One write: the supervisor forwards only a complete object, and a
-		// reply under the pipe buffer size arrives in one piece.
-		_, _ = stdout.Write(reply)
-	}
+	// One write: the supervisor forwards only a complete object, and a
+	// reply under the pipe buffer size arrives in one piece. It goes out
+	// before the records, so a decision survives a spool that cannot be
+	// written.
+	w.answer(stdout, reply)
 	carried := replyCarries(reply, dec.Action)
 	annotateDecision(evs, ev.dets, dec, reply, carried)
 
 	fault("append")
-	if c := w.appendAll(evs, ev); c != exitOK && code == exitOK {
+	if c := w.appendBounded(evs, ev); c != exitOK && code == exitOK {
 		code = c
 	}
 	return code
@@ -215,7 +285,13 @@ func (w *work) parse(payload []byte, limit int) (evs []*event.Event, req *hookio
 		code = anomalyMalformed
 	}
 	if w.in.timedOut && (code == anomalyMalformed || code == anomalyEmpty) {
+		// The agent had not finished writing: what did not parse may be
+		// a prefix of a gated call, so the event name (read from the
+		// prefix, --event or the environment) still gets a guard answer.
 		code = anomalyStdin
+		if req == nil {
+			req = fallbackRequest(w.dialect, eventNameOf(payload, w.o.event, w.env.Getenv))
+		}
 	}
 	return evs, req, code
 }
@@ -224,6 +300,9 @@ func (w *work) openSpool() {
 	dir, err := spool.Dir(w.cfg.DataDir, w.env.UID, w.env.Home)
 	if err == nil {
 		w.spool, err = spool.OpenWriter(dir)
+	}
+	if err == nil {
+		w.spoolDir = dir
 	}
 	w.spoolErr = err
 }
@@ -285,6 +364,7 @@ type evalResult struct {
 	reason   string
 	timeout  bool
 	noRules  bool // the rule set could not be loaded at all
+	stateErr bool // session state could not be saved
 	dets     []*event.Event
 	states   []savedState
 }
@@ -294,18 +374,101 @@ type savedState struct {
 	data           []byte
 }
 
+// sessRef is one session of the events, with the state loaded for it.
+type sessRef struct {
+	key, agent, session string
+}
+
+type loadedState struct {
+	b  []byte
+	ok bool
+}
+
+func sessionsOf(evs []*event.Event) []sessRef {
+	var out []sessRef
+	seen := map[string]bool{}
+	for _, e := range evs {
+		key := rules.SessionKey(e)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		s := sessRef{key: key}
+		if e.Agent != nil {
+			s.agent = e.Agent.ID
+		}
+		if e.Session != nil {
+			s.session = e.Session.ID
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
 // evaluate runs the guard subset (guard mode) or the full set (in-hook
 // detection) over the events, carrying session state through the spool's
 // state files. This is the order the rule engine's one-shot contract asks
 // for: ImportSession, Eval, ExportSession.
+//
+// Hooks of one session run concurrently (each parallel tool call has its
+// own hook process), so the state is saved optimistically: under a lock,
+// and only if nobody saved since this hook loaded it. Otherwise the events
+// are evaluated again on top of the newer state, as if this hook had run
+// after the other one; a plain load-evaluate-save would let a hook that
+// loaded early overwrite a flag a parallel hook had just set, and the
+// guard rule requiring it would silently stop firing. The lock is held
+// only for the compare and the write, never during evaluation, and waited
+// for at most stateLockWait.
 func (w *work) evaluate(evs []*event.Event) (r evalResult) {
-	r.response = rules.ResponseNone
 	set, degraded, err := loadRuleSet(w.cfg, w.m.guard && !w.m.detect)
 	if err != nil || set == nil {
-		r.noRules = true
 		labelAll(evs, "hook_rules", "unavailable")
-		return r
+		return evalResult{response: rules.ResponseNone, noRules: true}
 	}
+	sessions := sessionsOf(evs)
+	for attempt := 1; ; attempt++ {
+		unlabelAll(evs, "hook_state", "guard_timeout")
+		loaded := w.loadStates(sessions)
+		var supDegraded bool
+		r, supDegraded = w.evalOnce(set, evs, sessions, loaded)
+		if degraded || supDegraded {
+			labelAll(evs, "hook_rules", "degraded")
+		}
+		if w.spool == nil || len(r.states) == 0 {
+			return r
+		}
+		switch w.commitStates(sessions, loaded, r.states) {
+		case stateSaved:
+			return r
+		case stateUnlocked:
+			labelAll(evs, "hook_state", "unlocked")
+			return r
+		case stateSaveFailed:
+			r.stateErr = true
+			return r
+		}
+		// Another hook of the session saved in between.
+		if attempt >= maxStateAttempts || time.Until(w.deadline) < minRetryBudget {
+			// This result stands, but its state is not saved over the
+			// newer one: a later hook builds on that.
+			labelAll(evs, "hook_state", "conflict")
+			return r
+		}
+	}
+}
+
+func (w *work) loadStates(sessions []sessRef) map[string]loadedState {
+	out := make(map[string]loadedState, len(sessions))
+	for _, s := range sessions {
+		b, ok := w.spool.LoadState(s.agent, s.session)
+		out[s.key] = loadedState{b, ok}
+	}
+	return out
+}
+
+// evalOnce evaluates every event with a fresh engine seeded from loaded.
+func (w *work) evalOnce(set *rules.Set, evs []*event.Event, sessions []sessRef, loaded map[string]loadedState) (r evalResult, degraded bool) {
+	r.response = rules.ResponseNone
 	budget := w.cfg.Guard.Deadline.D()
 	if left := time.Until(w.deadline) - replyMargin; left < budget {
 		budget = left
@@ -313,35 +476,14 @@ func (w *work) evaluate(evs []*event.Event) (r evalResult) {
 	if budget < time.Millisecond {
 		budget = time.Millisecond
 	}
-	o, supDegraded := engineOptions(w.cfg, w.env, w.t0, budget)
-	if degraded || supDegraded {
-		labelAll(evs, "hook_rules", "degraded")
-	}
+	o, degraded := engineOptions(w.cfg, w.env, w.t0, budget)
 	eng := rules.NewEngine(set, o)
-
-	type sess struct{ agent, session string }
-	keys := map[string]sess{}
-	var order []string
-	for _, e := range evs {
-		key := rules.SessionKey(e)
-		if _, done := keys[key]; !done {
-			s := sess{}
-			if e.Agent != nil {
-				s.agent = e.Agent.ID
-			}
-			if e.Session != nil {
-				s.session = e.Session.ID
-			}
-			keys[key] = s
-			order = append(order, key)
-			if w.spool != nil {
-				if b, ok := w.spool.LoadState(s.agent, s.session); ok {
-					if eng.ImportSession(key, b) != nil {
-						labelAll(evs, "hook_state", "rejected")
-					}
-				}
-			}
+	for _, s := range sessions {
+		if st := loaded[s.key]; st.ok && eng.ImportSession(s.key, st.b) != nil {
+			labelAll(evs, "hook_state", "rejected")
 		}
+	}
+	for _, e := range evs {
 		res := eng.Eval(e)
 		fault("eval")
 		if res.Timeout {
@@ -353,13 +495,58 @@ func (w *work) evaluate(evs []*event.Event) (r evalResult) {
 		}
 		r.dets = append(r.dets, res.Detections...)
 	}
-	for _, key := range order {
-		if b, ok := eng.ExportSession(key); ok {
-			s := keys[key]
+	for _, s := range sessions {
+		if b, ok := eng.ExportSession(s.key); ok {
 			r.states = append(r.states, savedState{s.agent, s.session, b})
 		}
 	}
-	return r
+	return r, degraded
+}
+
+type stateCommit int
+
+const (
+	stateSaved stateCommit = iota
+	stateUnlocked
+	stateSaveFailed
+	stateConflict
+)
+
+// commitStates saves states if the state files still hold what this hook
+// loaded. When the lock cannot be had in time (any process of the user can
+// hold it), the compare and the save run unlocked: the window for a lost
+// update is then small again, and the records say so.
+func (w *work) commitStates(sessions []sessRef, loaded map[string]loadedState, states []savedState) stateCommit {
+	unlock, locked := w.lockStates()
+	if locked {
+		defer unlock()
+	}
+	for _, s := range sessions {
+		b, ok := w.spool.LoadState(s.agent, s.session)
+		if was := loaded[s.key]; ok != was.ok || !bytes.Equal(b, was.b) {
+			return stateConflict
+		}
+	}
+	for _, st := range states {
+		if w.spool.SaveState(st.agent, st.session, st.data) != nil {
+			return stateSaveFailed
+		}
+	}
+	if !locked {
+		return stateUnlocked
+	}
+	return stateSaved
+}
+
+func (w *work) lockStates() (func(), bool) {
+	if w.spoolDir == "" {
+		return nil, false
+	}
+	d := filepath.Join(w.spoolDir, "state")
+	if os.MkdirAll(d, 0o700) != nil {
+		return nil, false
+	}
+	return tryLock(filepath.Join(d, stateLockName), max0(min(stateLockWait, time.Until(w.deadline)-replyMargin)))
 }
 
 func rank(resp string) int {
@@ -374,7 +561,8 @@ func rank(resp string) int {
 
 // decision maps the evaluation to what the agent is told. Only guard mode
 // answers. guard.max_response caps a block to an ask. An evaluation that
-// could not run, or a payload too large or too deep to inspect, answers
+// could not run, or a payload too large or too deep to inspect, or one the
+// agent had not finished writing when the wait for stdin ran out, answers
 // "ask" on an event the agent gates: a guard that cannot look never turns
 // into an implicit allow (on Codex and Gemini an ask is only a warning; see
 // the package doc).
@@ -396,7 +584,7 @@ func (w *work) decision(r evalResult, req *hookio.Request, anomaly string) hooki
 		switch {
 		case r.noRules:
 			d = hookio.Decision{Action: hookio.ActionAsk, Reason: "guard rules could not be loaded; confirm this action"}
-		case anomaly == anomalyTooLarge || anomaly == anomalyTooDeep:
+		case anomaly == anomalyTooLarge || anomaly == anomalyTooDeep || anomaly == anomalyStdin:
 			d = hookio.Decision{Action: hookio.ActionAsk, Reason: "hook payload could not be inspected (" + anomaly + "); confirm this action"}
 		}
 	}
@@ -448,15 +636,43 @@ func annotateDecision(evs, dets []*event.Event, d hookio.Decision, reply []byte,
 	}
 }
 
+// appendBounded runs appendAll with a time bound. spool.Append waits for
+// the spool's lock without a timeout, and any process of the user can hold
+// that lock. A supervised worker has already answered and is killed at the
+// deadline; a worker run by hand gives up stdinGrace after it.
+func (w *work) appendBounded(evs []*event.Event, r evalResult) int {
+	done := make(chan int, 1)
+	go func() {
+		code := exitInternal
+		defer func() {
+			_ = recover()
+			done <- code
+		}()
+		code = w.appendAll(evs, r)
+	}()
+	t := time.NewTimer(max0(time.Until(w.deadline)) + stdinGrace)
+	defer t.Stop()
+	select {
+	case c := <-done:
+		return c
+	case <-t.C:
+		return exitSpool
+	}
+}
+
 // appendAll writes the activity, then (in-hook detection only) the
-// findings and their context, then the session state. Findings from plain
-// guard mode are not spooled: the daemon re-detects from the activity and
-// would refuse detection records from a user spool anyway.
+// findings at or above rules.min_class and their context, the same floor
+// the daemon applies. Findings from plain guard mode are not spooled: the
+// daemon re-detects from the activity and would refuse detection records
+// from a user spool anyway. Session state was saved by evaluate.
 func (w *work) appendAll(evs []*event.Event, r evalResult) int {
 	if w.spool == nil {
 		return exitSpool
 	}
 	code := exitOK
+	if r.stateErr {
+		code = exitSpool
+	}
 	put := func(e *event.Event) {
 		if appendRecord(w.spool, e) != nil {
 			code = exitSpool
@@ -466,7 +682,15 @@ func (w *work) appendAll(evs []*event.Event, r evalResult) int {
 		put(e)
 	}
 	if w.m.detect {
+		minRank := event.ClassRank(w.cfg.Rules.MinClass)
 		for _, det := range r.dets {
+			class := ""
+			if det.Detection != nil {
+				class = det.Detection.Class
+				if event.ClassRank(class) < minRank {
+					continue
+				}
+			}
 			out, _, ok := w.policy.Emit(det)
 			if !ok || out == nil {
 				continue
@@ -476,17 +700,13 @@ func (w *work) appendAll(evs []*event.Event, r evalResult) int {
 			out.Content, out.Feat = nil, nil
 			out.Integrity = det.Integrity
 			put(out)
-			if n := w.cfg.Privacy.ContextEvents; n > 0 {
+			// Context follows findings and alerts only, as in the daemon.
+			if n := w.cfg.Privacy.ContextEvents; n > 0 && event.ClassRank(class) >= event.ClassRank(event.ClassFinding) {
 				for _, c := range w.policy.ContextFor(out.ID, evs, min(n, privacy.MaxContext)) {
 					c.Content, c.Feat = nil, nil
 					put(c)
 				}
 			}
-		}
-	}
-	for _, s := range r.states {
-		if w.spool.SaveState(s.agent, s.session, s.data) != nil {
-			code = exitSpool
 		}
 	}
 	return code
@@ -502,5 +722,13 @@ func label(e *event.Event, k, v string) {
 func labelAll(evs []*event.Event, k, v string) {
 	for _, e := range evs {
 		label(e, k, v)
+	}
+}
+
+func unlabelAll(evs []*event.Event, keys ...string) {
+	for _, e := range evs {
+		for _, k := range keys {
+			delete(e.Labels, k)
+		}
 	}
 }

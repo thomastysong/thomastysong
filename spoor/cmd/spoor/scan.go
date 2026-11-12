@@ -134,6 +134,9 @@ func (a *app) scan(ctx context.Context, cfg *config.Config, o scanOptions) (*sca
 	if disabled && (o.state || o.outbox) {
 		a.warn("scan", "the kill switch is on (%s): nothing is recorded", filepath.Join(platform.DefaultDirs().Config, platform.KillSwitchName))
 	}
+	if o.state || o.outbox {
+		prepareDataDir(cfg.DataDir)
+	}
 	var st *state.Store
 	var prev map[string]string
 	if o.state {
@@ -155,7 +158,7 @@ func (a *app) scan(ctx context.Context, cfg *config.Config, o scanOptions) (*sca
 	var outbox sink.Sink = capture
 	var notes []string
 	if o.outbox {
-		notes = append(notes, prepareOutbox(cfg.DataDir, cfg.OutboxDir(), cfg.Output.Group)...)
+		notes = append(notes, prepareOutbox(cfg.OutboxDir(), cfg.Output.Group)...)
 		age, size := cfg.Retention.Outbox.D(), cfg.Retention.OutboxBytes
 		if outboxConsumers(cfg) {
 			// The sink prunes blindly whenever it starts a segment; with a

@@ -41,8 +41,11 @@ const rewriteFlags = 0
 // UNVERIFIED: compiled and vetted only.
 func linkCount(os.FileInfo) uint64 { return 1 }
 
-// prepareOutbox is a no-op on Windows: the outbox inherits the ACL of the
-// data directory, which the installer (or the daemon) sets.
+// prepareDataDir and prepareOutbox are no-ops on Windows: the directories
+// inherit the ACL of their parent, which the installer (or the daemon, with
+// explicit ACLs) sets.
 // UNVERIFIED: the daemon's explicit ACLs are not applied by a daemonless
 // scan.
-func prepareOutbox(dataDir, outbox, group string) []string { return nil }
+func prepareDataDir(dataDir string) {}
+
+func prepareOutbox(outbox, group string) []string { return nil }

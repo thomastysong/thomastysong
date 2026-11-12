@@ -10,12 +10,14 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/thomastysong/spoor/internal/bundle"
 	"github.com/thomastysong/spoor/internal/catalog"
 	"github.com/thomastysong/spoor/internal/config"
+	"github.com/thomastysong/spoor/internal/daemon"
 	"github.com/thomastysong/spoor/internal/hookinstall"
 	"github.com/thomastysong/spoor/internal/platform"
 	"github.com/thomastysong/spoor/internal/sink"
@@ -39,15 +41,21 @@ type check struct {
 }
 
 type dirView struct {
-	Name   string `json:"name"`
-	Path   string `json:"path"`
-	Exists bool   `json:"exists"`
-	Mode   string `json:"mode,omitempty"`
-	Owner  string `json:"owner,omitempty"`
+	Name    string `json:"name"`
+	Path    string `json:"path"`
+	Exists  bool   `json:"exists"`
+	Mode    string `json:"mode,omitempty"`
+	Owner   string `json:"owner,omitempty"`
+	Want    string `json:"want,omitempty"`
+	Problem string `json:"problem,omitempty"`
 }
 
 type killSwitchView struct {
-	On    bool     `json:"on"`
+	On bool `json:"on"`
+	// Scope is "all" for the system kill switch (hooks exit, the daemon's
+	// collectors idle) and "hooks" for a "disabled" file next to --config,
+	// which only `spoor hook --config <that file>` honours.
+	Scope string   `json:"scope,omitempty"`
 	Files []string `json:"files,omitempty"`
 }
 
@@ -161,16 +169,19 @@ func (a *app) doctor(cf cfgFlags, asUser, fbConfig, home string) *doctorReport {
 		r.add("privilege", "warn", "not running as root/Administrator", "other users' hooks and root-only directories cannot be checked")
 	}
 
+	// One read of the daemon's view of the installation: its directory
+	// table is what the dirs check judges against.
+	snap, snapErr := daemonStatus(cfg)
 	a.doctorKillSwitch(r, path)
 	a.doctorHost(r, cfg)
-	a.doctorDirs(r, cfg)
+	a.doctorDirs(r, cfg, snap, snapErr)
 	a.doctorHooks(r, cfg, home)
 	a.doctorRules(r, cfg)
 	a.doctorBundle(r, cfg)
 	a.doctorHeartbeat(r, cfg)
 	a.doctorOutbox(r, cfg, asUser)
 	a.doctorFluentBit(r, cfg, fbConfig)
-	a.doctorDaemon(r, cfg)
+	a.doctorDaemon(r, snap, snapErr)
 
 	for _, c := range r.Checks {
 		r.Counts[c.Status]++
@@ -178,21 +189,33 @@ func (a *app) doctor(cf cfgFlags, asUser, fbConfig, home string) *doctorReport {
 	return r
 }
 
+// doctorKillSwitch reports the two kill-switch files and, accurately, what
+// each stops: platform.Disabled (the system file) idles the daemon's
+// collectors and makes every hook exit; a "disabled" file next to --config
+// is honoured by `spoor hook --config <that file>` only (internal/hookcmd),
+// while the daemon and `scan` keep collecting.
 func (a *app) doctorKillSwitch(r *doctorReport, cfgPath string) {
 	sys := filepath.Join(platform.DefaultDirs().Config, platform.KillSwitchName)
-	files := []string{sys}
-	if next := filepath.Join(filepath.Dir(cfgPath), platform.KillSwitchName); next != sys {
-		files = append(files, next)
+	next := filepath.Join(filepath.Dir(cfgPath), platform.KillSwitchName)
+	present := func(p string) bool { _, err := os.Lstat(p); return err == nil }
+	sysOn := present(sys)
+	nextOn := cfgPath != "" && next != sys && present(next)
+	if sysOn {
+		r.KillSwitch.Files = append(r.KillSwitch.Files, sys)
 	}
-	for _, f := range files {
-		if _, err := os.Lstat(f); err == nil {
-			r.KillSwitch.On = true
-			r.KillSwitch.Files = append(r.KillSwitch.Files, f)
-		}
+	if nextOn {
+		r.KillSwitch.Files = append(r.KillSwitch.Files, next)
 	}
-	if r.KillSwitch.On {
+	r.KillSwitch.On = sysOn || nextOn
+	switch {
+	case sysOn:
+		r.KillSwitch.Scope = "all"
 		r.add("kill_switch", "warn", "the kill switch is ON: hooks exit at once and collectors idle", strings.Join(r.KillSwitch.Files, ", ")+" (remove the file to resume)")
-	} else {
+	case nextOn:
+		r.KillSwitch.Scope = "hooks"
+		r.add("kill_switch", "warn", "a hook-only kill switch is ON: hooks that read this configuration exit at once; the daemon keeps collecting",
+			next+" is honoured by `spoor hook --config "+cfgPath+"` only; the daemon (`spoor run`) and `spoor scan` honour "+sys+" alone. Create that file to idle the collectors too, or remove "+next+" to resume the hooks.")
+	default:
 		r.add("kill_switch", "ok", "kill switch off", "create "+sys+" to stop all collection without uninstalling")
 	}
 }
@@ -227,70 +250,166 @@ func dirInfo(name, path string) (dirView, os.FileInfo) {
 	return v, fi
 }
 
-func (a *app) doctorDirs(r *doctorReport, cfg *config.Config) {
-	type want struct {
-		name, path string
-		public     bool // must be readable by every user (hooks read it)
-		file       bool
-	}
-	wants := []want{
-		{"data", cfg.DataDir, true, false},
-		{"outbox", cfg.OutboxDir(), false, false},
-		{"local", cfg.LocalDir(), false, false},
-		{"spool", cfg.SpoolDir(), true, false},
-		{"bundle", cfg.BundleDir(), true, false},
-		{"checkpoints", cfg.CheckDir(), false, false},
-		{"state_db", cfg.StateDB(), false, true},
+// privateDirs hold records or reader positions that must never be open to
+// other local accounts (the local ring is never shipped at all).
+var privateDirs = map[string]bool{"outbox": true, "local": true, "checkpoints": true, "state.db": true, "spool/<uid>": true}
+
+// doctorDirs judges every directory of the layout (and state.db) against
+// the modes and owners the daemon itself creates (daemon.Snapshot.Dirs):
+// one table, so doctor cannot call "safe" what the daemon would repair.
+// Anything another account can write, any record directory or file other
+// accounts can read, a link, and a sensor directory owned by another
+// account fail; other differences from the daemon's modes warn.
+func (a *app) doctorDirs(r *doctorReport, cfg *config.Config, snap daemon.Snapshot, snapErr error) {
+	if snapErr != nil {
+		r.add("dirs", "warn", "the directory layout could not be checked", snapErr.Error())
+		return
 	}
 	var problems, missing []string
 	status := "ok"
-	for _, w := range wants {
-		v, fi := dirInfo(w.name, w.path)
+	raise := func(sev string) {
+		if sev == "fail" || (sev == "warn" && status == "ok") {
+			status = sev
+		}
+	}
+	for _, d := range snap.Dirs {
+		v, _ := dirInfo(d.Name, d.Path)
+		v.Want, v.Problem = d.Want, d.Problem
 		r.Dirs = append(r.Dirs, v)
-		if fi == nil {
-			missing = append(missing, w.name)
+		if !d.Exists {
+			missing = append(missing, d.Name)
 			continue
 		}
-		if fi.Mode()&os.ModeSymlink != 0 {
-			problems = append(problems, w.path+" is a symbolic link")
-			status = "fail"
-			continue
+		sev, why := judgeDir(d)
+		if sev != "ok" {
+			problems = append(problems, fmt.Sprintf("%s %s: %s", d.Name, d.Path, why))
+			raise(sev)
 		}
-		if !permsChecked {
-			continue
-		}
-		perm := fi.Mode().Perm()
-		if perm&0o002 != 0 && fi.Mode()&os.ModeSticky == 0 {
-			problems = append(problems, fmt.Sprintf("%s is world-writable (%s)", w.path, perm))
-			status = "fail"
-		} else if perm&0o020 != 0 && !w.public {
-			problems = append(problems, fmt.Sprintf("%s is group-writable (%s)", w.path, perm))
-			status = "fail"
-		}
-		if w.public && !w.file && perm&0o005 != 0o005 && w.name == "bundle" {
-			problems = append(problems, fmt.Sprintf("%s is not readable by other users (%s): unprivileged hooks fall back to the embedded rules", w.path, perm))
-			if status == "ok" {
-				status = "warn"
-			}
-		}
-		if w.name == "state_db" && r.Privileged {
-			if uid, _, ok := fileOwner(fi); ok && uid != 0 {
-				problems = append(problems, fmt.Sprintf("%s is owned by uid %d, not root: osquery reads it without checking", w.path, uid))
-				status = "fail"
+	}
+	if permsChecked {
+		for _, dir := range []string{cfg.OutboxDir(), cfg.LocalDir(), cfg.CheckDir()} {
+			if why := exposedFiles(dir); why != "" {
+				problems = append(problems, why)
+				raise("fail")
 			}
 		}
 	}
-	summary := "directories present with safe modes"
+	var parts []string
+	switch {
+	case status == "fail":
+		parts = append(parts, "unsafe directory or file modes")
+	case status == "warn":
+		parts = append(parts, "directory modes differ from the daemon's")
+	case len(missing) < len(snap.Dirs):
+		parts = append(parts, "directories present with the daemon's modes")
+	}
 	if len(missing) > 0 {
-		summary = "not created yet: " + strings.Join(missing, ", ") + " (the daemon or `scan --state` creates them)"
-		if status == "ok" {
-			status = "warn"
-		}
+		parts = append(parts, "not created yet: "+strings.Join(missing, ", ")+" (the daemon or `scan --state` creates them)")
+		raise("warn")
 	}
+	summary := strings.Join(parts, "; ")
 	if !permsChecked {
-		summary += " (Windows: access is decided by ACLs, not checked here)"
+		summary += " (Windows: ACLs are shown in the daemon snapshot, not judged)"
 	}
 	r.add("dirs", status, summary, strings.Join(problems, "\n"))
+}
+
+// judgeDir grades one entry of the daemon's directory table.
+func judgeDir(d daemon.DirStatus) (string, string) {
+	p := d.Problem
+	if p == "" {
+		return "ok", ""
+	}
+	if d.Mode == "" || !permsChecked {
+		// No mode read: a link, a reparse point, not a directory (or not a
+		// regular file), or Windows.
+		if strings.Contains(p, "link") || strings.Contains(p, "reparse") || strings.HasPrefix(p, "is not") {
+			return "fail", p
+		}
+		return "warn", p
+	}
+	mode, err := strconv.ParseUint(d.Mode, 8, 32)
+	if err != nil {
+		return "warn", p
+	}
+	perm := os.FileMode(mode) & os.ModePerm
+	name := d.Name
+	if strings.HasPrefix(name, "spool/") {
+		name = "spool/<uid>"
+	}
+	want := firstNonEmpty(d.Want, "?")
+	switch {
+	case perm&0o002 != 0:
+		// The sticky bit does not make a sensor directory safe: any
+		// account could create entries in it (a state.db before the
+		// daemon, another account's spool/<uid>).
+		return "fail", fmt.Sprintf("writable by every account (mode %s, want %s)", d.Mode, want)
+	case perm&0o020 != 0:
+		return "fail", fmt.Sprintf("writable by its group (mode %s, want %s)", d.Mode, want)
+	case privateDirs[name] && perm&0o007 != 0:
+		return "fail", fmt.Sprintf("open to every account (mode %s, want %s): it holds records or positions other users must not read", d.Mode, want)
+	}
+	if strings.HasPrefix(p, "owned by uid ") || strings.HasPrefix(p, "not owned by root") {
+		if d.Owner != "0" {
+			return "fail", p + ": another account controls a directory the sensor writes as root"
+		}
+		// Root owns it, and doctor (unprivileged) compared with its own
+		// uid: judge the mode alone. A root-owned spool/<uid> only stops
+		// that account's hooks from using it.
+		if name == "spool/<uid>" {
+			return "warn", p + ": the account's hooks fall back to their home spool"
+		}
+		if modeAsWanted(d) {
+			return "ok", ""
+		}
+		return "warn", fmt.Sprintf("mode %s, want %s", d.Mode, want)
+	}
+	if name == "bundle" && perm&0o005 != 0o005 {
+		return "warn", p + ": unprivileged hooks cannot read it and fall back to the embedded rules"
+	}
+	return "warn", p
+}
+
+// modeAsWanted compares a mode with the daemon's expectation; the data
+// directory accepts any mode that is traversable by all and writable by
+// the owner only ("0711 (or 0755)").
+func modeAsWanted(d daemon.DirStatus) bool {
+	if strings.Contains(d.Want, "(or") {
+		m, err := strconv.ParseUint(d.Mode, 8, 32)
+		return err == nil && m&0o022 == 0 && m&0o001 != 0
+	}
+	return d.Mode == d.Want
+}
+
+// exposedFiles reports files in a record directory that other accounts can
+// read or write (segments the daemon writes 0640 or 0600), or "".
+func exposedFiles(dir string) string {
+	f, err := os.Open(dir)
+	if err != nil {
+		return ""
+	}
+	ents, _ := f.ReadDir(4096)
+	f.Close()
+	n, example := 0, ""
+	for _, e := range ents {
+		if !e.Type().IsRegular() {
+			continue
+		}
+		fi, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if perm := fi.Mode().Perm(); perm&0o027 != 0 {
+			if n == 0 {
+				example = fmt.Sprintf("%s (mode %04o)", e.Name(), uint32(perm))
+			}
+			n++
+		}
+	}
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s: %d file(s) readable or writable by other accounts, e.g. %s", dir, n, example)
 }
 
 func (a *app) doctorHooks(r *doctorReport, cfg *config.Config, home string) {
@@ -547,8 +666,7 @@ func (a *app) doctorFluentBit(r *doctorReport, cfg *config.Config, fbConfig stri
 	r.add("fluent_bit", status, summary, strings.Join(details, "\n"))
 }
 
-func (a *app) doctorDaemon(r *doctorReport, cfg *config.Config) {
-	snap, err := daemonStatus(cfg)
+func (a *app) doctorDaemon(r *doctorReport, snap daemon.Snapshot, err error) {
 	if err != nil {
 		r.DaemonErr = err.Error()
 		r.add("daemon", "warn", "daemon status unavailable", err.Error())

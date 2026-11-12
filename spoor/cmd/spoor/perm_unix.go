@@ -135,21 +135,29 @@ func linkCount(fi os.FileInfo) uint64 {
 	return 0
 }
 
-// prepareOutbox creates what a daemonless `scan --outbox` (tier 2) writes
-// into with the modes the daemon gives them, so that the shipper can read
-// it: the data directory traversable by everyone (0711, hooks reach their
-// spool through it) and the outbox 2750 owned by output.group, whose setgid
-// bit gives every new segment that group. Directories that exist are left
-// as they are: the daemon owns them and doctor reports their modes.
-func prepareOutbox(dataDir, outbox, group string) []string {
-	var notes []string
-	if _, err := os.Lstat(dataDir); errors.Is(err, fs.ErrNotExist) {
-		if err := os.MkdirAll(filepath.Dir(dataDir), 0o755); err == nil {
-			if err := os.Mkdir(dataDir, 0o711); err == nil {
-				_ = os.Chmod(dataDir, 0o711) // the umask narrowed Mkdir's mode
-			}
-		}
+// prepareDataDir creates the data directory, when it does not exist yet,
+// with the mode the daemon gives it: traversable by everyone (0711), so
+// that hooks reach their spool and read the bundle through it. A
+// daemonless `scan --state` or `scan --outbox` (tier 2) is often the first
+// thing to write there. An existing directory is left alone: the daemon
+// owns it and doctor reports its mode.
+func prepareDataDir(dataDir string) {
+	if _, err := os.Lstat(dataDir); !errors.Is(err, fs.ErrNotExist) {
+		return
 	}
+	if err := os.MkdirAll(filepath.Dir(dataDir), 0o755); err != nil {
+		return
+	}
+	if err := os.Mkdir(dataDir, 0o711); err == nil {
+		_ = os.Chmod(dataDir, 0o711) // the umask narrowed Mkdir's mode
+	}
+}
+
+// prepareOutbox creates the outbox for a daemonless `scan --outbox` with
+// the daemon's mode and group, so that the shipper can read it: 2750 owned
+// by output.group, whose setgid bit gives every new segment that group. An
+// existing outbox is left alone (see prepareDataDir).
+func prepareOutbox(outbox, group string) []string {
 	if _, err := os.Lstat(outbox); !errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
@@ -162,14 +170,14 @@ func prepareOutbox(dataDir, outbox, group string) []string {
 	}
 	g, err := user.LookupGroup(group)
 	if err != nil {
-		return append(notes, fmt.Sprintf("output.group %q does not exist: the outbox is readable by its owner only", group))
+		return []string{fmt.Sprintf("output.group %q does not exist: the outbox is readable by its owner only", group)}
 	}
 	gid, err := strconv.Atoi(g.Gid)
 	if err != nil {
-		return notes
+		return nil
 	}
 	if err := os.Chown(outbox, -1, gid); err != nil {
-		notes = append(notes, fmt.Sprintf("cannot give the outbox to group %q: %v", group, err))
+		return []string{fmt.Sprintf("cannot give the outbox to group %q: %v", group, err)}
 	}
-	return notes
+	return nil
 }

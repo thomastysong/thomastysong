@@ -5,7 +5,9 @@
 *.ext
 *.test
 *.out
-coverage.*
+# coverage reports in the module root only: internal/engine/coverage.go and
+# internal/rules/packs/coverage.yaml are sources
+/coverage.*
 # local state written by tests and manual runs
 /tmp/
 *.db

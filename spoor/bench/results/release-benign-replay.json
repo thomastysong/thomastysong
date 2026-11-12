@@ -144,7 +144,7 @@
         "hi": 0.03219298775169032
       },
       "labels": {
-        "red_team": 2
+        "false_positive": 2
       },
       "samples": [
         {
@@ -153,8 +153,8 @@
           "ts": "2026-11-12T07:27:10Z",
           "tool": "Bash",
           "summary": "shell.env_assign=A, NSPID, SID, PATH, HOME, LANG, TERM, ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL, DISABLE_AUTOUPDATER, DISABLE_ERROR_REPORTING, DISABLE_TELEMETRY, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC; target.command=cat $S/realagent/run/ns [...]",
-          "label": "red_team",
-          "reason": "verify:real-agent: runs headless Claude Code against a local stub of the Messages API (ANTHROPIC_BASE_URL on loopback) inside its test namespace"
+          "label": "false_positive",
+          "reason": "verify:real-agent: runs headless Claude Code against its own local stub of the Messages API (ANTHROPIC_BASE_URL on loopback) inside its test namespace; a client pointed at a local mock server, the case of the rule's falsepositives (red_team until the release review)"
         },
         {
           "event_id": "01a1ceab-bfd8-7b99-87eb-cdd2c98fe726",
@@ -162,8 +162,8 @@
           "ts": "2026-11-12T07:32:04Z",
           "tool": "Bash",
           "summary": "shell.env_assign=A, NSPID, SID, PATH, HOME, LANG, TERM, ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL, DISABLE_AUTOUPDATER, DISABLE_ERROR_REPORTING, DISABLE_TELEMETRY, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC; target.command=cat $S/realagent/run/ns [...]",
-          "label": "red_team",
-          "reason": "verify:real-agent: runs headless Claude Code against a local stub of the Messages API (ANTHROPIC_BASE_URL on loopback) inside its test namespace"
+          "label": "false_positive",
+          "reason": "verify:real-agent: runs headless Claude Code against its own local stub of the Messages API (ANTHROPIC_BASE_URL on loopback) inside its test namespace; a client pointed at a local mock server, the case of the rule's falsepositives (red_team until the release review)"
         }
       ]
     },
@@ -364,7 +364,7 @@
           "thread": "-home-user/\u003csession\u003e.jsonl",
           "ts": "2026-11-12T03:26:34Z",
           "tool": "Bash",
-          "summary": "target.command=D=~/.claude/projects/-home-user/\u003csession\u003e/subagents/workflows; for w in wf_eac76c7b-8ba wf_92cf33f2-03c wf_6820f971-f65; do echo \"== $w\"; cat $D/$w/journal.jsonl | cut -c1-300; echo; done; cd /home/user/thomastysong/spoor; ls [...]",
+          "summary": "target.command=D=~/.claude/projects/-home-user/\u003csession\u003e/subagents/workflows; for w in wf_eac76c7b-8ba wf_92cf33f2-03c wf_6820f971-f65; do echo \"== $w\"; cat $D/$w/journal.jsonl | cut -c1-300; echo; done; cd $REPO; ls int",
           "label": "false_positive",
           "reason": "main session: the orchestrator reads its own subagents' workflow journals and scripts to monitor them"
         },
@@ -826,7 +826,7 @@
           "thread": "-home-user/\u003csession\u003e/subagents/workflows/wf_8758a1a0-646/agent-a3e851cd9e1ea67ed.jsonl",
           "ts": "2026-11-11T17:52:16Z",
           "tool": "Bash",
-          "summary": "net.host=example.com, 2001:db8::1, 169.254.169.254, evil.example, auth.example.com, h%d.example, example.org; target.command=cd /home/user/thomastysong/spoor/internal/hookio; python3 -I -; cd /home/user/thomastysong/spoor; gofmt -w internal [...]",
+          "summary": "net.host=example.com, 2001:db8::1, 169.254.169.254, evil.example, auth.example.com, h%d.example, example.org; target.command=cd $REPO/internal/hookio; python3 -I -; cd $REPO; gofmt -w internal/hookio/*.go; go vet ./internal/hookio/; go test [...]",
           "label": "false_positive",
           "reason": "build:hookio: the metadata address is a string inside a Python heredoc that writes URL test cases; the analyser reads it as a contacted URL"
         }
@@ -1554,7 +1554,7 @@
           "thread": "-home-user/\u003csession\u003e.jsonl",
           "ts": "2026-11-12T03:20:07Z",
           "tool": "Bash",
-          "summary": "target.command=S=$S; W=$S/fbosq; rm -rf $W; mkdir -p $W/cfg $W/logs $W/state $W/out; cp $S/fleetstack/logs/osqueryd.results.log $W/logs/; cp /home/user/thomastysong/spoor/deploy/fluent-bit/osquery.yaml",
+          "summary": "target.command=S=$S; W=$S/fbosq; rm -rf $W; mkdir -p $W/cfg $W/logs $W/state $W/out; cp $S/fleetstack/logs/osqueryd.results.log $W/logs/; cp $REPO/deploy/fluent-bit/osquery.yaml",
           "label": "false_positive",
           "reason": "main session: chmod -R 777 on scratch directories used as container bind mounts (red-team workflow 16)"
         },
@@ -1563,7 +1563,7 @@
           "thread": "-home-user/\u003csession\u003e.jsonl",
           "ts": "2026-11-12T03:20:45Z",
           "tool": "Bash",
-          "summary": "target.command=S=$S; W=$S/fbotel; rm -rf $W; mkdir -p $W/cfg $W/state; cp /home/user/thomastysong/spoor/deploy/fluent-bit/no-binary/otel.yaml /home/user/thomastysong/spoor/deploy/fluent-bit/no-binary/n",
+          "summary": "target.command=S=$S; W=$S/fbotel; rm -rf $W; mkdir -p $W/cfg $W/state; cp $REPO/deploy/fluent-bit/no-binary/otel.yaml $REPO/deploy/fluent-bit/no-binary/n",
           "label": "false_positive",
           "reason": "main session: chmod -R 777 on scratch directories used as container bind mounts (red-team workflow 16)"
         },
@@ -1624,8 +1624,8 @@
         "hi": 0.08908337992910144
       },
       "labels": {
-        "false_positive": 1,
-        "red_team": 8
+        "false_positive": 5,
+        "red_team": 4
       },
       "samples": [
         {
@@ -1634,8 +1634,8 @@
           "ts": "2026-11-11T16:53:02Z",
           "tool": "Bash",
           "summary": "shell.defense_evasion=stop_security_tool; target.command=S=$S; mkdir -p $S/exttest \u0026\u0026 cd $S/exttest \u0026\u0026 cat \u003e go.mod \u003c\u003c'EOF' module example.com/exttest go 1.24 EOF cat \u003e main.go \u003c\u003c'EOF' package main import ( \"context\" \"flag\" \"log\" \"time\"",
-          "label": "red_team",
-          "reason": "main session: restart of the test stack's osqueryd during lab work (true positive, not malicious)"
+          "label": "false_positive",
+          "reason": "main session: restarts the test stack's osqueryd to load an extension it is validating through Fleet; restarting osqueryd after a config change is in the rule's falsepositives (red_team until the release review)"
         },
         {
           "event_id": "01a1cb87-9190-7a91-afb0-fbb2c4fbbd1e",
@@ -1643,8 +1643,8 @@
           "ts": "2026-11-11T16:53:41Z",
           "tool": "Bash",
           "summary": "shell.defense_evasion=stop_security_tool; target.command=S=$S; mkdir -p /run/osqt \u0026\u0026 sed -i \"s#^--extensions_socket=.*#--extensions_socket=/run/osqt/osquery.em#\" $S/fleetstack/osq/osquery.flags \u0026\u0026 pkill -f \"osqueryd --flagfile\"; sleep 2; (e [...]",
-          "label": "red_team",
-          "reason": "main session: restart of the test stack's osqueryd during lab work (true positive, not malicious)"
+          "label": "false_positive",
+          "reason": "main session: changes the extensions socket in the test stack's osquery.flags and restarts osqueryd; restarting osqueryd after a config change is in the rule's falsepositives (red_team until the release review)"
         },
         {
           "event_id": "01a1cb9b-b407-794b-811f-ebdc3ad9d780",
@@ -1688,24 +1688,24 @@
           "ts": "2026-11-12T03:43:28Z",
           "tool": "Bash",
           "summary": "shell.defense_evasion=stop_security_tool; target.command=S=$S; cd $S/fleetstack \u0026\u0026 . ./fleet.env \u0026\u0026 (env -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy nohup $S/dl/fleet/fleet_v4.94.1_linux/fleet serve \u003e $S/fleetstack/fleet-serve [...]",
-          "label": "red_team",
-          "reason": "main session: restart of the test stack's osqueryd during lab work (true positive, not malicious)"
+          "label": "false_positive",
+          "reason": "main session: restarts the Fleet server and the enrolled osqueryd of the test stack after the container restarted; operations work on the monitoring stack is in the rule's falsepositives (red_team until the release review)"
         },
         {
           "event_id": "01a1ce90-7fa1-72fc-b86e-79b42aaa47a5",
           "thread": "-home-user/\u003csession\u003e/subagents/workflows/wf_f8d716db-9ac/agent-afd40c56ccf40589f.jsonl",
           "ts": "2026-11-12T07:02:18Z",
           "tool": "Bash",
-          "summary": "shell.defense_evasion=sensor_tamper, stop_security_tool, agent_hook_tamper; target.command=S=$S/c7pkg; R=/home/user/thomastysong/spoor; docker rm -f c7deb \u003e/dev/null; docker rm -f c7rpm \u003e/dev/null 2\u003e\u00261; docker run -d --name c7rpm -v $S/dist [...]",
-          "label": "red_team",
-          "reason": "build:packaging: installs, upgrades and erases the rpm in a throwaway Rocky Linux container; rpm -e spoor and the osquery restart of register-extension.sh are the package test"
+          "summary": "shell.defense_evasion=sensor_tamper, stop_security_tool, agent_hook_tamper; target.command=S=$S/c7pkg; R=$REPO; docker rm -f c7deb \u003e/dev/null; docker rm -f c7rpm \u003e/dev/null 2\u003e\u00261; docker run -d --name c7rpm -v $S/dist:/pkgs:ro -v $R/deploy/f [...]",
+          "label": "false_positive",
+          "reason": "build:packaging: installs, upgrades and erases the rpm in a throwaway Rocky Linux container; rpm -e spoor and the osquery restart in register-extension.sh are the package's own steps; the same command as its SPR-EVADE-003 hit (red_team until the release review)"
         },
         {
           "event_id": "01a1ceb3-905d-7e45-af98-bd6fb4a2e844",
           "thread": "-home-user/\u003csession\u003e/subagents/workflows/wf_f8d716db-9ac/agent-a7b739c603250f536.jsonl",
           "ts": "2026-11-12T07:40:36Z",
           "tool": "Bash",
-          "summary": "shell.defense_evasion=stop_security_tool, sensor_tamper; target.command=cd /home/user/thomastysong/spoor \u0026\u0026 S=$S/rev-pkg/spoor; $S hooks install --help 2\u003e\u00261; $S hooks uninstall --help 2\u003e\u00261; $S export --help 2\u003e\u00261 | head -20",
+          "summary": "shell.defense_evasion=stop_security_tool, sensor_tamper; target.command=cd $REPO \u0026\u0026 S=$S/rev-pkg/spoor; $S hooks install --help 2\u003e\u00261; $S hooks uninstall --help 2\u003e\u00261; $S export --help 2\u003e\u00261 | head -20",
           "label": "false_positive",
           "reason": "review:packaging: spoor hooks uninstall --help prints usage; the analyser reads any uninstall argument of spoor as stopping the sensor"
         }
@@ -1734,8 +1734,7 @@
         "hi": 0.06623610873420138
       },
       "labels": {
-        "red_team": 8,
-        "true_positive": 1
+        "false_positive": 9
       },
       "samples": [
         {
@@ -1744,8 +1743,8 @@
           "ts": "2026-11-12T04:50:04Z",
           "tool": "Bash",
           "summary": "shell.deletes=~/.local/state/spoor/spool/.lock, ~/.local/state/spoor/spool/.seq-activity, ~/.local/state/spoor/spool/state/3dd8103c823f770fc86fb975e7cbc98a.json, ~/.local/state/spoor/spool/activity-20261112.ndjson, ~/.local/state/spoor/spoo [...]",
-          "label": "true_positive",
-          "reason": "build:hookcmd: the hook builder deletes the per-user spool its own hook tests wrote into root's real state directory; that is the sensor's spool, so the alert is correct, the intent benign"
+          "label": "false_positive",
+          "reason": "build:hookcmd: removes the spool files and directories that its own two probe runs had written into root's ~/.local/state seconds earlier (no sensor was installed); clean-up of its own test output, which is ordinary work (true_positive until the release review)"
         },
         {
           "event_id": "01a1ce90-4f3a-7744-b9eb-8deb2f97f485",
@@ -1753,8 +1752,8 @@
           "ts": "2026-11-12T07:02:06Z",
           "tool": "Bash",
           "summary": "shell.deletes=/srv/spool; shell.writes=/etc/spoor/spoor.yaml; target.command=docker exec c7deb sh -c 'useradd -r fluentbit \u0026\u0026 usermod -a -G spoor fluentbit \u0026\u0026 dpkg -P spoor; echo dpkg=$?; ls -d /etc/spoor /var/lib/spoor 2\u003e\u00261; getent group s [...]",
-          "label": "red_team",
-          "reason": "build:packaging: purge test of the deb inside the throwaway c7deb container: points data_dir in /etc/spoor/spoor.yaml at /srv/spool, then purges the package (the lab operating its own sensor)"
+          "label": "false_positive",
+          "reason": "build:packaging: deb purge test in the throwaway c7deb container: points data_dir in /etc/spoor/spoor.yaml at /srv/spool, purges, reinstalls and purges again; uninstalling the sensor is in the rule's falsepositives (red_team until the release review)"
         },
         {
           "event_id": "01a1ce93-a8b6-70ef-a3ea-0635ab8db8e6",
@@ -1762,8 +1761,8 @@
           "ts": "2026-11-12T07:05:45Z",
           "tool": "Bash",
           "summary": "shell.writes=/etc/spoor/spoor.yaml, /home/dev/err.log, /home/dev/out.ndjson; target.command=S=$S/c7pkg; docker rm -f c7img \u003e/dev/null 2\u003e\u00261; docker run -d --name c7img -v $S/dist/0.1.1/spoor:/usr/local/bin/spoor:ro mirror.gcr.io/library/redi [...]",
-          "label": "red_team",
-          "reason": "build:packaging: writes a first /etc/spoor/spoor.yaml inside a throwaway redis container to test the in-image hook mode (the lab operating its own sensor)"
+          "label": "false_positive",
+          "reason": "build:packaging: writes a first /etc/spoor/spoor.yaml and installs managed hooks in a throwaway redis container to test in-image hook mode; installing the sensor is in the rule's falsepositives (red_team until the release review)"
         },
         {
           "event_id": "01a1ceab-71da-75d0-a26d-239af772bec5",
@@ -1771,8 +1770,8 @@
           "ts": "2026-11-12T07:31:44Z",
           "tool": "Bash",
           "summary": "shell.writes=$S/realagent/logs/step6-guard-install.txt, $S/realagent/etc/spoor-guard.yaml, /etc/spoor/spoor.yaml; target.command=A=$S/realagent; NSPID=$(cat $A/run/ns.pid) cd $A \u0026\u0026 HOME=$A/home $A/bin/spoor hooks install --scope user --agen [...]",
-          "label": "red_team",
-          "reason": "verify:real-agent: switches guard mode in /etc/spoor/spoor.yaml inside the run's private mount namespace, where /etc is an overlay (the lab operating its own sensor)"
+          "label": "false_positive",
+          "reason": "verify:real-agent: step 6 of its task: reinstalls the hooks with --guard and copies an advisory-mode configuration to /etc/spoor/spoor.yaml inside the run's private mount namespace; configuring the sensor it installed, the case of the rule's falsepositives (red_team until the release review)"
         },
         {
           "event_id": "01a1ceb1-cfd2-72d3-9074-5d01054d1a24",
@@ -1780,8 +1779,8 @@
           "ts": "2026-11-12T07:38:42Z",
           "tool": "Bash",
           "summary": "shell.writes=$S/fleetbin/spoor.ext, $S/fleetbin/run2/bin/spoor, /etc/spoor/spoor.yaml, $T/-home-user/\u003csession\u003e; target.command=A=$S/fleetbin; cp $A/spoor $A/spoor.ext \u0026\u0026 chmod 755 $A/spoor.ext \u0026\u0026 mkdir -p $A/run2/bin \u0026\u0026 cp $A/spoor $A/run2/ [...]",
-          "label": "red_team",
-          "reason": "verify:fleet-binary: creates a temporary /etc/spoor/spoor.yaml on this host for the deploy/fleet check with the real binary, removed afterwards (the lab operating its own sensor)"
+          "label": "false_positive",
+          "reason": "verify:fleet-binary: creates a temporary /etc/spoor/spoor.yaml on this host for the deploy/fleet check with the real binary, commented as removed afterwards; installing the sensor is in the rule's falsepositives (red_team until the release review)"
         },
         {
           "event_id": "01a1ceb2-8bda-7085-b541-c4ca8ef2df71",
@@ -1789,8 +1788,8 @@
           "ts": "2026-11-12T07:39:30Z",
           "tool": "Bash",
           "summary": "shell.writes=$S/realagent/tools/direct.py, /etc/spoor/spoor.yaml.tmp, /etc/spoor/spoor.yaml; target.command=A=$S/realagent; R=$A/r2 cat \u003e $A/tools/direct.py \u003c\u003c'EOF' # Wall time of the installed hook command run directly (no agent), N times, [...]",
-          "label": "red_team",
-          "reason": "verify:real-agent: switches guard mode back to off in /etc/spoor/spoor.yaml inside the run's private mount namespace to time the hook (the lab operating its own sensor)"
+          "label": "false_positive",
+          "reason": "verify:real-agent: sets guard mode back to off in the namespace's /etc/spoor/spoor.yaml (sed to a temporary file, mv) to time the hook; configuring the sensor it installed, the case of the rule's falsepositives (red_team until the release review)"
         },
         {
           "event_id": "01a1cec1-f815-7b16-946f-425e29838bbd",
@@ -1798,8 +1797,8 @@
           "ts": "2026-11-12T07:56:20Z",
           "tool": "Bash",
           "summary": "shell.writes=$S/fleetbin/ctr~/.claude.json, $S/fleetbin/run3/bin/spoor, /etc/spoor/spoor.yaml; target.command=A=$S/fleetbin; cp $A/ctr2~/.claude.json $A/ctr~/.claude.json; source $A/write_wrapper.sh; write_wrapper $A/bin/spoor-ctr $A/ctr; s [...]",
-          "label": "red_team",
-          "reason": "verify:fleet-binary: points its temporary /etc/spoor/spoor.yaml on this host at a new run directory (the lab operating its own sensor)"
+          "label": "false_positive",
+          "reason": "verify:fleet-binary: rewrites its temporary /etc/spoor/spoor.yaml on this host for its next run; configuring the sensor it installed, the case of the rule's falsepositives (red_team until the release review)"
         },
         {
           "event_id": "01a1cec5-88c4-7b15-bcd2-d24a2da0c499",
@@ -1807,8 +1806,8 @@
           "ts": "2026-11-12T08:00:14Z",
           "tool": "Bash",
           "summary": "shell.writes=$S/audit-realagent/direct/observe.yaml, $S/audit-realagent/direct/guard.yaml, /etc/spoor/spoor.yaml; target.command=AU=$S/audit-realagent; A=$S/realagent; mkdir -p $AU/direct/data; printf 'data_dir: %s\\nprivacy:\\n profile: mini [...]",
-          "label": "red_team",
-          "reason": "audit:real-agent: writes observe and guard configurations to /etc/spoor on a tmpfs inside unshare -m to time the hook (the lab operating its own sensor)"
+          "label": "false_positive",
+          "reason": "audit:real-agent: copies observe and guard configurations to a tmpfs /etc/spoor inside unshare -m to time the hook; configuring the sensor, the case of the rule's falsepositives (red_team until the release review)"
         },
         {
           "event_id": "01a1ced2-9576-7b5b-a30e-e30cc1f4c68f",
@@ -1816,8 +1815,8 @@
           "ts": "2026-11-12T08:14:29Z",
           "tool": "Bash",
           "summary": "shell.deletes=/etc/spoor/spoor.yaml, /etc/spoor/host_id, /etc/spoor; shell.writes=$S/fleetbin/restore-check.txt; target.command=rm /etc/spoor/spoor.yaml /etc/spoor/host_id \u0026\u0026 rmdir /etc/spoor \u0026\u0026 ls -la /etc/spoor 2\u003e\u00261 | tee -a $S/fleetbin/r [...]",
-          "label": "red_team",
-          "reason": "verify:fleet-binary: removes the temporary /etc/spoor it created on this host for the deploy/fleet check (the lab operating its own sensor)"
+          "label": "false_positive",
+          "reason": "verify:fleet-binary: removes the temporary /etc/spoor it created on this host for the deploy/fleet check; uninstalling the sensor is in the rule's falsepositives (red_team until the release review)"
         }
       ]
     },
@@ -1844,8 +1843,9 @@
         "hi": 0.05001855325647952
       },
       "labels": {
-        "red_team": 5,
-        "rule_bug": 1
+        "false_positive": 2,
+        "red_team": 2,
+        "rule_bug": 2
       },
       "samples": [
         {
@@ -1872,8 +1872,8 @@
           "ts": "2026-11-11T17:26:07Z",
           "tool": "Bash",
           "summary": "shell.writes=$S/redteam/verify-alt-architectures/fb/otel.lua, $S/redteam/verify-alt-architectures/fb/fb.yaml, $T/-home; target.command=S=$S; V=$S/redteam/verify-alt-architectures; B=$V/bare; F=$V/fb; mkdir -p $F/out; chmod 777 $F/out cat \u003e  [...]",
-          "label": "red_team",
-          "reason": "verify:alt-architectures: red-team experiment copies managed settings into an overlay /etc/claude-code in a private mount namespace (run.sh); the rule matched the staging copy under scratch written by the same command"
+          "label": "rule_bug",
+          "reason": "verify:alt-architectures: the only policy-class write the rule sees is a staging copy under the scratch directory (managed/managed-settings.d/51-otel.json); the copy into an overlay /etc/claude-code happens inside run.sh, which the rule does not see; the same unanchored match as 01a1cba4-acb8 (red_team until the release review)"
         },
         {
           "event_id": "01a1ce88-def9-748b-a594-dca1e1d11cee",
@@ -1890,17 +1890,17 @@
           "ts": "2026-11-12T07:01:50Z",
           "tool": "Bash",
           "summary": "shell.writes=/etc/gemini-cli/settings.json; target.command=docker exec c7deb sh -c \"sed -i \\\"s#\\\\[ -x '/usr/bin/spoor' \\\\] || exit 0; exec '/usr/bin/spoor' hook --agent gemini-cli#/usr/bin/spoor hook --agent gemini-cli#\\\" /etc/gemini-cli/se [...]",
-          "label": "red_team",
-          "reason": "build:packaging: edits the spoor entry of the managed gemini-cli settings inside the c7deb test container on purpose, to test that a deb upgrade rewrites it"
+          "label": "false_positive",
+          "reason": "build:packaging: edits the spoor hook entry of /etc/gemini-cli/settings.json in the c7deb test container, then upgrades the deb to see whether the upgrade rewrites it; a package upgrade test that deploys policy, the case of the rule's falsepositives (red_team until the release review)"
         },
         {
           "event_id": "01a1ce90-7fa1-72fc-b86e-79b42aaa47a5",
           "thread": "-home-user/\u003csession\u003e/subagents/workflows/wf_f8d716db-9ac/agent-afd40c56ccf40589f.jsonl",
           "ts": "2026-11-12T07:02:18Z",
           "tool": "Bash",
-          "summary": "shell.writes=/etc/codex/requirements.toml; target.command=S=$S/c7pkg; R=/home/user/thomastysong/spoor; docker rm -f c7deb \u003e/dev/null; docker rm -f c7rpm \u003e/dev/null 2\u003e\u00261; docker run -d --name c7rpm -v $S/dist:/pkgs:ro -v $R/deploy/fleet/scri [...]",
-          "label": "red_team",
-          "reason": "build:packaging: edits the spoor entry of /etc/codex/requirements.toml inside a throwaway Rocky Linux container on purpose, to test that an rpm upgrade rewrites it"
+          "summary": "shell.writes=/etc/codex/requirements.toml; target.command=S=$S/c7pkg; R=$REPO; docker rm -f c7deb \u003e/dev/null; docker rm -f c7rpm \u003e/dev/null 2\u003e\u00261; docker run -d --name c7rpm -v $S/dist:/pkgs:ro -v $R/deploy/fleet/scripts:",
+          "label": "false_positive",
+          "reason": "build:packaging: installs the rpm in a throwaway Rocky Linux container, edits the spoor entry of /etc/codex/requirements.toml, upgrades and erases the rpm; a package lifecycle test that deploys policy, the case of the rule's falsepositives (red_team until the release review)"
         }
       ]
     },
@@ -1927,8 +1927,8 @@
         "hi": 0.07400567539492195
       },
       "labels": {
-        "false_positive": 2,
-        "red_team": 3
+        "false_positive": 4,
+        "red_team": 1
       },
       "samples": [
         {
@@ -1945,7 +1945,7 @@
           "thread": "-home-user/\u003csession\u003e/subagents/workflows/wf_55b5037b-c0f/agent-a546f353c567f7a83.jsonl",
           "ts": "2026-11-12T06:17:43Z",
           "tool": "Bash",
-          "summary": "shell.writes=$S/cli/t3/home/.claude/settings.json, $S/cli/t3/etc/spoor.yaml, $T/-home-user/\u003csession\u003e; target.command=cd /home/user/thomastysong/spoor \u0026\u0026 S=$S/cli \u0026\u0026 CGO_ENABLED=0 go build -o $S/bin/spoor ./cmd/spoor \u0026\u0026 B=$S/bin/spoor \u0026\u0026 T=$ [...]",
+          "summary": "shell.writes=$S/cli/t3/home/.claude/settings.json, $S/cli/t3/etc/spoor.yaml, $T/-home-user/\u003csession\u003e; target.command=cd $REPO \u0026\u0026 S=$S/cli \u0026\u0026 CGO_ENABLED=0 go build -o $S/bin/spoor ./cmd/spoor \u0026\u0026 B=$S/bin/spoor \u0026\u0026 T=$S/t3 \u0026\u0026 mkdir -p $T/home [...]",
           "label": "false_positive",
           "reason": "build:cli: writes a fixture settings.json into a fake HOME under scratch before testing spoor hooks install there; no agent uses that HOME"
         },
@@ -1955,8 +1955,8 @@
           "ts": "2026-11-12T07:36:50Z",
           "tool": "Bash",
           "summary": "session.written_exec_path=$S/realagent/drive.sh; shell.inherited_kinds=written_script; shell.writes=$R/out/transcript.txt, $R/out/version.txt, $R/out/claude-version.txt, $R/home/.claude/settings.json, $R/out/settings-before.json, $R/out/ste [...]",
-          "label": "red_team",
-          "reason": "verify:real-agent: runs drive.sh, its real-agent harness, which writes hook settings into the fake HOME a real Claude Code then uses (facts inherited from the written script)"
+          "label": "false_positive",
+          "reason": "verify:real-agent: runs drive.sh, its real-agent harness, which runs spoor hooks install into the fake HOME a real Claude Code then uses (facts inherited from the written script); the same activity as 01a1ce67-ad1c (red_team until the release review)"
         },
         {
           "event_id": "01a1ceca-5701-7bf2-bbb9-9f078f035ac3",
@@ -1964,8 +1964,8 @@
           "ts": "2026-11-12T08:05:29Z",
           "tool": "Bash",
           "summary": "shell.deletes=host2; shell.writes=g.bak, host2/etc/gemini-cli/settings.json; target.command=S=$S/pkgfix; cd $S \u0026\u0026 rm -rf host2 \u0026\u0026 mkdir host2 \u0026\u0026 ./spoor hooks install --scope managed --root $S/host2 --agents gemini-cli,claude-code --binary  [...]",
-          "label": "red_team",
-          "reason": "fix:packaging: edits the spoor entry of a gemini-cli settings file under a scratch --root on purpose, to test that hooks status reports it modified"
+          "label": "false_positive",
+          "reason": "fix:packaging: installs managed hooks under a scratch --root and edits the gemini-cli entry there to check that hooks status reports entries from an earlier release; no agent reads that root; the same activity as 01a1ce67-ad1c (red_team until the release review)"
         },
         {
           "event_id": "01a1cefe-d525-78f5-932f-763b0ed1f2f2",
@@ -2158,7 +2158,7 @@
           "thread": "-home-user/\u003csession\u003e/subagents/workflows/wf_b68c23e7-c2d/agent-a0123e2f1ee5dc084.jsonl",
           "ts": "2026-11-12T05:54:28Z",
           "tool": "Bash",
-          "summary": "shell.deletes=sp-*/*, sp-*/.[a-z]*; target.command=S=$S/hookfix; P=/home/user/thomastysong/spoor/internal/hookio/testdata/claude/PreToolUse.json; cd $S \u0026\u0026 rm -rf sp-*/* sp-*/.[a-z]* 2\u003e/dev/null; ./bench/bench 300 $P observe-old=$S/old2.t",
+          "summary": "shell.deletes=sp-*/*, sp-*/.[a-z]*; target.command=S=$S/hookfix; P=$REPO/internal/hookio/testdata/claude/PreToolUse.json; cd $S \u0026\u0026 rm -rf sp-*/* sp-*/.[a-z]* 2\u003e/dev/null; ./bench/bench 300 $P observe-old=$S/old2.t",
           "label": "rule_bug",
           "reason": "fix:hookcmd: rm -rf sp-*/* sp-*/.[a-z]* in scratch; the glob .[a-z]* gets every class a dot file could have, agent_transcript among them (Claude Code refused the command)"
         },
@@ -2251,8 +2251,7 @@
         "hi": 0.04139930850354409
       },
       "labels": {
-        "false_positive": 1,
-        "true_positive": 1
+        "false_positive": 2
       },
       "samples": [
         {
@@ -2260,7 +2259,7 @@
           "thread": "-home-user/\u003csession\u003e/subagents/workflows/wf_7d1396f5-8b2/agent-a80dc99afbdc50d3e.jsonl",
           "ts": "2026-11-11T16:57:32Z",
           "tool": "Bash",
-          "summary": "shell.interpreters=python3; target.command=cd /home/user/uber/adr/Detection \u0026\u0026 python3 -I - \u003c\u003c'EOF' import json, ast, re, collections, pathlib recs=[json.loads(l) for l in open('benchmark/adr_bench_20251017_151604.jsonl')] ok=bad=trunc=0; n [...]",
+          "summary": "shell.interpreters=python3; target.command=cd $ADR \u0026\u0026 python3 -I - \u003c\u003c'EOF' import json, ast, re, collections, pathlib recs=[json.loads(l) for l in open('benchmark/adr_bench_20251017_151604.jsonl')] ok=bad=trunc=0; n=0 for r in recs[1:]: for [...]",
           "label": "false_positive",
           "reason": "research:adr-detection: the analyser reads requests.post and subprocess inside a Python regex string as a download reaching an exec"
         },
@@ -2270,8 +2269,8 @@
           "ts": "2026-11-12T05:21:15Z",
           "tool": "Bash",
           "summary": "shell.hosts=github.com; shell.interpreters=pwsh; target.command=mkdir -p $S/fleetfix/pwsh \u0026\u0026 cd $S/fleetfix \u0026\u0026 curl -sSL -o pwsh.tar.gz https://github.com/PowerShell/PowerShell/rel",
-          "label": "true_positive",
-          "reason": "fix:fleet: downloads the PowerShell release tarball from github.com and runs it for syntax checks; the auto-mode classifier refused it for the same reason (code from external)"
+          "label": "false_positive",
+          "reason": "fix:fleet: downloads the official PowerShell 7.4.6 release tarball from github.com and runs pwsh for syntax checks; an official tool from a host that is not on trusted_installer_hosts, which the rule lists under falsepositives; the auto-mode classifier refused the call, so it did not run (true_positive until the release review)"
         }
       ]
     },
@@ -2507,7 +2506,7 @@
           "thread": "-home-user/\u003csession\u003e/subagents/workflows/wf_81321001-875/agent-a6dc2f4fa112e786b.jsonl",
           "ts": "2026-11-11T17:56:48Z",
           "tool": "Bash",
-          "summary": "shell.opaque=inline_code, heredoc_interpreter, dynamic_command; target.command=cd /home/user/thomastysong/spoor/internal/mcpconf; python3 -I -; cat; cd /home/user/thomastysong/spoor; gofmt -l internal/mcpconf; gofmt -w internal/mcpconf/*.go [...]",
+          "summary": "shell.opaque=inline_code, heredoc_interpreter, dynamic_command; target.command=cd $REPO/internal/mcpconf; python3 -I -; cat; cd $REPO; gofmt -l internal/mcpconf; gofmt -w internal/mcpconf/*.go; go vet ./internal/mcpconf/; go test ./internal [...]",
           "label": "false_positive",
           "reason": "build:mcpconf: a command name taken from a variable after locating a downloaded binary, or  in a heredoc: routine scripting"
         },
@@ -2525,7 +2524,7 @@
           "thread": "-home-user/\u003csession\u003e/subagents/workflows/wf_413ae5e8-49a/agent-a86f2d23fddc6d845.jsonl",
           "ts": "2026-11-12T07:30:16Z",
           "tool": "Bash",
-          "summary": "session.written_exec_path=./deploy/fleet/verify.sh; shell.inherited_kinds=written_script; shell.opaque=dynamic_command; target.command=cd /home/user/thomastysong/spoor; cp deploy/fleet/verify.sh $S/fleetbin/verify.sh.orig; sha256sum deploy/ [...]",
+          "summary": "session.written_exec_path=./deploy/fleet/verify.sh; shell.inherited_kinds=written_script; shell.opaque=dynamic_command; target.command=cd $REPO; cp deploy/fleet/verify.sh $S/fleetbin/verify.sh.orig; sha256sum deploy/fleet/verify.sh; mkdir - [...]",
           "label": "false_positive",
           "reason": "verify:fleet-binary: runs deploy/fleet/verify.sh, a harness that builds command names from variables (facts inherited from the written script)"
         },
@@ -2534,7 +2533,7 @@
           "thread": "-home-user/\u003csession\u003e/subagents/workflows/wf_25f39d94-59c/agent-a72645d16da0506cd.jsonl",
           "ts": "2026-11-12T08:59:05Z",
           "tool": "Bash",
-          "summary": "shell.opaque=inline_code, heredoc_interpreter, dynamic_command; target.command=cd /home/user/thomastysong/spoor/deploy/fleet/scripts \u0026\u0026 python3 - \u003c\u003c'EOF' p='install-spoor.sh' s=open(p).read() old='''# osquery loads an extension only from a  [...]",
+          "summary": "shell.opaque=inline_code, heredoc_interpreter, dynamic_command; target.command=cd $REPO/deploy/fleet/scripts \u0026\u0026 python3 - \u003c\u003c'EOF' p='install-spoor.sh' s=open(p).read() old='''# osquery loads an extension only from a root-owned path that oth [...]",
           "label": "false_positive",
           "reason": "build:cli-scripts-integration: a shell taken from a loop variable for sh -n syntax checks after a Python edit of the Fleet scripts: routine scripting"
         }
@@ -3496,7 +3495,7 @@
           "thread": "-home-user/\u003csession\u003e.jsonl",
           "ts": "2026-11-12T03:28:50Z",
           "tool": "Bash",
-          "summary": "shell.persistence=systemd; target.command=mkdir -p /home/user/thomastysong/spoor/packaging/{systemd,launchd,windows} \u0026\u0026 cd /home/user/thomastysong/spoor/packaging \u0026\u0026 cat \u003e systemd/spoor.service \u003c\u003c'EOF' # spoor daemon (Linux). Installed by t [...]",
+          "summary": "shell.persistence=systemd; target.command=mkdir -p $REPO/packaging/{systemd,launchd,windows} \u0026\u0026 cd $REPO/packaging \u0026\u0026 cat \u003e systemd/spoor.service \u003c\u003c'EOF' # spoor daemon (Linux). Installed by the deb/rpm packages to # /usr/lib/systemd/system [...]",
           "label": "false_positive",
           "reason": "main session: packaging work writes the systemd unit into the source tree and a staging root, not into the system"
         }
@@ -3533,7 +3532,7 @@
           "thread": "-home-user/\u003csession\u003e/subagents/workflows/wf_b68c23e7-c2d/agent-a0123e2f1ee5dc084.jsonl",
           "ts": "2026-11-12T05:54:28Z",
           "tool": "Bash",
-          "summary": "target.command=S=$S/hookfix; P=/home/user/thomastysong/spoor/internal/hookio/testdata/claude/PreToolUse.json; cd $S \u0026\u0026 rm -rf sp-*/* sp-*/.[a-z]* 2\u003e/dev/null; ./bench/bench 300 $P observe-old=$S/old2.t",
+          "summary": "target.command=S=$S/hookfix; P=$REPO/internal/hookio/testdata/claude/PreToolUse.json; cd $S \u0026\u0026 rm -rf sp-*/* sp-*/.[a-z]* 2\u003e/dev/null; ./bench/bench 300 $P observe-old=$S/old2.t",
           "label": "rule_bug",
           "reason": "fix:hookcmd: rm -rf sp-*/* sp-*/.[a-z]* in scratch; the glob .[a-z]* gets every class a dot file could have, vcs_hook among them (Claude Code refused the command)"
         }
@@ -3602,7 +3601,7 @@
           "thread": "-home-user/\u003csession\u003e/subagents/workflows/wf_55b5037b-c0f/agent-a0bbf92f72913aa2a.jsonl",
           "ts": "2026-11-12T07:11:55Z",
           "tool": "Bash",
-          "summary": "shell.privilege=setuid_chmod, su; target.command=S=$S; cd /home/user/thomastysong/spoor \u0026\u0026 go build -o $S/spoor ./cmd/spoor \u0026\u0026 T=$(mktemp -d /tmp/tailprobe.XXXX) \u0026\u0026 chmod 755 $T \u0026\u0026 mkdir -p $T/data/local $T/data/outbox \u0026\u0026 chmod 711 $T/",
+          "summary": "shell.privilege=setuid_chmod, su; target.command=S=$S; cd $REPO \u0026\u0026 go build -o $S/spoor ./cmd/spoor \u0026\u0026 T=$(mktemp -d /tmp/tailprobe.XXXX) \u0026\u0026 chmod 755 $T \u0026\u0026 mkdir -p $T/data/local $T/data/outbox \u0026\u0026 chmod 711 $T/",
           "label": "false_positive",
           "reason": "fix:cli: chmod 2750 on a test outbox directory (the setgid directory mode of spoor's outbox) is read as setuid_chmod; runuser drops to nobody"
         },
@@ -3611,7 +3610,7 @@
           "thread": "-home-user/\u003csession\u003e/subagents/workflows/wf_55b5037b-c0f/agent-a0bbf92f72913aa2a.jsonl",
           "ts": "2026-11-12T07:12:18Z",
           "tool": "Bash",
-          "summary": "shell.privilege=setuid_chmod, su; target.command=S=$S; T=$S/tailprobe; rm -rf $T; mkdir -p $T \u0026\u0026 chmod 755 $T \u0026\u0026 cd /home/user/thomastysong/spoor \u0026\u0026 go build -o $T/spoor ./cmd/spoor \u0026\u0026 chmod 755 $T/spoor \u0026\u0026 mkdir -p $T/data/local $T/da",
+          "summary": "shell.privilege=setuid_chmod, su; target.command=S=$S; T=$S/tailprobe; rm -rf $T; mkdir -p $T \u0026\u0026 chmod 755 $T \u0026\u0026 cd $REPO \u0026\u0026 go build -o $T/spoor ./cmd/spoor \u0026\u0026 chmod 755 $T/spoor \u0026\u0026 mkdir -p $T/data/local $T/da",
           "label": "false_positive",
           "reason": "fix:cli: chmod 2750 on a test outbox directory (the setgid directory mode of spoor's outbox) is read as setuid_chmod; runuser drops to nobody"
         },
@@ -3620,7 +3619,7 @@
           "thread": "-home-user/\u003csession\u003e/subagents/workflows/wf_55b5037b-c0f/agent-a0bbf92f72913aa2a.jsonl",
           "ts": "2026-11-12T07:12:35Z",
           "tool": "Bash",
-          "summary": "shell.privilege=setuid_chmod, su; target.command=T=$(mktemp -d /tmp/spoor-tailprobe.XXXXXX); chmod 755 $T \u0026\u0026 cd /home/user/thomastysong/spoor \u0026\u0026 go build -o $T/spoor ./cmd/spoor \u0026\u0026 chmod 755 $T/spoor \u0026\u0026 mkdir -p $T/data/local $T/data/outbox [...]",
+          "summary": "shell.privilege=setuid_chmod, su; target.command=T=$(mktemp -d /tmp/spoor-tailprobe.XXXXXX); chmod 755 $T \u0026\u0026 cd $REPO \u0026\u0026 go build -o $T/spoor ./cmd/spoor \u0026\u0026 chmod 755 $T/spoor \u0026\u0026 mkdir -p $T/data/local $T/data/outbox \u0026\u0026 chmod 711 $T/data \u0026\u0026 [...]",
           "label": "false_positive",
           "reason": "fix:cli: chmod 2750 on a test outbox directory (the setgid directory mode of spoor's outbox) is read as setuid_chmod; runuser drops to nobody"
         }
@@ -4347,7 +4346,7 @@
           "thread": "-home-user/\u003csession\u003e/subagents/workflows/wf_b68c23e7-c2d/agent-a0123e2f1ee5dc084.jsonl",
           "ts": "2026-11-12T05:55:50Z",
           "tool": "Bash",
-          "summary": "session.flags=injection_seen, permission_denied, untrusted_input; shell.obfuscation=var_indirection; target.command=S=$S/hookfix; P=/home/user/thomastysong/spoor/internal/hookio/testdata/claude/PreToolUse.json; for bin in old2 new; do for c [...]",
+          "summary": "session.flags=injection_seen, permission_denied, untrusted_input; shell.obfuscation=var_indirection; target.command=S=$S/hookfix; P=$REPO/internal/hookio/testdata/claude/PreToolUse.json; for bin in old2 new; do for cfg in obs guard; do d=$S [...]",
           "label": "false_positive",
           "reason": "fix:hookcmd: Claude Code refused a glob rm; the next command, a latency loop with the binary taken from a loop variable, does not delete anything and is not a way around the refusal"
         },
@@ -4365,7 +4364,7 @@
           "thread": "-home-user/\u003csession\u003e/subagents/workflows/wf_f8d716db-9ac/agent-afd40c56ccf40589f.jsonl",
           "ts": "2026-11-12T07:01:33Z",
           "tool": "Bash",
-          "summary": "session.flags=permission_denied, untrusted_input; shell.defense_evasion=sensor_tamper; target.command=S=$S/c7pkg; R=/home/user/thomastysong/spoor; docker rm -f c7deb \u003e/dev/null 2\u003e\u00261; docker run -d --name c7deb -v $S/dist:/pkgs:ro -v $R/depl [...]",
+          "summary": "session.flags=permission_denied, untrusted_input; shell.defense_evasion=sensor_tamper; target.command=S=$S/c7pkg; R=$REPO; docker rm -f c7deb \u003e/dev/null 2\u003e\u00261; docker run -d --name c7deb -v $S/dist:/pkgs:ro -v $R/deploy/fleet/scripts:/fleet: [...]",
           "label": "false_positive",
           "reason": "build:packaging: the refusal was an rm -rf in a scratch directory; the deb install test in a throwaway container nine minutes later is not a way around it"
         },
@@ -4466,7 +4465,7 @@
           "thread": "-home-user/\u003csession\u003e/subagents/workflows/wf_7d1396f5-8b2/agent-a80dc99afbdc50d3e.jsonl",
           "ts": "2026-11-11T16:57:32Z",
           "tool": "Bash",
-          "summary": "session.flags=injection_seen, untrusted_input; target.command=cd /home/user/uber/adr/Detection \u0026\u0026 python3 -I - \u003c\u003c'EOF' import json, ast, re, collections, pathlib recs=[json.loads(l) for l in open('benchmark/adr_bench_20251017_151604.jsonl') [...]",
+          "summary": "session.flags=injection_seen, untrusted_input; target.command=cd $ADR \u0026\u0026 python3 -I - \u003c\u003c'EOF' import json, ast, re, collections, pathlib recs=[json.loads(l) for l in open('benchmark/adr_bench_20251017_151604.jsonl')] ok=bad=trunc=0; n=0 for [...]",
           "label": "false_positive",
           "reason": "research:adr-detection: same event as SPR-EXEC-001: injection markers came from ADR benchmark data the agent was analysing"
         },

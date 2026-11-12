@@ -341,7 +341,7 @@
           "thread": "-home-user/\u003csession\u003e.jsonl",
           "ts": "2026-11-12T03:26:34Z",
           "tool": "Bash",
-          "summary": "target.command=D=~/.claude/projects/-home-user/\u003csession\u003e/subagents/workflows; for w in wf_eac76c7b-8ba wf_92cf33f2-03c wf_6820f971-f65; do echo \"== $w\"; cat $D/$w/journal.jsonl | cut -c1-300; echo; done; cd /home/user/thomastysong/spoor; ls [...]",
+          "summary": "target.command=D=~/.claude/projects/-home-user/\u003csession\u003e/subagents/workflows; for w in wf_eac76c7b-8ba wf_92cf33f2-03c wf_6820f971-f65; do echo \"== $w\"; cat $D/$w/journal.jsonl | cut -c1-300; echo; done; cd $REPO; ls int",
           "label": "false_positive",
           "reason": "main session: the orchestrator reads its own subagents' workflow journals and scripts to monitor them"
         },
@@ -767,7 +767,7 @@
           "thread": "-home-user/\u003csession\u003e/subagents/workflows/wf_8758a1a0-646/agent-a3e851cd9e1ea67ed.jsonl",
           "ts": "2026-11-11T17:52:16Z",
           "tool": "Bash",
-          "summary": "net.host=example.com, 2001:db8::1, 169.254.169.254, evil.example, auth.example.com, h%d.example, example.org; target.command=cd /home/user/thomastysong/spoor/internal/hookio; python3 -I -; cd /home/user/thomastysong/spoor; gofmt -w internal [...]",
+          "summary": "net.host=example.com, 2001:db8::1, 169.254.169.254, evil.example, auth.example.com, h%d.example, example.org; target.command=cd $REPO/internal/hookio; python3 -I -; cd $REPO; gofmt -w internal/hookio/*.go; go vet ./internal/hookio/; go test [...]",
           "label": "false_positive",
           "reason": "build:hookio: the metadata address is a string inside a Python heredoc that writes URL test cases; the analyser reads it as a contacted URL"
         }
@@ -1444,7 +1444,7 @@
           "thread": "-home-user/\u003csession\u003e.jsonl",
           "ts": "2026-11-12T03:20:07Z",
           "tool": "Bash",
-          "summary": "target.command=S=$S; W=$S/fbosq; rm -rf $W; mkdir -p $W/cfg $W/logs $W/state $W/out; cp $S/fleetstack/logs/osqueryd.results.log $W/logs/; cp /home/user/thomastysong/spoor/deploy/fluent-bit/osquery.yaml",
+          "summary": "target.command=S=$S; W=$S/fbosq; rm -rf $W; mkdir -p $W/cfg $W/logs $W/state $W/out; cp $S/fleetstack/logs/osqueryd.results.log $W/logs/; cp $REPO/deploy/fluent-bit/osquery.yaml",
           "label": "false_positive",
           "reason": "main session: chmod -R 777 on scratch directories used as container bind mounts (red-team workflow 16)"
         },
@@ -1453,7 +1453,7 @@
           "thread": "-home-user/\u003csession\u003e.jsonl",
           "ts": "2026-11-12T03:20:45Z",
           "tool": "Bash",
-          "summary": "target.command=S=$S; W=$S/fbotel; rm -rf $W; mkdir -p $W/cfg $W/state; cp /home/user/thomastysong/spoor/deploy/fluent-bit/no-binary/otel.yaml /home/user/thomastysong/spoor/deploy/fluent-bit/no-binary/n",
+          "summary": "target.command=S=$S; W=$S/fbotel; rm -rf $W; mkdir -p $W/cfg $W/state; cp $REPO/deploy/fluent-bit/no-binary/otel.yaml $REPO/deploy/fluent-bit/no-binary/n",
           "label": "false_positive",
           "reason": "main session: chmod -R 777 on scratch directories used as container bind mounts (red-team workflow 16)"
         },
@@ -1514,7 +1514,8 @@
         "hi": 0.10435645781881736
       },
       "labels": {
-        "red_team": 7
+        "false_positive": 3,
+        "red_team": 4
       },
       "samples": [
         {
@@ -1523,8 +1524,8 @@
           "ts": "2026-11-11T16:53:02Z",
           "tool": "Bash",
           "summary": "shell.defense_evasion=stop_security_tool; target.command=S=$S; mkdir -p $S/exttest \u0026\u0026 cd $S/exttest \u0026\u0026 cat \u003e go.mod \u003c\u003c'EOF' module example.com/exttest go 1.24 EOF cat \u003e main.go \u003c\u003c'EOF' package main import ( \"context\" \"flag\" \"log\" \"time\"",
-          "label": "red_team",
-          "reason": "main session: restart of the test stack's osqueryd during lab work (true positive, not malicious)"
+          "label": "false_positive",
+          "reason": "main session: restarts the test stack's osqueryd to load an extension it is validating through Fleet; restarting osqueryd after a config change is in the rule's falsepositives (red_team until the release review)"
         },
         {
           "event_id": "01a1cb87-9190-7a91-afb0-fbb2c4fbbd1e",
@@ -1532,8 +1533,8 @@
           "ts": "2026-11-11T16:53:41Z",
           "tool": "Bash",
           "summary": "shell.defense_evasion=stop_security_tool; target.command=S=$S; mkdir -p /run/osqt \u0026\u0026 sed -i \"s#^--extensions_socket=.*#--extensions_socket=/run/osqt/osquery.em#\" $S/fleetstack/osq/osquery.flags \u0026\u0026 pkill -f \"osqueryd --flagfile\"; sleep 2; (e [...]",
-          "label": "red_team",
-          "reason": "main session: restart of the test stack's osqueryd during lab work (true positive, not malicious)"
+          "label": "false_positive",
+          "reason": "main session: changes the extensions socket in the test stack's osquery.flags and restarts osqueryd; restarting osqueryd after a config change is in the rule's falsepositives (red_team until the release review)"
         },
         {
           "event_id": "01a1cb9b-b407-794b-811f-ebdc3ad9d780",
@@ -1577,8 +1578,8 @@
           "ts": "2026-11-12T03:43:28Z",
           "tool": "Bash",
           "summary": "shell.defense_evasion=stop_security_tool; target.command=S=$S; cd $S/fleetstack \u0026\u0026 . ./fleet.env \u0026\u0026 (env -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy nohup $S/dl/fleet/fleet_v4.94.1_linux/fleet serve \u003e $S/fleetstack/fleet-serve [...]",
-          "label": "red_team",
-          "reason": "main session: restart of the test stack's osqueryd during lab work (true positive, not malicious)"
+          "label": "false_positive",
+          "reason": "main session: restarts the Fleet server and the enrolled osqueryd of the test stack after the container restarted; operations work on the monitoring stack is in the rule's falsepositives (red_team until the release review)"
         }
       ]
     },
@@ -1628,8 +1629,8 @@
         "hi": 0.07429020489102965
       },
       "labels": {
-        "red_team": 2,
-        "rule_bug": 1
+        "red_team": 1,
+        "rule_bug": 2
       },
       "samples": [
         {
@@ -1656,8 +1657,8 @@
           "ts": "2026-11-11T17:26:07Z",
           "tool": "Bash",
           "summary": "shell.writes=$S/redteam/verify-alt-architectures/fb/otel.lua, $S/redteam/verify-alt-architectures/fb/fb.yaml, $T/-home; target.command=S=$S; V=$S/redteam/verify-alt-architectures; B=$V/bare; F=$V/fb; mkdir -p $F/out; chmod 777 $F/out cat \u003e  [...]",
-          "label": "red_team",
-          "reason": "verify:alt-architectures: red-team experiment copies managed settings into an overlay /etc/claude-code in a private mount namespace (run.sh); the rule matched the staging copy under scratch written by the same command"
+          "label": "rule_bug",
+          "reason": "verify:alt-architectures: the only policy-class write the rule sees is a staging copy under the scratch directory (managed/managed-settings.d/51-otel.json); the copy into an overlay /etc/claude-code happens inside run.sh, which the rule does not see; the same unanchored match as 01a1cba4-acb8 (red_team until the release review)"
         }
       ]
     },
@@ -1941,7 +1942,7 @@
           "thread": "-home-user/\u003csession\u003e/subagents/workflows/wf_7d1396f5-8b2/agent-a80dc99afbdc50d3e.jsonl",
           "ts": "2026-11-11T16:57:32Z",
           "tool": "Bash",
-          "summary": "shell.interpreters=python3; target.command=cd /home/user/uber/adr/Detection \u0026\u0026 python3 -I - \u003c\u003c'EOF' import json, ast, re, collections, pathlib recs=[json.loads(l) for l in open('benchmark/adr_bench_20251017_151604.jsonl')] ok=bad=trunc=0; n [...]",
+          "summary": "shell.interpreters=python3; target.command=cd $ADR \u0026\u0026 python3 -I - \u003c\u003c'EOF' import json, ast, re, collections, pathlib recs=[json.loads(l) for l in open('benchmark/adr_bench_20251017_151604.jsonl')] ok=bad=trunc=0; n=0 for r in recs[1:]: for [...]",
           "label": "false_positive",
           "reason": "research:adr-detection: the analyser reads requests.post and subprocess inside a Python regex string as a download reaching an exec"
         }
@@ -2179,7 +2180,7 @@
           "thread": "-home-user/\u003csession\u003e/subagents/workflows/wf_81321001-875/agent-a6dc2f4fa112e786b.jsonl",
           "ts": "2026-11-11T17:56:48Z",
           "tool": "Bash",
-          "summary": "shell.opaque=inline_code, heredoc_interpreter, dynamic_command; target.command=cd /home/user/thomastysong/spoor/internal/mcpconf; python3 -I -; cat; cd /home/user/thomastysong/spoor; gofmt -l internal/mcpconf; gofmt -w internal/mcpconf/*.go [...]",
+          "summary": "shell.opaque=inline_code, heredoc_interpreter, dynamic_command; target.command=cd $REPO/internal/mcpconf; python3 -I -; cat; cd $REPO; gofmt -l internal/mcpconf; gofmt -w internal/mcpconf/*.go; go vet ./internal/mcpconf/; go test ./internal [...]",
           "label": "false_positive",
           "reason": "build:mcpconf: a command name taken from a variable after locating a downloaded binary, or  in a heredoc: routine scripting"
         }
@@ -3059,7 +3060,7 @@
           "thread": "-home-user/\u003csession\u003e.jsonl",
           "ts": "2026-11-12T03:28:50Z",
           "tool": "Bash",
-          "summary": "shell.persistence=systemd; target.command=mkdir -p /home/user/thomastysong/spoor/packaging/{systemd,launchd,windows} \u0026\u0026 cd /home/user/thomastysong/spoor/packaging \u0026\u0026 cat \u003e systemd/spoor.service \u003c\u003c'EOF' # spoor daemon (Linux). Installed by t [...]",
+          "summary": "shell.persistence=systemd; target.command=mkdir -p $REPO/packaging/{systemd,launchd,windows} \u0026\u0026 cd $REPO/packaging \u0026\u0026 cat \u003e systemd/spoor.service \u003c\u003c'EOF' # spoor daemon (Linux). Installed by the deb/rpm packages to # /usr/lib/systemd/system [...]",
           "label": "false_positive",
           "reason": "main session: packaging work writes the systemd unit into the source tree and a staging root, not into the system"
         }
@@ -3924,7 +3925,7 @@
           "thread": "-home-user/\u003csession\u003e/subagents/workflows/wf_7d1396f5-8b2/agent-a80dc99afbdc50d3e.jsonl",
           "ts": "2026-11-11T16:57:32Z",
           "tool": "Bash",
-          "summary": "session.flags=injection_seen, untrusted_input; target.command=cd /home/user/uber/adr/Detection \u0026\u0026 python3 -I - \u003c\u003c'EOF' import json, ast, re, collections, pathlib recs=[json.loads(l) for l in open('benchmark/adr_bench_20251017_151604.jsonl') [...]",
+          "summary": "session.flags=injection_seen, untrusted_input; target.command=cd $ADR \u0026\u0026 python3 -I - \u003c\u003c'EOF' import json, ast, re, collections, pathlib recs=[json.loads(l) for l in open('benchmark/adr_bench_20251017_151604.jsonl')] ok=bad=trunc=0; n=0 for [...]",
           "label": "false_positive",
           "reason": "research:adr-detection: same event as SPR-EXEC-001: injection markers came from ADR benchmark data the agent was analysing"
         }

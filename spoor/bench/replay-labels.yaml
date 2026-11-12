@@ -1,12 +1,19 @@
 # Reviewed labels for sampled benign-replay hits (bench/results/benign-replay.md).
 # Keyed by rule and transcript event id (deterministic: the same logs give the
 # same ids). Labels: false_positive (ordinary work), red_team (a deliberate
-# security experiment or lab operation: a true positive without malice),
-# rule_bug (the rule matched something it was not written to match),
-# true_positive (the behaviour the rule describes, done for real, here with
-# a benign intent).
+# security experiment: an attack, tamper or evasion technique run on purpose to
+# test a defence; a true positive without malice), rule_bug (the rule matched
+# something it was not written to match), true_positive (the behaviour the rule
+# describes, done for real, here with a benign intent).
+# A hit that matches a case in the rule's own falsepositives list (installing
+# or configuring the sensor, restarting osqueryd after a config change, a
+# client pointed at a mock server, an official installer) is false_positive,
+# whatever the role of the thread. One activity gets one label across rules
+# unless the matched fact differs in kind.
 # Each was decided by reading the full command in the transcript and the role
-# of the agent thread (from the workflow journal labels).
+# of the agent thread (from the workflow journal labels). The release review
+# (2026-11-12) applied the falsepositives rule and relabelled 21 entries; their
+# reasons say what they were before.
 labels:
   - rule: SPR-AGENT-012
     event: 01a1cb93-6914-7a39-9875-fd34546b0ed9
@@ -142,12 +149,12 @@ labels:
     reason: "main session: chmod -R 777 on scratch directories used as container bind mounts (red-team workflow 16)"
   - rule: SPR-EVADE-001
     event: 01a1cb86-f5e5-7180-b7f4-79cb6703cb27
-    label: red_team
-    reason: "main session: restart of the test stack's osqueryd during lab work (true positive, not malicious)"
+    label: false_positive
+    reason: "main session: restarts the test stack's osqueryd to load an extension it is validating through Fleet; restarting osqueryd after a config change is in the rule's falsepositives (red_team until the release review)"
   - rule: SPR-EVADE-001
     event: 01a1cb87-9190-7a91-afb0-fbb2c4fbbd1e
-    label: red_team
-    reason: "main session: restart of the test stack's osqueryd during lab work (true positive, not malicious)"
+    label: false_positive
+    reason: "main session: changes the extensions socket in the test stack's osquery.flags and restarts osqueryd; restarting osqueryd after a config change is in the rule's falsepositives (red_team until the release review)"
   - rule: SPR-EVADE-001
     event: 01a1cb9b-b407-794b-811f-ebdc3ad9d780
     label: red_team
@@ -170,8 +177,8 @@ labels:
     reason: "verify:alt-architectures: the only policy-class write is a staging copy under the scratch directory (managed/managed-settings.d/50-vfy.json); the unanchored managed-settings.d pattern classes it as managed policy. Relabelled from red_team in the release rerun: this command copies nothing into /etc"
   - rule: SPR-EVADE-003
     event: 01a1cba5-41bb-7ad9-a04a-dd2d6c1414c5
-    label: red_team
-    reason: "verify:alt-architectures: red-team experiment copies managed settings into an overlay /etc/claude-code in a private mount namespace (run.sh); the rule matched the staging copy under scratch written by the same command"
+    label: rule_bug
+    reason: "verify:alt-architectures: the only policy-class write the rule sees is a staging copy under the scratch directory (managed/managed-settings.d/51-otel.json); the copy into an overlay /etc/claude-code happens inside run.sh, which the rule does not see; the same unanchored match as 01a1cba4-acb8 (red_team until the release review)"
   - rule: SPR-EVADE-004
     event: 01a1cba4-b377-7f26-bb7b-62617494eb15
     label: red_team
@@ -358,8 +365,8 @@ labels:
     reason: "main session: chmod -R 777 on scratch directories used as container bind mounts (red-team workflow 16)"
   - rule: SPR-EVADE-002
     event: 01a1ce17-6c9a-73e3-a382-bbb451a792eb
-    label: true_positive
-    reason: "build:hookcmd: the hook builder deletes the per-user spool its own hook tests wrote into root's real state directory; that is the sensor's spool, so the alert is correct, the intent benign"
+    label: false_positive
+    reason: "build:hookcmd: removes the spool files and directories that its own two probe runs had written into root's ~/.local/state seconds earlier (no sensor was installed); clean-up of its own test output, which is ordinary work (true_positive until the release review)"
   - rule: SPR-EXEC-007
     event: 01a1cb96-6df0-7ca3-96ac-d10321fa17f6
     label: false_positive
@@ -428,56 +435,56 @@ labels:
   # every alert-class hit and every sampled finding or signal hit that had no label.
   - rule: SPR-EVADE-002
     event: 01a1ce90-4f3a-7744-b9eb-8deb2f97f485
-    label: red_team
-    reason: "build:packaging: purge test of the deb inside the throwaway c7deb container: points data_dir in /etc/spoor/spoor.yaml at /srv/spool, then purges the package (the lab operating its own sensor)"
+    label: false_positive
+    reason: "build:packaging: deb purge test in the throwaway c7deb container: points data_dir in /etc/spoor/spoor.yaml at /srv/spool, purges, reinstalls and purges again; uninstalling the sensor is in the rule's falsepositives (red_team until the release review)"
   - rule: SPR-EVADE-002
     event: 01a1ce93-a8b6-70ef-a3ea-0635ab8db8e6
-    label: red_team
-    reason: "build:packaging: writes a first /etc/spoor/spoor.yaml inside a throwaway redis container to test the in-image hook mode (the lab operating its own sensor)"
+    label: false_positive
+    reason: "build:packaging: writes a first /etc/spoor/spoor.yaml and installs managed hooks in a throwaway redis container to test in-image hook mode; installing the sensor is in the rule's falsepositives (red_team until the release review)"
   - rule: SPR-EVADE-002
     event: 01a1ceab-71da-75d0-a26d-239af772bec5
-    label: red_team
-    reason: "verify:real-agent: switches guard mode in /etc/spoor/spoor.yaml inside the run's private mount namespace, where /etc is an overlay (the lab operating its own sensor)"
+    label: false_positive
+    reason: "verify:real-agent: step 6 of its task: reinstalls the hooks with --guard and copies an advisory-mode configuration to /etc/spoor/spoor.yaml inside the run's private mount namespace; configuring the sensor it installed, the case of the rule's falsepositives (red_team until the release review)"
   - rule: SPR-EVADE-002
     event: 01a1ceb1-cfd2-72d3-9074-5d01054d1a24
-    label: red_team
-    reason: "verify:fleet-binary: creates a temporary /etc/spoor/spoor.yaml on this host for the deploy/fleet check with the real binary, removed afterwards (the lab operating its own sensor)"
+    label: false_positive
+    reason: "verify:fleet-binary: creates a temporary /etc/spoor/spoor.yaml on this host for the deploy/fleet check with the real binary, commented as removed afterwards; installing the sensor is in the rule's falsepositives (red_team until the release review)"
   - rule: SPR-EVADE-002
     event: 01a1ceb2-8bda-7085-b541-c4ca8ef2df71
-    label: red_team
-    reason: "verify:real-agent: switches guard mode back to off in /etc/spoor/spoor.yaml inside the run's private mount namespace to time the hook (the lab operating its own sensor)"
+    label: false_positive
+    reason: "verify:real-agent: sets guard mode back to off in the namespace's /etc/spoor/spoor.yaml (sed to a temporary file, mv) to time the hook; configuring the sensor it installed, the case of the rule's falsepositives (red_team until the release review)"
   - rule: SPR-EVADE-002
     event: 01a1cec1-f815-7b16-946f-425e29838bbd
-    label: red_team
-    reason: "verify:fleet-binary: points its temporary /etc/spoor/spoor.yaml on this host at a new run directory (the lab operating its own sensor)"
+    label: false_positive
+    reason: "verify:fleet-binary: rewrites its temporary /etc/spoor/spoor.yaml on this host for its next run; configuring the sensor it installed, the case of the rule's falsepositives (red_team until the release review)"
   - rule: SPR-EVADE-002
     event: 01a1cec5-88c4-7b15-bcd2-d24a2da0c499
-    label: red_team
-    reason: "audit:real-agent: writes observe and guard configurations to /etc/spoor on a tmpfs inside unshare -m to time the hook (the lab operating its own sensor)"
+    label: false_positive
+    reason: "audit:real-agent: copies observe and guard configurations to a tmpfs /etc/spoor inside unshare -m to time the hook; configuring the sensor, the case of the rule's falsepositives (red_team until the release review)"
   - rule: SPR-EVADE-002
     event: 01a1ced2-9576-7b5b-a30e-e30cc1f4c68f
-    label: red_team
-    reason: "verify:fleet-binary: removes the temporary /etc/spoor it created on this host for the deploy/fleet check (the lab operating its own sensor)"
+    label: false_positive
+    reason: "verify:fleet-binary: removes the temporary /etc/spoor it created on this host for the deploy/fleet check; uninstalling the sensor is in the rule's falsepositives (red_team until the release review)"
   - rule: SPR-EVADE-003
     event: 01a1ce88-def9-748b-a594-dca1e1d11cee
     label: red_team
     reason: "build:packaging: plants managed-mcp.json as a symlink to a canary inside a throwaway container to test that the sensor's container scan refuses symlink escapes"
   - rule: SPR-EVADE-003
     event: 01a1ce90-0f55-76c2-8d73-c3c585d43df2
-    label: red_team
-    reason: "build:packaging: edits the spoor entry of the managed gemini-cli settings inside the c7deb test container on purpose, to test that a deb upgrade rewrites it"
+    label: false_positive
+    reason: "build:packaging: edits the spoor hook entry of /etc/gemini-cli/settings.json in the c7deb test container, then upgrades the deb to see whether the upgrade rewrites it; a package upgrade test that deploys policy, the case of the rule's falsepositives (red_team until the release review)"
   - rule: SPR-EVADE-003
     event: 01a1ce90-7fa1-72fc-b86e-79b42aaa47a5
-    label: red_team
-    reason: "build:packaging: edits the spoor entry of /etc/codex/requirements.toml inside a throwaway Rocky Linux container on purpose, to test that an rpm upgrade rewrites it"
+    label: false_positive
+    reason: "build:packaging: installs the rpm in a throwaway Rocky Linux container, edits the spoor entry of /etc/codex/requirements.toml, upgrades and erases the rpm; a package lifecycle test that deploys policy, the case of the rule's falsepositives (red_team until the release review)"
   - rule: SPR-AGENT-005
     event: 01a1cea7-420a-7029-956e-c4c29749dd62
-    label: red_team
-    reason: "verify:real-agent: runs headless Claude Code against a local stub of the Messages API (ANTHROPIC_BASE_URL on loopback) inside its test namespace"
+    label: false_positive
+    reason: "verify:real-agent: runs headless Claude Code against its own local stub of the Messages API (ANTHROPIC_BASE_URL on loopback) inside its test namespace; a client pointed at a local mock server, the case of the rule's falsepositives (red_team until the release review)"
   - rule: SPR-AGENT-005
     event: 01a1ceab-bfd8-7b99-87eb-cdd2c98fe726
-    label: red_team
-    reason: "verify:real-agent: runs headless Claude Code against a local stub of the Messages API (ANTHROPIC_BASE_URL on loopback) inside its test namespace"
+    label: false_positive
+    reason: "verify:real-agent: runs headless Claude Code against its own local stub of the Messages API (ANTHROPIC_BASE_URL on loopback) inside its test namespace; a client pointed at a local mock server, the case of the rule's falsepositives (red_team until the release review)"
   - rule: SPR-AGENT-012
     event: 01a1ce13-2b8a-7ae8-ae5c-018bbe31ee3b
     label: false_positive
@@ -532,12 +539,12 @@ labels:
     reason: "attack:fleet-operator: stops the osqueryd and extension it started for its experiment, as clean-up"
   - rule: SPR-EVADE-001
     event: 01a1cdda-74c3-7b83-9a66-836bd83879c4
-    label: red_team
-    reason: "main session: restart of the test stack's osqueryd during lab work (true positive, not malicious)"
+    label: false_positive
+    reason: "main session: restarts the Fleet server and the enrolled osqueryd of the test stack after the container restarted; operations work on the monitoring stack is in the rule's falsepositives (red_team until the release review)"
   - rule: SPR-EVADE-001
     event: 01a1ce90-7fa1-72fc-b86e-79b42aaa47a5
-    label: red_team
-    reason: "build:packaging: installs, upgrades and erases the rpm in a throwaway Rocky Linux container; rpm -e spoor and the osquery restart of register-extension.sh are the package test"
+    label: false_positive
+    reason: "build:packaging: installs, upgrades and erases the rpm in a throwaway Rocky Linux container; rpm -e spoor and the osquery restart in register-extension.sh are the package's own steps; the same command as its SPR-EVADE-003 hit (red_team until the release review)"
   - rule: SPR-EVADE-001
     event: 01a1ceb3-905d-7e45-af98-bd6fb4a2e844
     label: false_positive
@@ -548,12 +555,12 @@ labels:
     reason: "build:cli: writes a fixture settings.json into a fake HOME under scratch before testing spoor hooks install there; no agent uses that HOME"
   - rule: SPR-EVADE-004
     event: 01a1ceb0-1b7d-7305-a847-9f58654d754b
-    label: red_team
-    reason: "verify:real-agent: runs drive.sh, its real-agent harness, which writes hook settings into the fake HOME a real Claude Code then uses (facts inherited from the written script)"
+    label: false_positive
+    reason: "verify:real-agent: runs drive.sh, its real-agent harness, which runs spoor hooks install into the fake HOME a real Claude Code then uses (facts inherited from the written script); the same activity as 01a1ce67-ad1c (red_team until the release review)"
   - rule: SPR-EVADE-004
     event: 01a1ceca-5701-7bf2-bbb9-9f078f035ac3
-    label: red_team
-    reason: "fix:packaging: edits the spoor entry of a gemini-cli settings file under a scratch --root on purpose, to test that hooks status reports it modified"
+    label: false_positive
+    reason: "fix:packaging: installs managed hooks under a scratch --root and edits the gemini-cli entry there to check that hooks status reports entries from an earlier release; no agent reads that root; the same activity as 01a1ce67-ad1c (red_team until the release review)"
   - rule: SPR-EVADE-004
     event: 01a1cefe-d525-78f5-932f-763b0ed1f2f2
     label: false_positive
@@ -576,8 +583,8 @@ labels:
     reason: "build:docs-reference: runs regen.sh, the docs example generator, which writes a fake Claude Code transcript under a tmpfs /root in its own mount namespace"
   - rule: SPR-EXEC-001
     event: 01a1ce33-fc09-75ea-9a0c-ecd578a32f62
-    label: true_positive
-    reason: "fix:fleet: downloads the PowerShell release tarball from github.com and runs it for syntax checks; the auto-mode classifier refused it for the same reason (code from external)"
+    label: false_positive
+    reason: "fix:fleet: downloads the official PowerShell 7.4.6 release tarball from github.com and runs pwsh for syntax checks; an official tool from a host that is not on trusted_installer_hosts, which the rule lists under falsepositives; the auto-mode classifier refused the call, so it did not run (true_positive until the release review)"
   - rule: SPR-EXEC-007
     event: 01a1ce56-3258-74a7-a51d-e3d25d44917f
     label: false_positive

@@ -465,7 +465,7 @@ const minAliasCut = 6
 // applyAliases replaces each alias's From with its To, longest first. An
 // alias whose From is an identifier (no path separator, such as a session
 // id) also replaces a cut copy of it: the engine cuts long evidence values,
-// so a value can end part-way through the id ("$T/-home-user/142ab6a6-82;").
+// so a value can end part-way through the id ("$T/-home-user/3f9c2e71-5b;").
 // A cut copy is a prefix of From of at least minAliasCut bytes that starts
 // and ends at an identifier boundary.
 func applyAliases(s string, as []Alias) string {

@@ -54,7 +54,10 @@
 // continue (session identity, pending call names and classes, seen ids). It
 // never holds prompts, tool inputs or tool outputs, so a tool result that
 // arrives after a restart is paired with its call's name and class but not
-// with its input or target.
+// with its input or target. The fingerprint (8 bytes of SHA-256 over the
+// 256 bytes before the offset) and a pending call's input hash are unkeyed:
+// they must match across runs, they never leave the store (written 0600 in
+// a 0700 directory), and whoever can read the store can read the log.
 //
 // # What the events carry
 //
@@ -62,14 +65,29 @@
 // timestamp, Session.Transcript, and Tool.UseID (the agent's tool-call id) so
 // the engine can pair them with hook events. Raw prompts, tool inputs and
 // tool outputs are placed only in Event.Content, which is never serialized.
-// Target fields are copied from the tool input as written (URL userinfo is
-// dropped); secret redaction and privacy-tier stripping are the redaction
-// stage's job. Outcome.Error is a closed-vocabulary code, never tool text.
+// Tool output is described by Tool.OutputLen only: no digest of it is made
+// here (an unkeyed one is recovered with a dictionary for short outputs);
+// the privacy stage derives the keyed output_sha256 from Content.ToolOutput
+// when a tenant key is configured. Target fields are copied from the tool
+// input as written (URL userinfo is dropped); secret redaction and
+// privacy-tier stripping are the redaction stage's job. Outcome.Error is a
+// closed-vocabulary code, never tool text.
 //
-// Event ids are deterministic: a UUIDv7-shaped value built from the record
-// timestamp and a hash of the line. Re-reading a file after a crash, a
-// replacement, a move or a Codex archive pass therefore yields the same ids,
-// and downstream can drop duplicates.
+// Event ids are UUIDv7-shaped: the record timestamp, then a digest of what
+// identifies the event, never of its content (the id is serialized, and a
+// digest of a line that holds a prompt would let a reader confirm guesses
+// about it). The identity is the agent's tool-call id for tool events, else
+// the log's own record id (Claude Code uuid, Copilot event id, Gemini
+// message id), else an HMAC of the line under a key drawn once per process
+// (Codex prompts, turn ends and settings records, which carry no id). The
+// first two are the same whenever and wherever a log is read. Line-HMAC ids
+// are stable only within one process: re-reading a file after a crash, a
+// replacement, a move or a Codex archive pass in the same daemon run yields
+// the same ids, a restarted daemon derives new ones. The engine derives the
+// identity of tool and prompt activity (Dedupe) from tool-call ids and keyed
+// prompt digests, not from these ids; only a Codex record without either
+// that a restarted daemon reads again (an uncommitted line after a crash)
+// gets a Dedupe of its own.
 //
 // # Unsupported
 //

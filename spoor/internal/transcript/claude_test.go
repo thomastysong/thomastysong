@@ -110,7 +110,7 @@ func TestClaudeSession(t *testing.T) {
 	if bashPost.Tool.Kind != event.ToolShell || bashPost.Outcome.ExitCode == nil || *bashPost.Outcome.ExitCode != 2 || bashPost.Outcome.Error != "exit_code" {
 		t.Errorf("bash post = %+v %+v", bashPost.Tool, bashPost.Outcome)
 	}
-	if bashPost.Content.ToolOutput != "Exit code 2\nboom" || bashPost.Tool.OutputLen != 16 || bashPost.Tool.OutputSHA256 == "" {
+	if bashPost.Content.ToolOutput != "Exit code 2\nboom" || bashPost.Tool.OutputLen != 16 || bashPost.Tool.OutputSHA256 != "" {
 		t.Errorf("bash output = %+v %+v", bashPost.Content, bashPost.Tool)
 	}
 	if bashPost.Target == nil || bashPost.Target.Command != "make build\necho done" || bashPost.Content.ToolInput["command"] == nil {

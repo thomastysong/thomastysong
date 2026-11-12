@@ -2,12 +2,15 @@ package transcript
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/thomastysong/spoor/internal/event"
@@ -225,13 +228,30 @@ func (st *FileState) wasSeen(key string) bool {
 
 // lineCtx is the context of one ParseLine call.
 type lineCtx struct {
-	agent  string
-	st     *FileState
-	line   []byte
-	hash   [sha256.Size]byte
-	hashed bool
-	n      int
-	out    []*event.Event
+	agent string
+	st    *FileState
+	line  []byte
+	// rec is the log's own id of the record the next events come from
+	// (prefixed by its kind), "" when the record has none; see eventIDs.
+	rec   string
+	seeds []idSeed // parallel to out
+	out   []*event.Event
+}
+
+// idSeed is what an event's id is derived from besides the event itself.
+type idSeed struct {
+	rec string    // c.rec when the event was created
+	t   time.Time // the time the id carries
+}
+
+// record sets the record id of the events created next. Ids come from the
+// log, so they are bounded like every other copied value.
+func (c *lineCtx) record(kind, id string) {
+	if id == "" {
+		c.rec = ""
+		return
+	}
+	c.rec = kind + clip(id, maxIDLen)
 }
 
 // stamp resolves a record timestamp: the record's own when it has one,
@@ -257,7 +277,6 @@ func (c *lineCtx) newEvent(typ string, ts time.Time) *event.Event {
 	st := c.st
 	e := &event.Event{
 		V:        event.SchemaVersion,
-		ID:       c.eventID(idTime),
 		TS:       event.At(use),
 		Kind:     event.KindActivity,
 		Type:     typ,
@@ -284,26 +303,101 @@ func (c *lineCtx) newEvent(typ string, ts time.Time) *event.Event {
 		e.User = &u
 	}
 	c.out = append(c.out, e)
+	c.seeds = append(c.seeds, idSeed{rec: c.rec, t: idTime})
 	return e
 }
 
-// eventID derives a UUIDv7-shaped id from the record time and the line
-// content, so the same line always yields the same ids wherever and whenever
-// it is read.
-func (c *lineCtx) eventID(t time.Time) string {
-	if !c.hashed {
-		c.hash = sha256.Sum256(c.line)
-		c.hashed = true
+// eventIDs gives every event of the line its id, once the line has been
+// parsed and the events are complete. An id is UUIDv7-shaped: the record
+// time, then a digest of what identifies the event, never of its content.
+// Event.ID is serialized, so it must not be a guessing oracle: the line
+// holds prompts and tool output, and every other input of a digest of it
+// is in the shipped record. The identity is, in order of preference:
+//
+//   - the agent's tool-call id, for tool.pre and tool.post (the same call
+//     has the same id whichever record of the log carries it);
+//   - the record's own id in the log (Claude Code "uuid", Copilot event
+//     "id", Gemini message id, Gemini session start);
+//   - for a record with neither (Codex prompts, turn ends, settings), an
+//     HMAC of the line under a key drawn once per process (lineKey).
+//
+// The first two are random values the agent generates, so those ids are the
+// same whenever and wherever the log is read. Ids from the line HMAC are
+// stable only within one process: re-reading a file after a crash, a
+// replacement or an archive pass in the same daemon run yields the same
+// ids, a later run yields new ones. The engine derives the identity of
+// tool and prompt activity (Dedupe) from tool-call ids and keyed prompt
+// digests, not from these ids.
+//
+// Events of one line that share an identity and a type are numbered in
+// order, so a record that yields several (a turn's settings changes, a
+// Gemini document) still gives each its own id.
+func (c *lineCtx) eventIDs() {
+	if len(c.out) == 0 {
+		return
 	}
+	type slot struct{ rec, typ, use string }
+	nth := make(map[slot]uint32, len(c.out))
+	lineRec := ""
+	for i, e := range c.out {
+		seed := c.seeds[i]
+		rec, use := seed.rec, ""
+		if e.Tool != nil {
+			use = e.Tool.UseID
+		}
+		if use != "" && (e.Type == event.TypeToolPre || e.Type == event.TypeToolPost) {
+			rec = "t:" + use
+		}
+		if rec == "" {
+			if lineRec == "" {
+				lineRec = "l:" + lineDigest(c.agent, c.line)
+			}
+			rec = lineRec
+		}
+		sess := ""
+		if e.Session != nil {
+			sess = e.Session.ID
+		}
+		k := slot{rec, e.Type, use}
+		n := nth[k]
+		nth[k] = n + 1
+		e.ID = eventID(seed.t, c.agent, sess, rec, e.Type, n)
+	}
+}
+
+// lineKey keys lineDigest: random, drawn once per process, never stored.
+var lineKey = sync.OnceValue(func() []byte {
+	k := make([]byte, 32)
+	_, _ = rand.Read(k) // never fails (crypto/rand aborts the process instead)
+	return k
+})
+
+// lineDigest is the identity of a record the log gives no id: an HMAC of
+// the line, so it cannot be recomputed from a guess about its content.
+func lineDigest(agent string, line []byte) string {
+	m := hmac.New(sha256.New, lineKey())
+	m.Write([]byte("spoor/transcript/line/v2\x00"))
+	m.Write([]byte(agent))
+	m.Write([]byte{0})
+	m.Write(line)
+	return hex.EncodeToString(m.Sum(nil)[:16])
+}
+
+// eventID derives the UUIDv7-shaped id of one event. Its inputs are ids
+// the agent generated (or a keyed line digest), the agent, session and
+// type, and the event's number among its line's events of that identity.
+func eventID(t time.Time, agent, session, rec, typ string, n uint32) string {
 	h := sha256.New()
-	h.Write([]byte("spoor/transcript/v1\x00"))
-	h.Write([]byte(c.agent))
-	h.Write([]byte{0})
-	h.Write(c.hash[:])
+	h.Write([]byte("spoor/transcript/v2\x00"))
+	for _, s := range [...]string{agent, session, rec, typ} {
+		var l [4]byte
+		binary.BigEndian.PutUint32(l[:], uint32(len(s)))
+		h.Write(l[:])
+		h.Write([]byte(s))
+	}
 	var idx [4]byte
-	binary.BigEndian.PutUint32(idx[:], uint32(c.n))
+	binary.BigEndian.PutUint32(idx[:], n)
 	h.Write(idx[:])
-	c.n++
 	sum := h.Sum(nil)
 
 	var b [16]byte
@@ -394,8 +488,10 @@ func (c *lineCtx) toolPost(ts time.Time, useID, output string, oc *event.Outcome
 		}
 	}
 	if output != "" {
-		sum := sha256.Sum256([]byte(output))
-		e.Tool.OutputSHA256 = hex.EncodeToString(sum[:])
+		// Length only. No digest of the output: an unkeyed one is
+		// recovered with a dictionary for short outputs, and the privacy
+		// stage derives the keyed output_sha256 from Content.ToolOutput,
+		// which carries the whole text on this path.
 		e.Tool.OutputLen = len(output)
 	}
 	if oc == nil {
@@ -478,6 +574,7 @@ func parseGuard(agent string, line []byte, st *FileState, fn lineFn) (evs []*eve
 		st.Malformed++
 		return nil, fmt.Errorf("%w: %v", ErrMalformed, ferr)
 	}
+	c.eventIDs()
 	return c.out, nil
 }
 

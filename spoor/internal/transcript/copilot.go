@@ -34,6 +34,7 @@ func (p copilotParser) ParseLine(line []byte, st *FileState) ([]*event.Event, er
 // union of the fields read from any handled event, with polymorphic values
 // left generic.
 type copilotEnvelope struct {
+	ID        string       `json:"id"`
 	Type      string       `json:"type"`
 	Timestamp string       `json:"timestamp"`
 	AgentID   string       `json:"agentId"`
@@ -137,6 +138,7 @@ func parseCopilot(c *lineCtx) error {
 	}
 	st := c.st
 	ts := parseTime(env.Timestamp)
+	c.record("e:", env.ID) // every event carries its own id (eventIDs)
 	if st.SessionID == "" {
 		st.SessionID = copilotSessionFromPath(st.Path)
 	}

@@ -168,6 +168,7 @@ func (c *lineCtx) geminiMetaRecord(m geminiMeta) {
 	if st.extra("subagent_id") != "" {
 		typ = event.TypeSubagentStart
 	}
+	c.record("start:", st.SessionID)
 	c.newEvent(typ, parseTime(m.StartTime))
 }
 
@@ -189,6 +190,10 @@ func geminiParentFromPath(path string) string {
 func (c *lineCtx) geminiMessage(m *geminiMessage) {
 	st := c.st
 	ts := parseTime(m.Timestamp)
+	// The message id is the identity of its events (eventIDs): the same
+	// message re-listed by a $set checkpoint or a rewritten document keeps
+	// its ids. Its tool calls are identified by their call ids.
+	c.record("m:", m.ID)
 	switch m.Type {
 	case "user":
 		// Since v0.44 tool results are also recorded as user messages; the

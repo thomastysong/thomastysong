@@ -476,20 +476,23 @@ const workspaceSetup = `set -e
 useradd -u 1000 -M -d /home/dev -s /bin/sh dev
 mkdir -p /home/dev/.local/bin /home/dev/.claude/projects/p /home/dev/proj /home/dev/.cursor /home/dev/.factory /etc/claude-code
 cp /bin/bash /home/dev/.local/bin/claude
-printf '%s' '{"mcpServers":{"legit-NONCE":{"command":"npx","args":["-y","some-mcp"]}},"projects":{"/home/dev/proj":{}}}' > /home/dev/.claude.json
+printf '%s' '{"mcpServers":{"legit-@NONCE@":{"command":"npx","args":["-y","some-mcp"]}},"projects":{"/home/dev/proj":{}}}' > /home/dev/.claude.json
 echo '{}' > /home/dev/.claude/projects/p/s.jsonl
 ln -s /etc/spoor/canary.json /etc/claude-code/managed-mcp.json
 ln -s ../../../../../../etc/spoor/canary.json /home/dev/.cursor/mcp.json
 ln -s /proc/self/root/etc/spoor/canary.json /home/dev/proj/.mcp.json
 ln -s /etc/spoor /home/dev/.gemini
-printf '%s' '{"mcpServers":{"rootowned-NONCE":{"command":"x"}}}' > /home/dev/.factory/mcp.json
+printf '%s' '{"mcpServers":{"rootowned-@NONCE@":{"command":"x"}}}' > /home/dev/.factory/mcp.json
 chown -R -h 1000:1000 /home/dev
 chown 0:0 /home/dev/.factory/mcp.json
 chmod 0700 /home/dev /home/dev/.claude
 chmod 0600 /home/dev/.claude.json /home/dev/.claude/projects/p/s.jsonl
 cd /home/dev
 setpriv --reuid 1000 --regid 1000 --clear-groups env -i HOME=/home/dev PATH=/usr/bin:/bin \
-  /home/dev/.local/bin/claude -c 'CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=SESSION sleep 86400 & wait' claude --dangerously-skip-permissions >/dev/null 2>&1 &
+  /home/dev/.local/bin/claude -c 'CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=@SESSION@ sleep 86400 & wait' claude --dangerously-skip-permissions >/dev/null 2>&1 &
+agent=$!
+sleep 1
+kill -0 "$agent"
 touch /tmp/ready
 exec sleep infinity
 `
@@ -552,7 +555,7 @@ func TestContainerNodeSensor(t *testing.T) {
 	}
 
 	ws := "spoor-e2e-ws-" + nonce
-	setup := strings.NewReplacer("NONCE", nonce, "SESSION", session).Replace(workspaceSetup)
+	setup := strings.NewReplacer("@NONCE@", nonce, "@SESSION@", session).Replace(workspaceSetup)
 	wsID := ctrRun(t, ws, ctrWorkspaceImage, "sh", "-c", setup)
 	ctrWait(t, 30*time.Second, "workspace setup", func() bool {
 		_, err := ctrDocker(10*time.Second, nil, "exec", ws, "test", "-f", "/tmp/ready")
@@ -651,12 +654,21 @@ func TestContainerNodeSensor(t *testing.T) {
 		}
 		t.Logf("EVIDENCE scan of /proc/<workspace pid>/root as uid %d: files=%d denied=%d skipped=%d errors=%d; canary-%s absent from the output",
 			spec.runAsUser, res.Ledger.Files, res.Ledger.Denied, res.Ledger.Skipped, res.Ledger.Errors, nonce)
+		dirLinks := map[string]int{}
 		for _, n := range res.Ledger.Notes {
-			if strings.Contains(n, "managed-mcp.json") || strings.Contains(n, "/.cursor/mcp.json") ||
-				strings.Contains(n, "/proj/.mcp.json") || strings.Contains(n, ".gemini/settings.json") ||
-				strings.Contains(n, ".copilot/mcp-config.json") {
+			switch {
+			case strings.Contains(n, "/home/dev/.gemini/"), strings.Contains(n, "/home/dev/.copilot/"):
+				// Directory links: every path below them is refused.
+				if strings.HasPrefix(n, "denied") {
+					dirLinks[strings.SplitN(strings.SplitN(n, "/home/dev/", 2)[1], "/", 2)[0]]++
+				}
+			case strings.Contains(n, "managed-mcp.json"), strings.Contains(n, "/.cursor/mcp.json"), strings.Contains(n, "/proj/.mcp.json"):
 				t.Logf("EVIDENCE ledger: %s", n)
 			}
+		}
+		t.Logf("EVIDENCE ledger: paths refused below the directory links (denied, path resolves outside its root): %v", dirLinks)
+		if dirLinks[".gemini"] == 0 || dirLinks[".copilot"] == 0 {
+			t.Errorf("no refusal recorded for the planted directory links: %v\n%s", dirLinks, strings.Join(res.Ledger.Notes, "\n"))
 		}
 		for _, planted := range []string{"/etc/claude-code/managed-mcp.json", "/home/dev/.cursor/mcp.json", "/home/dev/proj/.mcp.json"} {
 			ok := false
@@ -964,7 +976,7 @@ spoor hooks status --scope managed --agents claude-code,gemini-cli,codex`)
 	if kind != "deb" {
 		return
 	}
-	out = sh(`useradd -r shipper && usermod -a -G spoor shipper && dpkg -P spoor >/dev/null 2>&1; dpkg -P spoor; getent group spoor; ls -d /etc/spoor /var/lib/spoor 2>&1;
+	out = sh(`useradd -r shipper && usermod -a -G spoor shipper && dpkg -P spoor; getent group spoor; ls -d /etc/spoor /var/lib/spoor 2>&1;
 gpasswd -d shipper spoor >/dev/null && dpkg -i ` + rel(v2) + ` >/dev/null 2>&1 && dpkg -P spoor && (getent group spoor || echo group-deleted)`)
 	t.Logf("EVIDENCE deb purge (first with a member in the group, then without):\n%s", out)
 	expect(out, "group spoor kept: it has members (shipper)", "purge with member")

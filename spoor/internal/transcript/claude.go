@@ -52,6 +52,7 @@ func (p claudeParser) ParseLine(line []byte, st *FileState) ([]*event.Event, err
 type claudeRecord struct {
 	Type           string `json:"type"`
 	Subtype        string `json:"subtype"`
+	UUID           string `json:"uuid"`
 	Timestamp      string `json:"timestamp"`
 	SessionID      string `json:"sessionId"`
 	AgentID        string `json:"agentId"`
@@ -171,6 +172,10 @@ func parseClaude(c *lineCtx) error {
 	}
 	st := c.st
 	ts := parseTime(rec.Timestamp)
+	// Every conversation record carries a random uuid (user, assistant,
+	// system and attachment records in the 2.1.322 capture, none repeated
+	// across 105 files); it is the record's identity (eventIDs).
+	c.record("u:", rec.UUID)
 
 	if rec.SessionID != "" {
 		st.SessionID = clip(rec.SessionID, maxIDLen)

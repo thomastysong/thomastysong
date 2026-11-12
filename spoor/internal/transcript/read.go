@@ -130,7 +130,18 @@ func readLines(f *os.File, start, size int64, maxLine int, skipping bool, budget
 	return res, nil
 }
 
-// tailPrint fingerprints the bytes just before offset.
+// tailPrint fingerprints the bytes just before offset, so a log that was
+// truncated, replaced or rewritten in place is recognised before reading on
+// from a stale offset.
+//
+// It is an unkeyed digest on purpose. It must verify against a checkpoint
+// an earlier run wrote: under a per-process key every file would look
+// replaced after a restart and be read again from the start. It is safe
+// unkeyed because it never leaves the checkpoint store (it is not part of
+// any event), the store is written 0600 in a 0700 directory, and whoever
+// can read the store can read the log it fingerprints, so it confirms
+// nothing they could not read directly. It is 8 bytes of SHA-256 over the
+// last tailLen bytes before the checkpoint.
 func tailPrint(f *os.File, offset int64) string {
 	if offset <= 0 {
 		return ""

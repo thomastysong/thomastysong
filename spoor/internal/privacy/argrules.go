@@ -50,11 +50,49 @@ var sambaTools = map[string]bool{
 }
 
 // moreArgSecrets applies this package's rules to in, writing redactions
-// into out (classify's result for the same vector, same length).
+// into out (classify's result for the same vector, same length). The
+// flag rules of a tool apply wherever the tool's name appears, not only
+// in argv[0]: process arguments reach here unparsed, so "sudo -u ops
+// sshpass -pPW ssh h" and "kubectl exec pod -- sqlcmd -P PW" must still be
+// found. Positional rules (sqlplus user/pw, vault login TOKEN) need the
+// program word itself and apply to argv[0] only.
 func moreArgSecrets(in, out []string) {
 	if len(in) == 0 || len(out) != len(in) {
 		return
 	}
+	for s := range in {
+		if s == 0 || argTool(progName(in[s])) {
+			toolArgSecrets(in[s:], out[s:], s == 0)
+		}
+	}
+	untouched := func(i int) bool { return out[i] == in[i] && !keepRef(in[i]) }
+	for i := 1; i < len(in); i++ {
+		if !untouched(i) {
+			continue
+		}
+		a := in[i]
+		if sep, val, ok := passFlag(a); ok {
+			switch {
+			case sep && val != "" && !keepRef(val):
+				out[i] = a[:len(a)-len(val)] + newMarker(classify.KindPassword, val)
+			case !sep && i+1 < len(in) && untouched(i+1) && in[i+1] != "" && in[i+1] != "*" && !(strings.HasPrefix(in[i+1], "-") && len(in[i+1]) > 1) && !passSource(in[i+1]):
+				out[i+1] = newMarker(classify.KindPassword, in[i+1])
+			}
+		}
+	}
+}
+
+// argTool reports a program name with tool-specific flag rules.
+func argTool(prog string) bool {
+	_, a := attachedOrNext[prog]
+	_, b := nextOnly[prog]
+	_, c := attachedOnly[prog]
+	return a || b || c || sambaTools[prog] || prog == "lftp"
+}
+
+// toolArgSecrets applies the rules of the program in[0]. top is false for
+// a program found inside the vector, where only flag rules apply.
+func toolArgSecrets(in, out []string, top bool) {
 	prog := progName(in[0])
 	untouched := func(i int) bool { return i < len(in) && out[i] == in[i] && !keepRef(in[i]) }
 	whole := func(i int) {
@@ -69,6 +107,9 @@ func moreArgSecrets(in, out []string) {
 	}
 	for i := 1; i < len(in); i++ {
 		a := in[i]
+		if a == "--" && !top {
+			return // the end of this program's options
+		}
 		if !untouched(i) {
 			continue
 		}
@@ -108,7 +149,7 @@ func moreArgSecrets(in, out []string) {
 			if j := strings.IndexByte(v, '%'); at >= 0 && j >= 0 {
 				after(at, j+1)
 			}
-		case (prog == "sqlplus" || prog == "sql") && !strings.HasPrefix(a, "-") && userPass(a) > 0:
+		case top && prog == "sqlplus" && !strings.HasPrefix(a, "-") && userPass(a) > 0:
 			// sqlplus user/password@db
 			j := userPass(a)
 			end := strings.IndexByte(a[j:], '@')
@@ -117,17 +158,9 @@ func moreArgSecrets(in, out []string) {
 			} else if end > 0 && untouched(i) {
 				out[i] = a[:j] + newMarker(classify.KindPassword, a[j:j+end]) + a[j+end:]
 			}
-		case prog == "vault" && i == 2 && strings.EqualFold(in[1], "login") && !strings.HasPrefix(a, "-") && !strings.Contains(a, "="):
+		case top && prog == "vault" && i == 2 && strings.EqualFold(in[1], "login") && !strings.HasPrefix(a, "-") && !strings.Contains(a, "="):
 			// vault login TOKEN (a positional token; "-" reads stdin).
 			whole(i)
-		}
-		if sep, val, ok := passFlag(a); ok {
-			switch {
-			case sep && val != "":
-				after(i, len(a)-len(val))
-			case !sep && i+1 < len(in) && !(strings.HasPrefix(in[i+1], "-") && len(in[i+1]) > 1) && !passSource(in[i+1]):
-				whole(i + 1)
-			}
 		}
 	}
 }

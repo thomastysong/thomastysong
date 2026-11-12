@@ -86,6 +86,12 @@ func TestMoreArgSecrets(t *testing.T) {
 		{[]string{"tool", "--db-pass=ArgPw13"}, "ArgPw13", []string{"--db-pass="}},
 		{[]string{"tool", "--db-pass", "$DB_PASS"}, "", []string{"$DB_PASS"}},
 		{[]string{"schtasks", "/create", "/ru", "bob", "/rp", "*"}, "", []string{"/rp *"}},
+		// A tool behind wrappers in a raw argument vector (process args).
+		{[]string{"sudo", "-u", "ops", "sshpass", "-pArgPw14", "ssh", "h"}, "ArgPw14", []string{"sudo -u ops sshpass -p", "ssh h"}},
+		{[]string{"kubectl", "exec", "pod", "--", "sqlcmd", "-P", "ArgPw15"}, "ArgPw15", []string{"-- sqlcmd -P"}},
+		{[]string{"nohup", "keytool", "-list", "-storepass", "ArgPw16"}, "ArgPw16", []string{"-storepass"}},
+		// Positional rules need the program word itself.
+		{[]string{"grep", "-r", "sqlplus", "src/main"}, "", []string{"src/main"}},
 	}
 	for _, c := range cases {
 		out := strings.Join(redactArgs(c.argv), " ")

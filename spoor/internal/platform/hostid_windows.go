@@ -25,6 +25,9 @@ func platformHostID() (id, src string) {
 // rawSMBIOS returns the firmware's SMBIOS table without WMI: osquery asks WMI
 // for Win32_ComputerSystemProduct.UUID, which is this table's type 1 UUID.
 //
+// The provider signature and the 8-byte RawSMBIOSData header were
+// cross-checked against digitalocean/go-smbios (stream_windows.go).
+//
 // UNVERIFIED: not executed on Windows in the build environment.
 func rawSMBIOS() []byte {
 	if procGetSystemFirmwareTable.Find() != nil {

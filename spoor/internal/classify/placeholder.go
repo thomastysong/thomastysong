@@ -118,13 +118,24 @@ func isReference(v string) bool {
 		return true
 	}
 	switch v[0] {
-	case '$', '@', '*':
-		return true
+	case '$':
+		if varReference(v) {
+			return true
+		}
+	case '@':
+		// curl-style @file.
+		if len(v) > 1 && (v[1] == '/' || v[1] == '.' || v[1] == '~') {
+			return true
+		}
 	case '%':
 		// %VAR% (cmd) and printf verbs such as %s.
-		return true
+		if len(v) <= 3 || v[len(v)-1] == '%' {
+			return true
+		}
 	case '~':
-		return true
+		if len(v) == 1 || v[1] == '/' || v[1] == '\\' {
+			return true
+		}
 	case '.':
 		if strings.HasPrefix(v, "./") || strings.HasPrefix(v, "../") || strings.HasPrefix(v, `.\`) {
 			return true
@@ -147,13 +158,61 @@ func isReference(v string) bool {
 	if i := strings.Index(v, "://"); i > 0 && i < 32 && !strings.Contains(v, "@") {
 		return true // a plain URL; URLs with userinfo have their own detector
 	}
-	if strings.Contains(v, "(") && strings.Contains(v, ")") {
-		return true // a call expression
-	}
-	if strings.Contains(v, "::") || strings.Contains(v, "->") {
+	if callExpression(v) || memberAccess(v) {
 		return true
 	}
 	return dottedIdentifier(v)
+}
+
+// varReference reports shell, PowerShell and template variable syntax:
+// $NAME, ${NAME}, $(cmd), $env:NAME. Crypt-style password hashes also start
+// with "$" ($2b$12$..., $argon2id$...) and must NOT be taken for variables:
+// they are the secret.
+func varReference(v string) bool {
+	if len(v) < 2 || v[0] != '$' {
+		return false
+	}
+	if v[1] == '{' || v[1] == '(' {
+		return true
+	}
+	i := 1
+	for i < len(v) && (isAlnum(v[i]) || v[i] == '_') {
+		i++
+	}
+	if i == 1 || isDigit(v[1]) {
+		return false
+	}
+	return i == len(v) || v[i] != '$'
+}
+
+// callExpression reports f(...) and a.b(...) forms.
+func callExpression(v string) bool {
+	if len(v) < 3 || v[len(v)-1] != ')' {
+		return false
+	}
+	open := strings.IndexByte(v, '(')
+	if open <= 0 {
+		return false
+	}
+	for i := 0; i < open; i++ {
+		if c := v[i]; !isAlnum(c) && c != '_' && c != '.' {
+			return false
+		}
+	}
+	return true
+}
+
+// memberAccess reports Foo::bar and $this->bar forms.
+func memberAccess(v string) bool {
+	if !strings.Contains(v, "::") && !strings.Contains(v, "->") {
+		return false
+	}
+	for i := 0; i < len(v); i++ {
+		if c := v[i]; !isAlnum(c) && strings.IndexByte("_:>-$.", c) < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // dottedIdentifier reports a.b.c style member access with no digits, which is

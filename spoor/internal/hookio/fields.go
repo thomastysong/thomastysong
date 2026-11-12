@@ -194,7 +194,37 @@ func labelValue(s string) string {
 	return sb.String()
 }
 
-// label sets a sanitized label, skipping empty values.
+// enumValue accepts a value that looks like a member of a closed vocabulary
+// (a short word such as "startup", "permission_prompt" or "ToolPermission")
+// and replaces anything else with "other". The agents' enum fields are set
+// by harness code, so a value that is not word-shaped is either schema drift
+// or a forged payload; neither belongs in a field that is serialized at
+// every privacy tier.
+func enumValue(s string) string {
+	if s == "" {
+		return ""
+	}
+	if len(s) > 48 {
+		return "other"
+	}
+	for i, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
+		case i > 0 && (r >= '0' && r <= '9' || r == '_' || r == '-' || r == '.' || r == ':'):
+		default:
+			return "other"
+		}
+	}
+	return s
+}
+
+// enumLabel sets a label from a closed-vocabulary payload field.
+func enumLabel(ev *event.Event, key, value string) {
+	label(ev, key, enumValue(value))
+}
+
+// label sets a sanitized label, skipping empty values. It is for constants
+// and identifier-like values (an event name, a model id, an agent id).
 func label(ev *event.Event, key, value string) {
 	v := labelValue(value)
 	if v == "" {

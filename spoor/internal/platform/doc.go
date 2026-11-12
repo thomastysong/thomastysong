@@ -24,7 +24,14 @@
 //
 // ProcEnv returns values because detection needs a few of them (session ids,
 // config-dir overrides). Callers must never emit environment values: names
-// only, plus an allowlist of marker values.
+// only, plus an allowlist of marker values. Proc.Args is equally raw and can
+// carry tokens passed on a command line; it goes through redaction before it
+// leaves the machine.
+//
+// HostInfo in an unprivileged process is only as trustworthy as that
+// process's environment: SPOOR_HOST_ID and the per-user host_id file are the
+// user's to set. A privileged daemon should stamp host identity itself
+// rather than accept it from a hook client.
 //
 // # What each OS provides
 //

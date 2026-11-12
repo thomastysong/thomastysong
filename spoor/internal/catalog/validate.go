@@ -23,7 +23,7 @@ const (
 )
 
 var (
-	idRe       = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+	idRe       = regexp.MustCompile(`^[a-z][a-z0-9._-]{0,63}$`)
 	versionRe  = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}$`)
 	slugRe     = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,63}$`)
 	envNameRe  = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
@@ -134,20 +134,34 @@ func validateProduct(p *Product, l *errList) {
 		}
 		return ""
 	}
-	pathEntry := func(s string) string {
-		if len(s) > maxGlobLen {
-			return "is too long"
+	// pathEntry accepts a location the scanner can resolve without a
+	// working directory: home-relative, variable-rooted or absolute.
+	// projectOK also admits "./x", relative to a project root.
+	pathCheck := func(projectOK bool) func(string) string {
+		return func(s string) string {
+			switch {
+			case len(s) > maxGlobLen:
+				return "is too long"
+			case hasDotDotElement(s):
+				return "must not contain a .. element"
+			case rootedPath(s):
+				return ""
+			case projectOK && strings.HasPrefix(s, "./"):
+				return ""
+			}
+			if projectOK {
+				return `must start with ~, a variable, / or a drive, or with ./ for a project-relative path`
+			}
+			return "must start with ~, a variable, / or a drive"
 		}
-		if strings.Contains(s, "..") && hasDotDotElement(s) {
-			return "must not contain a .. element"
-		}
-		return ""
 	}
-	checkPaths := func(field string, o OSPaths) {
-		checkList(field+".linux", o.Linux, pathEntry)
-		checkList(field+".darwin", o.Darwin, pathEntry)
-		checkList(field+".windows", o.Windows, pathEntry)
+	pathEntry := pathCheck(false)
+	checkPathsWith := func(field string, o OSPaths, each func(string) string) {
+		checkList(field+".linux", o.Linux, each)
+		checkList(field+".darwin", o.Darwin, each)
+		checkList(field+".windows", o.Windows, each)
 	}
+	checkPaths := func(field string, o OSPaths) { checkPathsWith(field, o, pathEntry) }
 
 	checkList("aliases", p.Aliases, nil)
 	checkList("binaries", p.Binaries, exeName)
@@ -187,7 +201,7 @@ func validateProduct(p *Product, l *errList) {
 	})
 	checkList("win_display", p.WinDisplay, func(s string) string {
 		// Short substrings match unrelated software ("dia" in "NVIDIA").
-		if len(s) < 3 {
+		if len(strings.TrimSuffix(strings.TrimPrefix(s, "^"), "$")) < 3 {
 			return "is too short to be a safe DisplayName pattern"
 		}
 		return ""
@@ -212,11 +226,11 @@ func validateProduct(p *Product, l *errList) {
 	checkList("home_env", p.HomeEnv, envName)
 	checkList("env_markers", p.EnvMarkers, envName)
 	checkList("session_env", p.SessionEnv, envName)
-	checkList("skills", p.Skills, pathEntry)
-	checkList("rules", p.Rules, pathEntry)
-	checkList("plugins", p.Plugins, pathEntry)
-	checkList("subagents", p.Subagents, pathEntry)
-	checkList("commands", p.Commands, pathEntry)
+	checkList("skills", p.Skills, pathCheck(true))
+	checkList("rules", p.Rules, pathCheck(true))
+	checkList("plugins", p.Plugins, pathCheck(true))
+	checkList("subagents", p.Subagents, pathCheck(true))
+	checkList("commands", p.Commands, pathCheck(true))
 	checkList("risky_flags", p.RiskyFlags, func(s string) string {
 		if !flagRe.MatchString(s) {
 			return `must be "--flag" or "--flag value"`
@@ -280,7 +294,8 @@ func validateProduct(p *Product, l *errList) {
 		if t.Globs.IsZero() {
 			bad("transcript has no globs")
 		}
-		checkPaths("transcript.globs", t.Globs)
+		// "./x" is allowed: Aider writes its history into the project.
+		checkPathsWith("transcript.globs", t.Globs, pathCheck(true))
 		if t.HomeEnv != "" && !envNameRe.MatchString(t.HomeEnv) {
 			bad("transcript.home_env %q is not an environment variable name", t.HomeEnv)
 		}
@@ -316,6 +331,11 @@ func validateProduct(p *Product, l *errList) {
 		if s.Op != "exists" && s.Value == "" {
 			bad("%s.value is required for op %q", field, s.Op)
 		}
+		// A value on an exists probe is a copy-paste or YAML-merge leftover
+		// and would be reported as the "expected" value of the check.
+		if s.Op == "exists" && s.Value != "" {
+			bad("%s.value must be empty for op exists", field)
+		}
 		if !slugRe.MatchString(s.Flag) {
 			bad("%s.flag %q must be a lowercase slug", field, s.Flag)
 		}
@@ -343,7 +363,16 @@ func validateProduct(p *Product, l *errList) {
 				bad("%s.file is required for format %q", field, s.Format)
 			}
 		}
-		checkPaths(field+".file", s.File)
+		if s.Format == "registry" {
+			checkList(field+".file.windows", s.File.Windows, func(k string) string {
+				if !strings.HasPrefix(k, `HKLM\`) && !strings.HasPrefix(k, `HKCU\`) && !strings.HasPrefix(k, `HKU\`) {
+					return `must be a registry key under HKLM\, HKCU\ or HKU\`
+				}
+				return ""
+			})
+		} else {
+			checkPathsWith(field+".file", s.File, pathCheck(true))
+		}
 		checkText(field+".value", s.Value, maxStringLen)
 	}
 	if id := p.Signers.DarwinTeamID; id != "" && !teamIDRe.MatchString(id) {
@@ -363,6 +392,24 @@ func hasFingerprint(p *Product) bool {
 		len(p.ExtensionIDs)+len(p.JetBrainsIDs)+len(p.ChromeIDs) > 0 ||
 		!p.InstallPaths.IsZero() || !p.StateDirs.IsZero()
 }
+
+// rootedPath reports whether a catalog path starts at a known place: the
+// home, a variable, the filesystem root, a Windows drive or a UNC share.
+func rootedPath(s string) bool {
+	switch {
+	case s == "~", strings.HasPrefix(s, "~/"), strings.HasPrefix(s, `~\`):
+		return true
+	case strings.HasPrefix(s, "/"), strings.HasPrefix(s, `\\`):
+		return true
+	case strings.HasPrefix(s, "$"), strings.HasPrefix(s, "%"):
+		return true
+	case len(s) >= 3 && isAlpha(s[0]) && s[1] == ':' && (s[2] == '\\' || s[2] == '/'):
+		return true
+	}
+	return false
+}
+
+func isAlpha(c byte) bool { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') }
 
 func hasDotDotElement(s string) bool {
 	for _, el := range strings.FieldsFunc(s, func(r rune) bool { return r == '/' || r == '\\' }) {

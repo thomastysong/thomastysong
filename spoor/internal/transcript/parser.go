@@ -87,6 +87,22 @@ const (
 	maxVersionLen = 64
 )
 
+// safeToken returns s when it is a short identifier-like value (letters,
+// digits and "_-.:"), and "" otherwise. Labels are serialized, so a value
+// copied from a record must not be able to carry content.
+func safeToken(s string) string {
+	if s == "" || len(s) > 48 {
+		return ""
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-' || c == '.' || c == ':') {
+			return ""
+		}
+	}
+	return s
+}
+
 func clip(s string, n int) string {
 	if len(s) <= n {
 		return s
@@ -121,12 +137,14 @@ func (st *FileState) addPending(id string, e *event.Event) {
 	}
 	st.Pending[id] = e
 	for len(st.Pending) > maxPending {
-		if len(st.pendOrder) == 0 {
+		if len(st.pendOrder) == 0 || st.pendOrder[0] == id {
 			// Pending was filled by the caller, not by addPending: there
-			// is no order to honour, drop any entry.
+			// is no order to honour, drop any entry but the new one.
 			for k := range st.Pending {
-				delete(st.Pending, k)
-				break
+				if k != id {
+					delete(st.Pending, k)
+					break
+				}
 			}
 			continue
 		}
@@ -245,7 +263,7 @@ func (c *lineCtx) newEvent(typ string, ts time.Time) *event.Event {
 		Type:     typ,
 		Source:   event.SourceTranscript,
 		Fidelity: event.FidelityObserved,
-		Agent:    &event.Agent{ID: c.agent, Version: st.Version},
+		Agent:    &event.Agent{ID: c.agent, Version: st.Version, Surface: st.Extra["surface"]},
 		Session: &event.Session{
 			ID:             st.SessionID,
 			ParentID:       st.ParentSessionID,

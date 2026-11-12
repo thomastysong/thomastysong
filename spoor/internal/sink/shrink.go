@@ -4,7 +4,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"reflect"
+	"sort"
 	"strconv"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/thomastysong/spoor/internal/event"
@@ -16,6 +19,10 @@ const (
 	LabelCommandSHA256 = "target.command.sha256"
 	LabelCommandLen    = "target.command.len"
 )
+
+// maxNumericMap is the most entries a map of numbers may keep in an event
+// that is being shrunk.
+const maxNumericMap = 256
 
 // minCommandKeep is the shortest command head the shrinker leaves before it
 // moves on to other fields: the start of a command line is the part that
@@ -32,8 +39,8 @@ const minCommandKeep = 256
 //  1. tool.input and tool.output are dropped (their hashes and lengths stay).
 //  2. target.command loses its tail; a hash of the full command is kept in
 //     Labels.
-//  3. other free-form fields are capped (prompt text, error text, path and
-//     argument lists, evidence, labels).
+//  3. every remaining string, list and map is capped, in three passes with
+//     tighter limits each time.
 //  4. as a last resort only identity fields survive, sanitized and clipped,
 //     with Truncated ["*"].
 //
@@ -42,15 +49,28 @@ func fitLine(e *event.Event, f string, max int) ([]byte, error) {
 	return fit(e, max, func(x *event.Event) ([]byte, error) { return encodeLine(x, f) })
 }
 
+// shrinkPasses are the limits of step 3: longest string in bytes, most
+// elements per list or map.
+var shrinkPasses = [...]struct{ str, list int }{{4096, 64}, {1024, 32}, {256, 16}}
+
 // fit is fitLine for any encoding: enc is called on progressively smaller
 // copies of e until its output is at most max bytes.
 func fit(e *event.Event, max int, enc func(*event.Event) ([]byte, error)) ([]byte, error) {
-	line, err := enc(e)
-	if err != nil {
-		return nil, err
-	}
-	if len(line) <= max {
-		return line, nil
+	var (
+		line []byte
+		err  error
+	)
+	// The common case is one encode and a length check. That encode is
+	// skipped only when the usual large fields already prove the event is
+	// oversize, so a multi-megabyte tool call is never serialized whole
+	// just to learn that it is too big.
+	if rawSize(e) <= max {
+		if line, err = enc(e); err != nil {
+			return nil, err
+		}
+		if len(line) <= max {
+			return line, nil
+		}
 	}
 	c := cloneWithoutInput(e)
 	fits := func() bool {
@@ -73,6 +93,29 @@ func fit(e *event.Event, max int, enc func(*event.Event) ([]byte, error)) ([]byt
 			mark("tool.output")
 		}
 	}
+
+	// No single value can be kept whole if it alone exceeds the limit, so
+	// capping every string at max loses nothing that could have been kept.
+	// Doing it before the next encode bounds the cost of all the encodes
+	// below: a hostile event is never re-encoded at its full size.
+	var full string
+	if c.Target != nil {
+		full = c.Target.Command
+	}
+	cmdCut := false
+	capAll := func(maxStr, maxList int) bool {
+		names := capStrings(c, maxStr, maxList)
+		for _, n := range names {
+			cmdCut = cmdCut || n == "target.command"
+		}
+		if cmdCut {
+			// Re-added after every pass so capping Labels cannot drop them.
+			c.Labels = withCommandLabels(c.Labels, full)
+		}
+		mark(names...)
+		return len(names) > 0
+	}
+	capAll(max, 1<<16)
 	if fits() {
 		return line, nil
 	}
@@ -81,20 +124,15 @@ func fit(e *event.Event, max int, enc func(*event.Event) ([]byte, error)) ([]byt
 	}
 
 	// Step 2: the tail of the command.
-	if c.Target != nil && len(c.Target.Command) > minCommandKeep {
-		full := c.Target.Command
-		sum := sha256.Sum256([]byte(full))
-		if c.Labels == nil {
-			c.Labels = make(map[string]string, 2)
-		}
-		c.Labels[LabelCommandSHA256] = hex.EncodeToString(sum[:])
-		c.Labels[LabelCommandLen] = strconv.Itoa(len(full))
-		mark("target.command")
+	if len(full) > minCommandKeep {
+		held, heldTrunc, heldLabels := c.Target.Command, c.Truncated, c.Labels
+		c.Truncated = appendOnce(append([]string(nil), heldTrunc...), "target.command")
+		c.Labels = withCommandLabels(heldLabels, full)
 		keep := len(full) / 2
 		if keep > max/2 {
 			keep = max / 2
 		}
-		for ; ; keep /= 2 {
+		for {
 			if keep < minCommandKeep {
 				keep = minCommandKeep
 			}
@@ -105,16 +143,18 @@ func fit(e *event.Event, max int, enc func(*event.Event) ([]byte, error)) ([]byt
 			if keep == minCommandKeep {
 				break
 			}
+			keep /= 2
 		}
+		// Even the shortest command head did not fit, so the bulk is in
+		// other fields. Put the command back and let the general passes
+		// spread the cut instead of sacrificing the command for nothing.
+		c.Target.Command, c.Truncated, c.Labels = held, heldTrunc, heldLabels
 	}
 
-	// Step 3: every other field an agent or a config file can make large.
-	for _, step := range shrinkSteps {
-		if names := step(c); len(names) > 0 {
-			mark(names...)
-			if fits() {
-				return line, nil
-			}
+	// Step 3: everything else an agent or a config file can make large.
+	for _, p := range shrinkPasses {
+		if capAll(p.str, p.list) && fits() {
+			return line, nil
 		}
 	}
 
@@ -127,6 +167,38 @@ func fit(e *event.Event, max int, enc func(*event.Event) ([]byte, error)) ([]byt
 		return nil, err
 	}
 	return nil, fmt.Errorf("event %s is %d bytes after shrinking, limit %d", safeString(e.ID, 64), len(line), max)
+}
+
+// rawSize is a cheap lower bound of the encoded size: the bytes of the
+// fields that are large in practice. JSON escaping only ever adds to it.
+func rawSize(e *event.Event) int {
+	n := 0
+	if e.Tool != nil {
+		n += len(e.Tool.Output)
+	}
+	if e.Target != nil {
+		n += len(e.Target.Command) + len(e.Target.Path) + len(e.Target.URL) + len(e.Target.Query)
+	}
+	if e.Prompt != nil {
+		n += len(e.Prompt.Text)
+	}
+	if e.Outcome != nil {
+		n += len(e.Outcome.Error)
+	}
+	return n
+}
+
+// withCommandLabels returns a copy of labels that records the hash and
+// length of the full command.
+func withCommandLabels(labels map[string]string, full string) map[string]string {
+	out := make(map[string]string, len(labels)+2)
+	for k, v := range labels {
+		out[k] = v
+	}
+	sum := sha256.Sum256([]byte(full))
+	out[LabelCommandSHA256] = hex.EncodeToString(sum[:])
+	out[LabelCommandLen] = strconv.Itoa(len(full))
+	return out
 }
 
 // cloneWithoutInput deep-copies e except Tool.Input, which is dropped first:
@@ -142,186 +214,134 @@ func cloneWithoutInput(e *event.Event) *event.Event {
 	return tmp.Clone()
 }
 
-// shrinkSteps are applied in order until the line fits. Each returns the
-// names of the fields it actually cut.
-var shrinkSteps = []func(*event.Event) []string{
-	func(c *event.Event) []string {
-		if c.Prompt != nil && c.Prompt.Text != "" {
-			c.Prompt.Text = ""
-			return []string{"prompt.text"}
+var eventPkgPath = reflect.TypeOf(event.Event{}).PkgPath()
+
+// capStrings limits every serialized string, string list and string map
+// reachable from the event: strings to maxStr bytes, lists and maps to
+// maxList entries. It returns the JSON paths of the fields it cut.
+//
+// It walks the struct by reflection so a field added to the event later is
+// covered without anyone remembering to list it here. Lists and maps are
+// replaced by cut copies rather than edited in place, so nothing shared
+// with the caller's event is ever written to.
+func capStrings(c *event.Event, maxStr, maxList int) []string {
+	w := capWalker{maxStr: maxStr, maxList: maxList}
+	w.walk(reflect.ValueOf(c).Elem(), "")
+	return w.cut
+}
+
+type capWalker struct {
+	maxStr, maxList int
+	cut             []string
+}
+
+func (w *capWalker) note(path string) { w.cut = appendOnce(w.cut, path) }
+
+func (w *capWalker) walk(v reflect.Value, path string) {
+	switch v.Kind() {
+	case reflect.Pointer:
+		if !v.IsNil() {
+			w.walk(v.Elem(), path)
 		}
-		return nil
-	},
-	func(c *event.Event) (names []string) {
-		if c.Outcome != nil && clipField(&c.Outcome.Error, 1024) {
-			names = append(names, "outcome.error")
+	case reflect.Struct:
+		t := v.Type()
+		if t.PkgPath() != eventPkgPath {
+			return // time.Time and anything else we do not own
 		}
-		return names
-	},
-	func(c *event.Event) (names []string) {
-		t := c.Target
-		if t == nil {
-			return nil
-		}
-		if clipList(&t.Paths, 16, 512) {
-			names = append(names, "target.paths")
-		}
-		if clipList(&t.Hosts, 16, 256) {
-			names = append(names, "target.hosts")
-		}
-		if clipField(&t.Path, 2048) {
-			names = append(names, "target.path")
-		}
-		if clipField(&t.URL, 2048) {
-			names = append(names, "target.url")
-		}
-		if clipField(&t.Host, 256) {
-			names = append(names, "target.host")
-		}
-		if clipField(&t.Query, 1024) {
-			names = append(names, "target.query")
-		}
-		return names
-	},
-	func(c *event.Event) (names []string) {
-		p := c.Process
-		if p == nil {
-			return nil
-		}
-		if clipList(&p.Args, 32, 256) {
-			names = append(names, "process.args")
-		}
-		if clipList(&p.Ancestors, 32, 128) {
-			names = append(names, "process.ancestors")
-		}
-		if clipList(&p.EnvMarkers, 32, 128) {
-			names = append(names, "process.env_markers")
-		}
-		if clipList(&p.Flags, 32, 128) {
-			names = append(names, "process.flags")
-		}
-		if clipField(&p.Exe, 1024) {
-			names = append(names, "process.exe")
-		}
-		return names
-	},
-	func(c *event.Event) (names []string) {
-		d := c.Detection
-		if d == nil {
-			return nil
-		}
-		if clipMap(d.Evidence, 32, 512) {
-			names = append(names, "detection.evidence")
-		}
-		if clipList(&d.EventIDs, 64, 128) {
-			names = append(names, "detection.event_ids")
-		}
-		if clipList(&d.Tags, 64, 128) {
-			names = append(names, "detection.tags")
-		}
-		if clipList(&d.Flags, 64, 128) {
-			names = append(names, "detection.flags")
-		}
-		if clipField(&d.Remedy, 1024) {
-			names = append(names, "detection.remedy")
-		}
-		if clipField(&d.Title, 512) {
-			names = append(names, "detection.title")
-		}
-		return names
-	},
-	func(c *event.Event) (names []string) {
-		k := c.Check
-		if k == nil {
-			return nil
-		}
-		for _, f := range []struct {
-			p    *string
-			name string
-		}{{&k.Expected, "check.expected"}, {&k.Actual, "check.actual"}, {&k.Subject, "check.subject"}, {&k.Remedy, "check.remedy"}, {&k.Title, "check.title"}} {
-			if clipField(f.p, 1024) {
-				names = append(names, f.name)
+		for i := 0; i < t.NumField(); i++ {
+			f := t.Field(i)
+			if !f.IsExported() {
+				continue
 			}
-		}
-		return names
-	},
-	func(c *event.Event) (names []string) {
-		a := c.Asset
-		if a == nil {
-			return nil
-		}
-		if clipMap(a.Detail, 32, 512) {
-			names = append(names, "asset.detail")
-		}
-		if clipList(&a.Evidence, 32, 128) {
-			names = append(names, "asset.evidence")
-		}
-		if clipList(&a.RiskFlags, 64, 128) {
-			names = append(names, "asset.risk_flags")
-		}
-		if clipField(&a.Path, 2048) {
-			names = append(names, "asset.path")
-		}
-		if m := a.MCP; m != nil {
-			if clipList(&m.Args, 32, 256) {
-				names = append(names, "asset.mcp.args")
+			name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+			switch name {
+			case "-":
+				continue // local-only, never serialized
+			case "":
+				if f.Anonymous {
+					w.walk(v.Field(i), path)
+					continue
+				}
+				name = f.Name
 			}
-			if clipList(&m.EnvKeys, 64, 128) {
-				names = append(names, "asset.mcp.env_keys")
+			sub := name
+			if path != "" {
+				sub = path + "." + name
 			}
-			if clipList(&m.HeaderKeys, 64, 128) {
-				names = append(names, "asset.mcp.header_keys")
-			}
-			if clipField(&m.URLPath, 1024) {
-				names = append(names, "asset.mcp.url_path")
-			}
+			w.walk(v.Field(i), sub)
 		}
-		return names
-	},
-	func(c *event.Event) (names []string) {
-		h := c.Health
-		if h == nil {
-			return nil
+	case reflect.String:
+		if v.Len() > w.maxStr && v.CanSet() {
+			v.SetString(clipString(v.String(), w.maxStr))
+			w.note(path)
 		}
-		if clipField(&h.Detail, 1024) {
-			names = append(names, "health.detail")
+	case reflect.Slice:
+		w.slice(v, path)
+	case reflect.Map:
+		w.stringMap(v, path)
+	}
+}
+
+func (w *capWalker) slice(v reflect.Value, path string) {
+	n := v.Len()
+	if n == 0 || !v.CanSet() {
+		return
+	}
+	kind := v.Type().Elem().Kind()
+	if kind != reflect.String && kind != reflect.Struct {
+		return
+	}
+	keep := n
+	if keep > w.maxList {
+		keep = w.maxList
+		w.note(path)
+	}
+	cp := reflect.MakeSlice(v.Type(), keep, keep)
+	reflect.Copy(cp, v)
+	v.Set(cp)
+	for i := 0; i < keep; i++ {
+		w.walk(v.Index(i), path)
+	}
+}
+
+// stringMap caps maps with string keys and string values (labels, detail,
+// evidence). Which entries go when there are too many is decided by key
+// order so the result is deterministic. Other maps are left to their own
+// rules: counters are numbers, and Tool.Input has already been dropped.
+func (w *capWalker) stringMap(v reflect.Value, path string) {
+	t := v.Type()
+	if v.Len() == 0 || !v.CanSet() || t.Key().Kind() != reflect.String {
+		return
+	}
+	if t.Elem().Kind() != reflect.String {
+		// A numeric map (health counters) costs a few bytes per entry, so
+		// it is only dropped when it is absurdly large.
+		if v.Len() > maxNumericMap && t.Elem().Kind() != reflect.Interface {
+			v.Set(reflect.Zero(t))
+			w.note(path)
 		}
-		if len(h.Surfaces) > 32 {
-			h.Surfaces = h.Surfaces[:32]
-			names = append(names, "health.surfaces")
+		return
+	}
+	keys := v.MapKeys()
+	sort.Slice(keys, func(i, j int) bool { return keys[i].String() < keys[j].String() })
+	out := reflect.MakeMapWithSize(t, min(len(keys), w.maxList))
+	changed := false
+	for _, k := range keys {
+		if out.Len() >= w.maxList || k.Len() > 256 {
+			changed = true
+			continue
 		}
-		if len(h.Coverage) > 64 {
-			h.Coverage = h.Coverage[:64]
-			names = append(names, "health.coverage")
+		val := v.MapIndex(k)
+		if val.Len() > w.maxStr {
+			val = reflect.ValueOf(clipString(val.String(), w.maxStr)).Convert(t.Elem())
+			changed = true
 		}
-		if len(h.Counters) > 128 {
-			h.Counters = nil
-			names = append(names, "health.counters")
-		}
-		return names
-	},
-	func(c *event.Event) (names []string) {
-		if clipMap(c.Labels, 32, 256) {
-			names = append(names, "labels")
-		}
-		if c.Session != nil {
-			if clipField(&c.Session.CWD, 1024) {
-				names = append(names, "session.cwd")
-			}
-			if clipField(&c.Session.Transcript, 1024) {
-				names = append(names, "session.transcript")
-			}
-		}
-		if c.Repo != nil {
-			if clipField(&c.Repo.Root, 1024) {
-				names = append(names, "repo.root")
-			}
-			if clipField(&c.Repo.Remote, 1024) {
-				names = append(names, "repo.remote")
-			}
-		}
-		return names
-	},
+		out.SetMapIndex(k, val)
+	}
+	if changed {
+		v.Set(out)
+		w.note(path)
+	}
 }
 
 // skeleton returns an event with identity fields only. Strings are reduced
@@ -421,46 +441,6 @@ func clipString(s string, n int) string {
 		n--
 	}
 	return s[:n]
-}
-
-func clipField(p *string, n int) bool {
-	if len(*p) <= n {
-		return false
-	}
-	*p = clipString(*p, n)
-	return true
-}
-
-func clipList(p *[]string, maxLen, maxItem int) bool {
-	changed := false
-	if len(*p) > maxLen {
-		*p = (*p)[:maxLen]
-		changed = true
-	}
-	for i := range *p {
-		if clipField(&(*p)[i], maxItem) {
-			changed = true
-		}
-	}
-	return changed
-}
-
-// clipMap clips values, and drops the whole map content beyond maxKeys
-// (which keys go is arbitrary, so the field is reported as truncated).
-func clipMap(m map[string]string, maxKeys, maxVal int) bool {
-	changed := false
-	for k, v := range m {
-		if len(m) > maxKeys || len(k) > 256 {
-			delete(m, k)
-			changed = true
-			continue
-		}
-		if len(v) > maxVal {
-			m[k] = clipString(v, maxVal)
-			changed = true
-		}
-	}
-	return changed
 }
 
 func appendOnce(list []string, s string) []string {

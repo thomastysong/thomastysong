@@ -259,6 +259,40 @@ func parseEnvBlock16(u []uint16) map[string]string {
 	return env
 }
 
+// readEnvBlockPaged reads a Windows environment block of uncertain length out
+// of another process through read (ReadProcessMemory in production). It goes
+// page by page, so that no single read spans a mapped and an unmapped page
+// (such a read fails as a whole), and stops at the empty UTF-16 string that
+// ends the block, at the first unreadable page, or at limit.
+func readEnvBlockPaged(read func(addr uintptr, n int) ([]byte, error), addr uintptr, limit int) []byte {
+	const page = 4096
+	var out []byte
+	scanned := 0
+	for len(out) < limit {
+		at := addr + uintptr(len(out))
+		n := page - int(at%page)
+		if n > limit-len(out) {
+			n = limit - len(out)
+		}
+		chunk, err := read(at, n)
+		if len(chunk) > n {
+			chunk = chunk[:n]
+		}
+		out = append(out, chunk...)
+		// Two zero code units in a row on a code-unit boundary: the
+		// terminator of the last variable followed by the empty string.
+		for ; scanned+3 < len(out); scanned += 2 {
+			if out[scanned] == 0 && out[scanned+1] == 0 && out[scanned+2] == 0 && out[scanned+3] == 0 {
+				return out[:scanned+4]
+			}
+		}
+		if err != nil || len(chunk) < n {
+			break
+		}
+	}
+	return out
+}
+
 // bytesToUTF16 reinterprets little-endian bytes as UTF-16 code units,
 // ignoring a trailing odd byte.
 func bytesToUTF16(b []byte) []uint16 {

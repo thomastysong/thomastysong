@@ -1,0 +1,322 @@
+# spoor catalog: local model runtimes and model gateways.
+# Provenance and conventions are described at the top of agents.yaml.
+#
+# Ports are defaults taken from upstream documentation (research notes,
+# section 1c). They corroborate a finding and never create one: 8080, 8000,
+# 5000, 3000 and 4000 are generic development ports.
+version: "2026.11.11"
+
+products:
+  - id: ollama
+    name: Ollama
+    vendor: Ollama
+    kind: model_runtime
+    binaries: [ollama]
+    process_names: [Ollama, ollama app]
+    packages: [brew:ollama, cask:ollama-app, scoop:ollama, scoop:ollama-full]
+    bundle_ids: [com.electron.ollama]
+    win_display: ["^Ollama"]
+    install_paths:
+      darwin: ["/Applications/Ollama.app"]
+      linux: ["/usr/local/bin/ollama", "/usr/bin/ollama", "/usr/share/ollama"]
+      windows: ['%LOCALAPPDATA%\Programs\Ollama']
+    state_dirs:
+      all: ["~/.ollama"]
+      darwin: ["~/Library/Application Support/Ollama"]
+      linux: ["/usr/share/ollama/.ollama"]
+    settings:
+      - {format: env, key: OLLAMA_HOST, op: exists, flag: listen_address_overridden, severity: low}
+    ports: [11434]
+    api_hosts: [ollama.com]
+    signers: {darwin_team_id: 3MU9H2V9Y9}
+    capabilities: [local_inference, persistent_service]
+    notes: >-
+      launchd label com.ollama.ollama; the Linux install script creates a
+      systemd service running as user ollama with models under
+      /usr/share/ollama/.ollama/models.
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/o/ollama-app.rb
+      - https://raw.githubusercontent.com/ScoopInstaller/Main/master/bucket/ollama.json
+      - https://raw.githubusercontent.com/fleetdm/fleet/main/ee/maintained-apps/outputs/apps.json
+      - research:agent-surfaces-b.md#1c
+    unverified: [signers, install_paths.windows, install_paths.linux, api_hosts]
+
+  - id: lm-studio
+    name: LM Studio
+    vendor: Element Labs
+    kind: model_runtime
+    aliases: [lmstudio]
+    binaries: [lms]
+    process_names: [LM Studio, LM Studio Helper]
+    packages: [cask:lm-studio, scoop:lmstudio]
+    bundle_ids: [ai.elementlabs.lmstudio]
+    install_paths:
+      darwin: ["/Applications/LM Studio.app"]
+    state_dirs:
+      all: ["~/.lmstudio", "~/.cache/lm-studio"]
+      darwin: ["~/Library/Application Support/LM Studio"]
+      linux: ["~/.config/LM-Studio", "~/.config/LM Studio"]
+    mcp:
+      - {paths: ["~/.lmstudio/mcp.json"], format: mcpServers, scope: user}
+    ports: [1234]
+    capabilities: [local_inference, mcp_client]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/l/lm-studio.rb
+      - https://raw.githubusercontent.com/ScoopInstaller/Extras/master/bucket/lmstudio.json
+      - research:agent-surfaces-b.md#1c
+    unverified: [ports, mcp]
+
+  - id: llama-cpp
+    name: llama.cpp
+    vendor: ggml-org
+    kind: model_runtime
+    binaries: [llama-server, llama-cli]
+    packages: [brew:llama.cpp]
+    settings:
+      - {format: env, key: LLAMA_ARG_PORT, op: exists, flag: listen_port_overridden, severity: info}
+    ports: [9931, 8080]
+    capabilities: [local_inference, mcp_client]
+    notes: >-
+      The default port moved from 8080 to 9931 on current master. llama-server
+      can host stdio MCP servers (--mcp-servers-config, --mcp-servers-json).
+      uber/ADR also lists the binary name "server", which matches unrelated
+      programs and is not used here.
+    sources:
+      - https://raw.githubusercontent.com/ggml-org/llama.cpp/master/tools/server/README.md
+      - research:agent-surfaces-b.md#1c
+
+  - id: vllm
+    name: vLLM
+    vendor: vLLM
+    kind: model_runtime
+    binaries: [vllm]
+    process_args:
+      - '(^|\s)-m\s+vllm(\.|\s|$)'
+    packages: [pip:vllm]
+    ports: [8000]
+    capabilities: [local_inference]
+    sources:
+      - https://pypi.org/pypi/vllm/json
+      - research:agent-surfaces-b.md#1c
+    unverified: [ports]
+
+  - id: gpt4all
+    name: GPT4All
+    vendor: Nomic AI
+    kind: model_runtime
+    process_names: [GPT4All]
+    packages: [cask:gpt4all]
+    bundle_ids: [com.nomic-ai.gpt4all, com.nomic.gpt4all]
+    desktop_ids: [gpt4all]
+    state_dirs:
+      darwin: ["~/Library/Application Support/nomic.ai/GPT4All", "~/Library/Application Support/GPT4All"]
+      linux: ["~/.local/share/nomic.ai/GPT4All"]
+    ports: [4891]
+    capabilities: [local_inference]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/g/gpt4all.rb
+      - research:agent-surfaces-b.md#1c
+    # The cask only shows the preferences domain com.nomic-ai.gpt4all;
+    # uber/ADR lists com.nomic.gpt4all. Neither was read from an Info.plist.
+    unverified: [bundle_ids, desktop_ids, state_dirs.linux, process_names]
+
+  - id: jan
+    name: Jan
+    vendor: Jan
+    kind: model_runtime
+    binaries: [jan-cli]
+    process_names: [Jan]
+    packages: [cask:jan, scoop:jan, flatpak:ai.jan.Jan]
+    bundle_ids: [jan.ai.app]
+    desktop_ids: [jan, ai.jan.Jan]
+    install_paths:
+      darwin: ["/Applications/Jan.app"]
+    state_dirs:
+      darwin: ["~/Library/Application Support/Jan", "~/Library/Application Support/jan.ai.app"]
+      linux: ["~/.config/Jan", "~/.local/share/Jan"]
+    ports: [1337]
+    capabilities: [local_inference, mcp_client]
+    notes: uber/ADR lists bundle id com.jan.ai; the cask uses jan.ai.app.
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/j/jan.rb
+      - https://raw.githubusercontent.com/ScoopInstaller/Extras/master/bucket/jan.json
+      - research:agent-surfaces-b.md#1c
+    unverified: [desktop_ids]
+
+  - id: localai
+    name: LocalAI
+    vendor: LocalAI
+    kind: model_runtime
+    binaries: [local-ai]
+    packages: [brew:localai, oci:localai/localai]
+    ports: [8080]
+    capabilities: [local_inference]
+    notes: PyPI localai is an unrelated project.
+    sources: [research:agent-surfaces-b.md#1c]
+
+  - id: mlx-lm
+    name: MLX LM
+    vendor: Apple (ml-explore)
+    kind: model_runtime
+    binaries: [mlx_lm.server, mlx_lm.generate, mlx_lm.chat]
+    process_args:
+      - '(^|\s)-m\s+mlx_(lm|vlm)(\.|\s|$)'
+    packages: [pip:mlx-lm, pip:mlx-vlm]
+    ports: [8080]
+    capabilities: [local_inference]
+    sources:
+      - https://pypi.org/pypi/mlx-lm/json
+      - research:agent-surfaces-b.md#1c
+
+  - id: osaurus
+    name: Osaurus
+    vendor: Dinoki
+    kind: model_runtime
+    binaries: [osaurus]
+    process_names: [Osaurus]
+    packages: [cask:osaurus]
+    bundle_ids: [com.dinoki.osaurus]
+    state_dirs:
+      darwin: ["~/Library/Application Support/com.dinoki.osaurus", "~/Library/Application Support/Osaurus"]
+    capabilities: [local_inference, mcp_client]
+    sources:
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/o/osaurus.rb
+
+  - id: koboldcpp
+    name: KoboldCpp
+    vendor: LostRuins
+    kind: model_runtime
+    binaries: [koboldcpp]
+    packages: [scoop:koboldcpp]
+    ports: [5001]
+    capabilities: [local_inference]
+    sources:
+      - https://raw.githubusercontent.com/ScoopInstaller/Extras/master/bucket/koboldcpp.json
+      - research:agent-surfaces-b.md#1c
+
+  - id: text-generation-webui
+    name: text-generation-webui
+    vendor: oobabooga
+    kind: model_runtime
+    aliases: [oobabooga]
+    process_args:
+      - 'text-generation-webui[/\\]server\.py'
+    ports: [7860, 5000]
+    capabilities: [local_inference]
+    notes: Runs as python server.py from its checkout, so the command line is the only fingerprint.
+    sources: [research:agent-surfaces-b.md#1c]
+    unverified: [ports]
+
+  - id: lemonade
+    name: Lemonade Server
+    vendor: Lemonade
+    kind: model_runtime
+    binaries: [lemonade-server]
+    ports: [13305]
+    capabilities: [local_inference]
+    notes: Speaks the OpenAI, Anthropic and Ollama APIs.
+    sources: [research:agent-surfaces-b.md#1c]
+
+  - id: docker-model-runner
+    name: Docker Model Runner
+    vendor: Docker
+    kind: model_runtime
+    binaries: [dmr, model-runner]
+    process_args:
+      - '(^|[/\\\s])docker(\.exe)?\s+model\s+(run|serve|pull)\b'
+    ports: [12434]
+    capabilities: [local_inference]
+    sources: [research:agent-surfaces-b.md#1c]
+    unverified: [binaries]
+
+  - id: exo
+    name: exo
+    vendor: exo
+    kind: model_runtime
+    binaries: [exo]
+    state_dirs: ["~/.exo"]
+    ports: [52415]
+    capabilities: [local_inference]
+    notes: PyPI exo is an unrelated genomics tool. Serves /v1/messages and /v1/responses.
+    sources: [research:agent-surfaces-b.md#1c]
+
+  - id: litellm
+    name: LiteLLM Proxy
+    vendor: BerriAI
+    kind: model_runtime
+    binaries: [litellm, litellm-proxy]
+    packages: [pip:litellm]
+    ports: [4000]
+    capabilities: [model_gateway]
+    sources:
+      - https://pypi.org/pypi/litellm/json
+      - research:agent-surfaces-b.md#1c
+    unverified: [binaries]
+
+  - id: open-webui
+    name: Open WebUI
+    vendor: Open WebUI
+    kind: app
+    binaries: [open-webui]
+    process_names: [Open WebUI]
+    packages: [pip:open-webui, cask:open-webui]
+    bundle_ids: [com.openwebui.desktop]
+    state_dirs:
+      darwin: ["~/Library/Application Support/open-webui"]
+      linux: ["~/.config/open-webui"]
+    ports: [8080, 3000]
+    capabilities: [model_gateway, mcp_client]
+    sources:
+      - https://pypi.org/pypi/open-webui/json
+      - https://raw.githubusercontent.com/Homebrew/homebrew-cask/master/Casks/o/open-webui.rb
+      - research:agent-surfaces-b.md#1c
+
+  - id: ramalama
+    name: RamaLama
+    vendor: containers
+    kind: model_runtime
+    binaries: [ramalama]
+    packages: [pip:ramalama]
+    ports: [8080]
+    capabilities: [local_inference]
+    sources:
+      - https://pypi.org/pypi/ramalama/json
+      - research:agent-surfaces-b.md#1c
+
+  - id: foundry-local
+    name: Foundry Local
+    vendor: Microsoft
+    kind: model_runtime
+    binaries: [foundry]
+    packages: [winget:Microsoft.FoundryLocal]
+    capabilities: [local_inference]
+    notes: Listens on a dynamic port. The Ethereum toolkit Foundry is unrelated.
+    sources: [research:agent-surfaces-b.md#1c]
+    unverified: [binaries, packages]
+
+  - id: xinference
+    name: Xinference
+    vendor: Xorbits
+    kind: model_runtime
+    binaries: [xinference, xinference-local]
+    packages: [pip:xinference]
+    ports: [9997]
+    capabilities: [local_inference]
+    sources:
+      - https://pypi.org/pypi/xinference/json
+      - research:agent-surfaces-b.md#1c
+    unverified: [ports, binaries]
+
+  - id: sglang
+    name: SGLang
+    vendor: SGLang
+    kind: model_runtime
+    process_args:
+      - '(^|\s)-m\s+sglang\.launch_server(\s|$)'
+    packages: [pip:sglang]
+    ports: [30000]
+    capabilities: [local_inference]
+    sources:
+      - https://pypi.org/pypi/sglang/json
+      - research:agent-surfaces-b.md#1c
+    unverified: [ports, process_args]

@@ -3,8 +3,6 @@ package sink
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -87,23 +85,12 @@ type Shipper struct {
 	loaded bool
 	dirty  bool
 	buf    []byte
+	// proven and dropsInARow gate the dropping of refused events.
+	proven      bool
+	dropsInARow int
 
 	mu    sync.Mutex
 	stats ShipperStats
-}
-
-// fileCursor is the persisted position in one segment.
-type fileCursor struct {
-	Offset int64 `json:"off"`
-	// Fingerprint is the hex SHA-256 prefix of the first FingerprintLen
-	// bytes of the file, recorded once Offset has passed them.
-	Fingerprint    string `json:"fp,omitempty"`
-	FingerprintLen int    `json:"fpn,omitempty"`
-}
-
-type checkpointFile struct {
-	V     int                    `json:"v"`
-	Files map[string]*fileCursor `json:"files"`
 }
 
 // NewShipper returns a Shipper that reads segments from o.Dir and writes to
@@ -145,15 +132,19 @@ func (s *Shipper) count(f func(*ShipperStats)) {
 }
 
 // Run ships until ctx is cancelled, then returns nil. It returns an error
-// only for unusable options. Delivery and I/O failures are retried with
+// only for unusable options. Run must not be called concurrently on one
+// Shipper, and two Shippers must not share a checkpoint file. Delivery and I/O failures are retried with
 // exponential backoff (honouring an HTTP Retry-After) and are visible in
 // Stats, not returned: a sensor must keep trying for as long as it runs.
 //
 // Only complete lines are read. A line that is not a spoor event is counted
 // in BadLines and skipped, since waiting for it to become valid would block
-// everything behind it. When the destination permanently refuses a batch,
-// the batch is bisected to find the offending events, which are counted in
-// Dropped; everything else in it is still delivered.
+// everything behind it. When the destination permanently refuses a batch
+// (IsPermanent), the batch is bisected to find the offending events, which
+// are counted in Dropped while everything else in it is still delivered. A
+// destination that has accepted nothing in this run is not believed when it
+// calls data unacceptable: that looks like a wrong endpoint, so nothing is
+// dropped and the shipper retries.
 func (s *Shipper) Run(ctx context.Context) error {
 	if s.dst == nil {
 		return errors.New("sink shipper: nil destination")
@@ -245,7 +236,7 @@ func (s *Shipper) poll(ctx context.Context) (progress bool, err error) {
 			err = fmt.Errorf("sink shipper: %v", r)
 		}
 	}()
-	segs, err := listSegments(s.o.Dir, nil)
+	segs, err := listSegments(s.o.Dir, "")
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return false, nil // nothing has been written yet
@@ -518,137 +509,4 @@ func skipLine(f *os.File, off int64) (next int64, found bool, err error) {
 			return off, false, rerr
 		}
 	}
-}
-
-// deliver writes items to the destination and returns how many leading
-// items are settled (acknowledged, or permanently refused and dropped).
-func (s *Shipper) deliver(items []item) (int, error) {
-	if len(items) == 0 {
-		return 0, nil
-	}
-	batch := make([]*event.Event, len(items))
-	for i := range items {
-		batch[i] = items[i].ev
-	}
-	err := s.dst.Write(batch)
-	if err == nil {
-		err = s.dst.Flush()
-	}
-	switch {
-	case err == nil:
-		s.count(func(st *ShipperStats) { st.Shipped += uint64(len(items)); st.Batches++ })
-		return len(items), nil
-	case !IsPermanent(err):
-		return 0, err
-	case len(items) == 1:
-		s.count(func(st *ShipperStats) {
-			st.Dropped++
-			st.LastError = printable([]byte(err.Error()), 512)
-		})
-		return 1, nil
-	}
-	// The destination refuses this batch as a whole. Halve it to find the
-	// records it objects to, so one poisoned event costs one event.
-	mid := len(items) / 2
-	n, err := s.deliver(items[:mid])
-	if err != nil || n < mid {
-		return n, err
-	}
-	m, err := s.deliver(items[mid:])
-	return mid + m, err
-}
-
-// fingerprint hashes the first bytes of a segment, at most fingerprintLen
-// and never past upTo (the shipped offset), so the hashed range is complete
-// and, the file being append-only, will not change.
-func fingerprint(f *os.File, upTo int64) (string, int) {
-	n := int64(fingerprintLen)
-	if upTo < n {
-		n = upTo
-	}
-	if n <= 0 {
-		return "", 0
-	}
-	buf := make([]byte, n)
-	if _, err := f.ReadAt(buf, 0); err != nil {
-		return "", 0
-	}
-	sum := sha256.Sum256(buf)
-	return hex.EncodeToString(sum[:8]), int(n)
-}
-
-// sameFile reports whether f still starts with the bytes recorded in cur.
-func sameFile(f *os.File, cur *fileCursor) bool {
-	if cur.Fingerprint == "" || cur.FingerprintLen <= 0 {
-		return true
-	}
-	fp, n := fingerprint(f, int64(cur.FingerprintLen))
-	return n == cur.FingerprintLen && fp == cur.Fingerprint
-}
-
-// load reads the checkpoint. A missing file means a first run. An
-// unreadable one is treated the same way, which re-ships what is still on
-// disk: duplicates are recoverable downstream (events carry ids), a shipper
-// that refuses to start is not.
-func (s *Shipper) load() {
-	s.files = make(map[string]*fileCursor)
-	f, err := os.Open(s.o.Checkpoint)
-	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			s.count(func(st *ShipperStats) { st.Resets++ })
-		}
-		return
-	}
-	defer f.Close()
-	raw, err := io.ReadAll(io.LimitReader(f, maxCheckpoint+1))
-	var cp checkpointFile
-	if err != nil || len(raw) > maxCheckpoint || json.Unmarshal(raw, &cp) != nil || cp.V != 1 {
-		s.count(func(st *ShipperStats) { st.Resets++ })
-		return
-	}
-	for name, cur := range cp.Files {
-		if _, ok := parseSegment(name); !ok || cur == nil || cur.Offset < 0 {
-			continue
-		}
-		if cur.FingerprintLen < 0 || cur.FingerprintLen > fingerprintLen {
-			cur.Fingerprint, cur.FingerprintLen = "", 0
-		}
-		s.files[name] = cur
-	}
-}
-
-// save writes the checkpoint atomically: a uniquely named temporary file in
-// the same directory, fsync, rename over the old one. The random name and
-// exclusive create matter when the directory is writable by other users: a
-// predictable temporary name could be pre-planted as a symlink.
-func (s *Shipper) save() error {
-	if !s.dirty {
-		return nil
-	}
-	raw, err := json.Marshal(checkpointFile{V: 1, Files: s.files})
-	if err != nil {
-		return err
-	}
-	dir := filepath.Dir(s.o.Checkpoint)
-	tmp, err := os.CreateTemp(dir, filepath.Base(s.o.Checkpoint)+".*.tmp")
-	if err != nil {
-		return fmt.Errorf("sink shipper: checkpoint: %w", err)
-	}
-	_, err = tmp.Write(raw)
-	if err == nil {
-		err = tmp.Sync()
-	}
-	if cerr := tmp.Close(); err == nil {
-		err = cerr
-	}
-	if err == nil {
-		err = os.Rename(tmp.Name(), s.o.Checkpoint)
-	}
-	if err != nil {
-		os.Remove(tmp.Name())
-		return fmt.Errorf("sink shipper: checkpoint: %w", err)
-	}
-	s.dirty = false
-	_ = syncDir(dir)
-	return nil
 }

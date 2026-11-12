@@ -6,11 +6,12 @@ import (
 
 // Evidence classes reported by MatchProcessDetail.
 const (
-	EvidenceProcessName = "process_name" // the process or executable basename is the product's
-	EvidenceScriptName  = "script_name"  // an interpreter is running a script named like the product's binary
-	EvidencePath        = "path"         // the executable lives under one of the product's install paths
-	EvidencePackagePath = "package_path" // the executable or script lives inside one of the product's packages
-	EvidenceArgs        = "args"         // the command line matches a ProcessArgs pattern or launches the product's package
+	EvidenceProcessName = "process_name"      // the process or executable basename is the product's
+	EvidenceScriptName  = "script_name"       // an interpreter is running a script named like the product's binary
+	EvidencePath        = "path"              // the executable lives under one of the product's install paths
+	EvidenceBundleExe   = "bundle_executable" // the executable is the main binary of the product's macOS app bundle
+	EvidencePackagePath = "package_path"      // the executable or script lives inside one of the product's packages
+	EvidenceArgs        = "args"              // the command line matches a ProcessArgs pattern or launches the product's package
 )
 
 // Bounds on attacker-controlled process data. A command line is whatever the
@@ -37,9 +38,13 @@ type ProcessMatch struct {
 // product's binaries or process names, or the command line to show the
 // product being launched (a ProcessArgs pattern, a script inside the
 // product's package, or a package runner such as npx naming the package).
-// A name on the ambiguous list (goose, amp, q, agent, gemini ...) is not
+// The main executable of a catalogued macOS app bundle counts as a name
+// match whatever the file is called. A name on the ambiguous list (goose, amp, q, agent, gemini ...) is not
 // enough alone: it needs a second class of evidence from the path or the
 // arguments. A process named goose in /usr/games does not match.
+//
+// A path on its own never identifies a process, and path evidence is
+// lexical: verifying a code signature is the caller's job.
 //
 // When several products qualify, the one with the most evidence classes
 // wins; ties go to the innermost package directory, then to an exact-case
@@ -58,7 +63,7 @@ func (c *Catalog) MatchProcessDetail(name, exe string, args []string) (m Process
 			m, ok = ProcessMatch{}, false
 		}
 	}()
-	s := c.snap.Load()
+	s := c.current()
 	in := newProcInput(name, exe, args)
 
 	cands := map[int]*candidate{}
@@ -110,7 +115,7 @@ func (c *Catalog) MatchProcessDetail(name, exe string, args []string) (m Process
 		for _, i := range s.byExe[key] {
 			cd := get(i)
 			cd.script = true
-			if _, same := s.matchers[i].pkgByEco[eco]; same {
+			if s.matchers[i].ecos[eco] {
 				cd.args = true
 			} else if !s.isAmbiguous(key) {
 				cd.nameStrong = true
@@ -141,9 +146,17 @@ func (c *Catalog) MatchProcessDetail(name, exe string, args []string) (m Process
 	// 4. Package directories. The executable path is always checked; the
 	// script path only for interpreters, so that "vim .../claude-code/cli.js"
 	// is an editor and not an agent.
-	exeLower := strings.ToLower(in.exePath)
-	scriptLower := ""
-	if !script.module {
+	//
+	// Path evidence is lexical. The OS reports executable paths in canonical
+	// form, so a ".." element means the value did not come from the OS or
+	// was built to borrow another product's directory
+	// (".../claude-code/../../evil.js"); such a path earns nothing.
+	exeLower, scriptLower := "", ""
+	exeClean := in.exePath != "" && !hasDotDotElement(in.exePath)
+	if exeClean {
+		exeLower = strings.ToLower(in.exePath)
+	}
+	if !script.module && !hasDotDotElement(script.value) {
 		scriptLower = strings.ToLower(slashed(script.value))
 	}
 	for i := range s.matchers {
@@ -188,8 +201,23 @@ func (c *Catalog) MatchProcessDetail(name, exe string, args []string) (m Process
 		}
 	}
 
-	// 6. Install paths, for products that are already candidates.
-	if in.exePath != "" {
+	// 6. The main executable of a catalogued macOS app bundle. Its file
+	// name is whatever the vendor's build produced (Visual Studio Code runs
+	// as "Electron"), so the bundle location stands in for the name.
+	if exeClean && strings.Contains(exeLower, ".app/contents/macos/") {
+		for i := range s.matchers {
+			for _, re := range s.matchers[i].bundles {
+				if re.MatchString(in.exePath) {
+					cd := get(i)
+					cd.bundle, cd.path = true, true
+					break
+				}
+			}
+		}
+	}
+
+	// 7. Install paths, for products that are already candidates.
+	if exeClean {
 		for i, cd := range cands {
 			for _, re := range s.matchers[i].paths {
 				if re.MatchString(in.exePath) {
@@ -226,6 +254,7 @@ type candidate struct {
 	nameStrong bool // ... and that name is not ambiguous
 	exactCase  bool
 	script     bool // interpreter script basename matched
+	bundle     bool // main executable of the product's macOS app bundle
 	path       bool // install path
 	pkgExe     bool // executable inside the product's package directory
 	pkgScript  bool // interpreter script inside the product's package directory
@@ -234,7 +263,7 @@ type candidate struct {
 	argsRe     bool // ProcessArgs pattern
 }
 
-func (c *candidate) hasName() bool { return c.name || c.script }
+func (c *candidate) hasName() bool { return c.name || c.script || c.bundle }
 func (c *candidate) hasPath() bool { return c.path || c.pkgExe }
 func (c *candidate) hasArgs() bool { return c.args || c.argsRe || c.pkgScript }
 
@@ -256,7 +285,7 @@ func (c *candidate) qualifies() bool {
 	if !c.hasName() {
 		return false // a path alone never identifies a process
 	}
-	return c.nameStrong || c.hasPath()
+	return c.nameStrong || c.bundle || c.hasPath()
 }
 
 func (c *candidate) better(o *candidate, s *snapshot) bool {
@@ -284,6 +313,9 @@ func (c *candidate) evidence() []string {
 	}
 	if c.script {
 		out = append(out, EvidenceScriptName)
+	}
+	if c.bundle {
+		out = append(out, EvidenceBundleExe)
 	}
 	if c.path {
 		out = append(out, EvidencePath)
@@ -422,12 +454,18 @@ func (in *procInput) scriptArg() scriptRef {
 		case a == "":
 			continue
 		case a == "-m" || a == "--":
-			if i+1 < len(in.args) {
+			if i+1 < len(in.args) && len(in.args[i+1]) <= maxCmdline {
 				return scriptRef{value: in.args[i+1], index: i + 1, module: a == "-m"}
 			}
 			return scriptRef{}
 		case strings.HasPrefix(a, "-"):
 			continue
+		}
+		// No script path is longer than a command line we would keep, and
+		// the package-directory checks scan this value once per catalogued
+		// package: an attacker-sized argument must not buy that much work.
+		if len(a) > maxCmdline {
+			return scriptRef{}
 		}
 		return scriptRef{value: a, index: i}
 	}
@@ -470,7 +508,9 @@ func (in *procInput) launcherSpecs(script scriptRef, isLauncher *bool) []launchS
 				continue
 			}
 			for _, a := range firstOperands(rest, f.eco) {
-				out = append(out, launchSpec{f.eco, specName(a, f.eco)})
+				if len(a) <= maxStringLen { // longer than any package name
+					out = append(out, launchSpec{f.eco, specName(a, f.eco)})
+				}
 			}
 		}
 	}

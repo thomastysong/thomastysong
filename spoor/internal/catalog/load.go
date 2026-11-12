@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"gopkg.in/yaml.v3"
@@ -30,6 +31,24 @@ const (
 // for concurrent use; LoadOverlay swaps in a new snapshot atomically.
 type Catalog struct {
 	snap atomic.Pointer[snapshot]
+	// overlayMu serializes LoadOverlay so two concurrent calls layer one
+	// after the other instead of the second discarding the first.
+	overlayMu sync.Mutex
+}
+
+// emptySnap backs a zero Catalog, so a caller that ignored a Load error (or
+// declared a Catalog by value) gets "nothing matches" instead of a nil
+// dereference in the middle of a scan.
+var emptySnap = &snapshot{source: &state{interpreters: map[string]string{}}}
+
+func (c *Catalog) current() *snapshot {
+	if c == nil {
+		return emptySnap
+	}
+	if s := c.snap.Load(); s != nil {
+		return s
+	}
+	return emptySnap
 }
 
 // dataFile is the on-disk shape of one catalog YAML file.
@@ -57,10 +76,31 @@ type entry struct {
 // Load parses and validates the embedded catalog. It fails if an id is
 // duplicated, if a product has no fingerprint, or if two products claim the
 // same fingerprint without listing each other in Aliases.
-func Load() (c *Catalog, err error) {
+//
+// The embedded data is parsed once per process (about 12 ms, nearly all of
+// it YAML decoding) and the immutable result is shared by every Catalog that
+// Load returns. A short-lived process that does not need the catalog, such
+// as the hook entry point, should not call Load at all.
+func Load() (*Catalog, error) {
+	baseOnce.Do(func() { baseSnap, baseErr = loadEmbedded() })
+	if baseErr != nil {
+		return nil, baseErr
+	}
+	c := &Catalog{}
+	c.snap.Store(baseSnap)
+	return c, nil
+}
+
+var (
+	baseOnce sync.Once
+	baseSnap *snapshot
+	baseErr  error
+)
+
+func loadEmbedded() (snap *snapshot, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			c, err = nil, fmt.Errorf("catalog: internal error loading embedded data: %v", r)
+			snap, err = nil, fmt.Errorf("catalog: internal error loading embedded data: %v", r)
 		}
 	}()
 	names, err := fs.Glob(dataFS, "data/*.yaml")
@@ -86,13 +126,7 @@ func Load() (c *Catalog, err error) {
 			return nil, err
 		}
 	}
-	snap, err := st.build()
-	if err != nil {
-		return nil, err
-	}
-	c = &Catalog{}
-	c.snap.Store(snap)
-	return c, nil
+	return st.build()
 }
 
 type namedFile struct {
@@ -187,6 +221,9 @@ func parseEntry(n *yaml.Node) (entry, error) {
 		return e, err
 	}
 	if err := body.Decode(&e.Product); err != nil {
+		if strings.HasPrefix(err.Error(), "line ") {
+			return e, err // already located by a custom unmarshaler
+		}
 		return e, fmt.Errorf("line %d: %w", n.Line, err)
 	}
 	return e, nil
@@ -204,6 +241,11 @@ func strictCheck(n *yaml.Node, t reflect.Type, depth int) error {
 	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
+	// Anchors keep the data files short (one settings file list reused by
+	// several probes); check what the alias points at.
+	if n.Kind == yaml.AliasNode && n.Alias != nil {
+		n = n.Alias
+	}
 	if reflect.PointerTo(t).Implements(unmarshalerType) {
 		return nil // the type validates its own keys (OSPaths)
 	}
@@ -218,6 +260,13 @@ func strictCheck(n *yaml.Node, t reflect.Type, depth int) error {
 		fields := yamlFields(t)
 		for i := 0; i+1 < len(n.Content); i += 2 {
 			k, v := n.Content[i], n.Content[i+1]
+			if k.Tag == "!!merge" {
+				// "<<: *anchor" contributes the anchor's keys to this struct.
+				if err := strictCheck(v, t, depth+1); err != nil {
+					return err
+				}
+				continue
+			}
 			f, ok := fields[k.Value]
 			if !ok {
 				return fmt.Errorf("line %d: unknown key %q", k.Line, k.Value)
@@ -315,5 +364,3 @@ func mergeProduct(base Product, e entry) Product {
 	}
 	return out
 }
-
-func sortStrings(s []string) { sort.Strings(s) }

@@ -115,8 +115,7 @@ type impl interface {
 	events() []HookEvent
 }
 
-// registry order is the order All returns and the tie-break order nowhere
-// else relies on.
+// registry is every dialect, in the order All returns them.
 var registry = []impl{
 	claudeWire{codex: false},
 	claudeWire{codex: true},
@@ -214,9 +213,10 @@ func (g guard) Respond(req *Request, d Decision) (stdout, stderr []byte, exitCod
 	defer func() {
 		if r := recover(); r != nil {
 			// Rendering failed. If the caller wanted a block on a gateable
-			// event, fall back to the one signal all five agents read as
-			// "block" (exit 2 with a reason on stderr); otherwise stay out of
-			// the agent's way.
+			// event, fall back to the nearest thing to a universal block:
+			// exit 2 with a reason on stderr (honoured by Codex, Gemini,
+			// Copilot and by Claude Code except on PermissionRequest;
+			// UNVERIFIED for Cursor). Otherwise stay out of the agent's way.
 			if req != nil && req.Blocking && d.Action == ActionDeny {
 				stdout, stderr, exitCode = nil, []byte("spoor: blocked by policy\n"), 2
 				return

@@ -1,0 +1,162 @@
+package hookinstall
+
+import (
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"github.com/thomastysong/spoor/internal/event"
+)
+
+// related is what the other configuration files of an agent say about the
+// file a plan is about to write. Hooks from several files combine at run
+// time, so "is another sensor already hooked in" and "is telemetry already
+// routed somewhere" cannot be answered from the target file alone.
+type related struct {
+	// sensors maps a foreign sensor to the file that registers it.
+	sensors map[string]string
+	// otelPinned names a file that already configures a telemetry
+	// destination, with the member that does.
+	otelPinned string
+	// managedOnly names a managed file that makes the agent ignore user
+	// hooks (Claude Code allowManagedHooksOnly, Codex
+	// allow_managed_hooks_only).
+	managedOnly string
+	// checked lists the files that were read, for Status.Detail.
+	checked []string
+}
+
+func (r *related) sensor(name, path string) {
+	if r.sensors == nil {
+		r.sensors = map[string]string{}
+	}
+	if _, ok := r.sensors[name]; !ok {
+		r.sensors[name] = path
+	}
+}
+
+func (r related) sensorList() []string {
+	out := make([]string, 0, len(r.sensors))
+	for n := range r.sensors {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// relatedFiles lists the other files of the same agent that take part in
+// hook loading, with the layout each one uses.
+func relatedFiles(t target, o Options) []relFile {
+	var out []relFile
+	add := func(path string, kind fileKind, managed bool) {
+		if path == "" || path == t.path {
+			return
+		}
+		for _, f := range out {
+			if f.path == path {
+				return
+			}
+		}
+		out = append(out, relFile{path: path, kind: kind, managed: managed})
+	}
+	managedTarget := func() (target, bool) {
+		if t.scope == event.ScopeManaged {
+			return t, true
+		}
+		mt := resolveTarget(t.product, o, event.ScopeManaged)
+		return mt, mt.unsupported == ""
+	}
+	switch t.dialect {
+	case "claude":
+		// managed-settings.json and every managed-settings.d/*.json merge
+		// into one policy.
+		if mt, ok := managedTarget(); ok {
+			dir := filepath.Dir(mt.path)
+			if strings.EqualFold(filepath.Base(dir), "managed-settings.d") {
+				add(filepath.Join(filepath.Dir(dir), "managed-settings.json"), kindGroups, true)
+				for _, p := range jsonSiblings(dir) {
+					add(p, kindGroups, true)
+				}
+			} else {
+				add(mt.path, kindGroups, true)
+			}
+		}
+	case "copilot":
+		// Every *.json of the policy or user hooks directory is loaded.
+		for _, p := range jsonSiblings(t.dir()) {
+			add(p, kindFlat, t.scope != event.ScopeUser)
+		}
+	case "codex":
+		managed := t.scope != event.ScopeUser
+		add(filepath.Join(t.dir(), "hooks.json"), kindGroups, managed)
+		add(filepath.Join(t.dir(), "config.toml"), kindTOML, managed)
+		add(filepath.Join(t.dir(), "requirements.toml"), kindTOML, managed)
+		if mt, ok := managedTarget(); ok && t.scope == event.ScopeUser {
+			add(filepath.Join(filepath.Dir(mt.path), "requirements.toml"), kindTOML, true)
+		}
+	case "gemini":
+		if mt, ok := managedTarget(); ok {
+			add(mt.path, kindGroups, true)
+		}
+	}
+	return out
+}
+
+type relFile struct {
+	path    string
+	kind    fileKind
+	managed bool
+}
+
+// inspectRelated reads the related files. Files that are missing, are not
+// regular or do not parse are skipped: they cannot register a hook either.
+func inspectRelated(t target, o Options) related {
+	var r related
+	var spec otelSpec
+	haveSpec := false
+	if o.OTel != "" {
+		if ep, err := parseOTelEndpoint(o.OTel); err == nil {
+			spec, haveSpec = jsonOTel(t.dialect, ep)
+		}
+	}
+	for _, f := range relatedFiles(t, o) {
+		st := readFile(f.path)
+		if !st.exists || st.refused != "" {
+			continue
+		}
+		r.checked = append(r.checked, f.path)
+		if f.kind == kindTOML {
+			td, err := parseTOML(st.data)
+			if err != nil {
+				continue
+			}
+			_, _, sensors := td.counts()
+			for _, s := range sensors {
+				r.sensor(s, f.path)
+			}
+			if td.managedOnly && f.managed && r.managedOnly == "" && strings.EqualFold(filepath.Base(f.path), "requirements.toml") {
+				r.managedOnly = f.path
+			}
+			continue
+		}
+		d, err := parseJSON(st.data)
+		if err != nil {
+			continue
+		}
+		_, sensors := scanHooks(d, f.kind).foreign()
+		for _, s := range sensors {
+			r.sensor(s, f.path)
+		}
+		if f.managed && t.dialect == "claude" && r.managedOnly == "" {
+			if _, v := d.root.member("allowManagedHooksOnly"); v != nil && v.kind == kindBool && v.b {
+				r.managedOnly = f.path
+			}
+		}
+		if haveSpec && r.otelPinned == "" && f.managed {
+			if c := spec.conflicts(d); len(c) > 0 {
+				r.otelPinned = f.path + " (" + strings.Join(c, ", ") + ")"
+			}
+		}
+	}
+	return r
+}

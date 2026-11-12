@@ -73,19 +73,9 @@ func (o OSPaths) clone() OSPaths {
 func (o *OSPaths) UnmarshalYAML(n *yaml.Node) error {
 	*o = OSPaths{}
 	switch n.Kind {
-	case yaml.ScalarNode:
-		if n.Tag == "!!null" {
-			return nil
-		}
-		var s string
-		if err := n.Decode(&s); err != nil {
-			return err
-		}
-		o.addAll([]string{s})
-		return nil
-	case yaml.SequenceNode:
+	case yaml.ScalarNode, yaml.SequenceNode:
 		var l []string
-		if err := n.Decode(&l); err != nil {
+		if err := decodeStringList(n, &l); err != nil {
 			return err
 		}
 		o.addAll(l)
@@ -95,7 +85,7 @@ func (o *OSPaths) UnmarshalYAML(n *yaml.Node) error {
 			key := n.Content[i].Value
 			var l []string
 			if err := decodeStringList(n.Content[i+1], &l); err != nil {
-				return fmt.Errorf("line %d: %s: %w", n.Content[i].Line, key, err)
+				return fmt.Errorf("%w (under %q)", err, key)
 			}
 			switch key {
 			case "all":
@@ -125,19 +115,38 @@ func (o *OSPaths) addAll(l []string) {
 	o.Windows = append(o.Windows, l...)
 }
 
+// decodeStringList reads a string or a list of strings. yaml.v3 would
+// happily turn 42 or true into "42" and "true"; a path list that is not made
+// of strings is a mistake in the file, so it is reported.
 func decodeStringList(n *yaml.Node, out *[]string) error {
-	if n.Kind == yaml.ScalarNode {
+	if n.Kind == yaml.AliasNode && n.Alias != nil {
+		n = n.Alias
+	}
+	switch n.Kind {
+	case yaml.ScalarNode:
 		if n.Tag == "!!null" {
 			return nil
 		}
-		var s string
-		if err := n.Decode(&s); err != nil {
-			return err
+		if n.Tag != "!!str" {
+			return fmt.Errorf("line %d: expected a string, found %s", n.Line, strings.TrimPrefix(n.Tag, "!!"))
 		}
-		*out = []string{s}
+		*out = []string{n.Value}
+		return nil
+	case yaml.SequenceNode:
+		l := make([]string, 0, len(n.Content))
+		for _, c := range n.Content {
+			if c.Kind == yaml.AliasNode && c.Alias != nil {
+				c = c.Alias
+			}
+			if c.Kind != yaml.ScalarNode || c.Tag != "!!str" {
+				return fmt.Errorf("line %d: expected a string in the list", c.Line)
+			}
+			l = append(l, c.Value)
+		}
+		*out = l
 		return nil
 	}
-	return n.Decode(out)
+	return fmt.Errorf("line %d: expected a string or a list of strings", n.Line)
 }
 
 // MCPConfig describes one place an agent declares MCP servers.
@@ -220,8 +229,9 @@ type Product struct {
 	// Packages are "<mgr>:<name>" references; see PackageManagers.
 	Packages  []string `yaml:"packages,omitempty" json:"packages,omitempty"`
 	BundleIDs []string `yaml:"bundle_ids,omitempty" json:"bundle_ids,omitempty"`
-	// WinDisplay are registry Uninstall DisplayName patterns
-	// (case-insensitive, matched on word boundaries).
+	// WinDisplay are registry Uninstall DisplayName patterns: a
+	// case-insensitive substring matched on word boundaries, optionally
+	// anchored with a leading "^" and a trailing "$".
 	WinDisplay []string `yaml:"win_display,omitempty" json:"win_display,omitempty"`
 	Appx       []string `yaml:"appx,omitempty" json:"appx,omitempty"`
 	DesktopIDs []string `yaml:"desktop_ids,omitempty" json:"desktop_ids,omitempty"`

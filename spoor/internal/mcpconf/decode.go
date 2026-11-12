@@ -25,9 +25,23 @@ const (
 	synYAML syntax = "yaml"
 )
 
-// maxTOMLNesting bounds arrays and inline tables in TOML input. Real configs
-// nest three or four levels. See tomlNestingOK for why the bound exists.
-const maxTOMLNesting = 64
+const (
+	// maxTOMLNesting bounds arrays and inline tables in TOML input and
+	// maxTOMLKeyParts the dots in one key or table header. Real configs
+	// nest three or four levels. See tomlGuard for why the bounds exist.
+	maxTOMLNesting  = 64
+	maxTOMLKeyParts = 32
+	// maxYAMLDepth bounds nesting after aliases are followed.
+	maxYAMLDepth = 512
+	// maxNodes bounds the values in one document (for YAML: after alias
+	// expansion). A decoded value costs 50-100 bytes whatever the syntax, so
+	// 20 MiB of "[[],[],..." would otherwise cost hundreds of megabytes.
+	// A multi-megabyte ~/.claude.json holds a few hundred thousand values.
+	maxNodes = 2_000_000
+	// maxYAMLNodes is the same budget for YAML, lower because the parser's
+	// node tree is several times heavier and YAML agent configs are small.
+	maxYAMLNodes = 500_000
+)
 
 // toUTF8 returns text in UTF-8 without a byte-order mark.
 //
@@ -200,7 +214,11 @@ func decode(path string, text []byte, f Format) (any, error) {
 }
 
 func decodeJSON(text []byte) (any, error) {
-	dec := json.NewDecoder(bytes.NewReader(jsoncToJSON(text)))
+	clean, nodes := jsoncToJSON(text)
+	if nodes > maxNodes {
+		return nil, &SyntaxError{Syntax: string(synJSON), Reason: "too many values in"}
+	}
+	dec := json.NewDecoder(bytes.NewReader(clean))
 	// Numbers keep their written form ("8080", not 8080.000000) because
 	// they end up as argv and env strings.
 	dec.UseNumber()
@@ -226,8 +244,8 @@ func decodeJSON(text []byte) (any, error) {
 }
 
 func decodeTOML(text []byte) (any, error) {
-	if !tomlNestingOK(text) {
-		return nil, &SyntaxError{Syntax: string(synTOML), Reason: "too deeply nested"}
+	if reason := tomlGuard(text); reason != "" {
+		return nil, &SyntaxError{Syntax: string(synTOML), Reason: reason}
 	}
 	var m map[string]any
 	if err := toml.Unmarshal(text, &m); err != nil {
@@ -242,50 +260,186 @@ func decodeTOML(text []byte) (any, error) {
 }
 
 func decodeYAML(text []byte) (any, error) {
-	// yaml.v3 bounds nesting (10000) and alias expansion itself.
-	var v any
-	if err := yaml.Unmarshal(text, &v); err != nil {
+	malformed := func(err error) error {
 		line := 0
 		if m := reYAMLLine.FindStringSubmatch(err.Error()); m != nil {
 			line, _ = strconv.Atoi(m[1])
 		}
-		return nil, &SyntaxError{Syntax: string(synYAML), Line: line, Reason: "malformed"}
+		return &SyntaxError{Syntax: string(synYAML), Line: line, Reason: "malformed"}
+	}
+	// A yaml.Node costs about 200 bytes, so the size of the tree is bounded
+	// before it is built. Every YAML value is introduced by a line start or
+	// one of a few indicator bytes; counting those bounds the node count
+	// from above. Agent configs are far below the limit.
+	indicators := 0
+	for _, c := range text {
+		switch c {
+		case '\n', ',', ':', '[', '{', '-', '?':
+			indicators++
+		}
+	}
+	if indicators > maxYAMLNodes {
+		return nil, &SyntaxError{Syntax: string(synYAML), Reason: "too many values in"}
+	}
+	// Parsing into a Node tree keeps aliases as pointers, so the document can
+	// be measured before anything is expanded.
+	var doc yaml.Node
+	if err := yaml.Unmarshal(text, &doc); err != nil {
+		return nil, malformed(err)
+	}
+	if reason := yamlGuard(&doc); reason != "" {
+		return nil, &SyntaxError{Syntax: string(synYAML), Reason: reason}
+	}
+	var v any
+	if err := doc.Decode(&v); err != nil {
+		return nil, malformed(err)
 	}
 	return v, nil
 }
 
-// tomlNestingOK reports whether no array or inline table nests deeper than
-// maxTOMLNesting.
+type yamlMeasure struct{ size, height, bytes int }
+
+// yamlGuard measures a document as it will be once aliases are followed.
 //
-// The TOML decoder recurses once per nesting level without a limit, and a Go
-// stack overflow is a fatal error that recover cannot catch: a 3 MiB file of
-// "[" would kill the sensor. So depth is measured here first, with a scanner
-// that follows TOML's string and comment rules exactly. Exactness matters in
-// one direction only: whenever this scanner believes it is inside a string or
-// comment, the real lexer must either agree or have already failed.
-func tomlNestingOK(text []byte) bool {
-	depth := 0
+// yaml.v3 limits nesting (10000) while parsing and limits alias expansion by
+// ratio while decoding. Two things remain open: anchors that wrap an alias to
+// the previous anchor compose to a nesting of tens of thousands of levels for
+// the recursive decoder, and the ratio still admits a hundredfold expansion
+// of a mid-sized document. This walk applies one budget to both the number
+// of values and the depth. It never descends into an alias target: targets
+// precede their aliases, so their measure is already known.
+func yamlGuard(doc *yaml.Node) string {
+	memo := make(map[*yaml.Node]yamlMeasure)
+	open := make(map[*yaml.Node]bool)
+	bad := ""
+	var walk func(n *yaml.Node) yamlMeasure
+	walk = func(n *yaml.Node) yamlMeasure {
+		if n == nil || bad != "" {
+			return yamlMeasure{}
+		}
+		if n.Kind == yaml.AliasNode {
+			m, ok := memo[n.Alias]
+			if !ok || open[n.Alias] {
+				bad = "malformed" // alias to an enclosing or unknown node
+				return yamlMeasure{}
+			}
+			return m
+		}
+		if n.Anchor != "" {
+			open[n] = true
+		}
+		m := yamlMeasure{size: 1, bytes: len(n.Value)}
+		for _, c := range n.Content {
+			cm := walk(c)
+			m.size += cm.size
+			m.bytes += cm.bytes
+			if cm.height+1 > m.height {
+				m.height = cm.height + 1
+			}
+			// Bytes are budgeted as well as nodes: one large scalar behind
+			// many aliases is few nodes but a lot of text to scan later.
+			if m.size > maxYAMLNodes || m.bytes > MaxFileSize {
+				bad = "too many values in"
+			} else if m.height > maxYAMLDepth {
+				bad = "too deeply nested"
+			}
+			if bad != "" {
+				return yamlMeasure{}
+			}
+		}
+		if n.Anchor != "" {
+			delete(open, n)
+			memo[n] = m
+		}
+		return m
+	}
+	walk(doc)
+	return bad
+}
+
+// tomlGuard returns "" when the TOML decoder can be trusted with text, or
+// the reason it cannot.
+//
+// The decoder (BurntSushi/toml) has two failure modes that no recover can
+// catch. It recurses once per nesting level without a limit, so a 3 MiB file
+// of "[" overflows the stack; and its memory use is quadratic in the number
+// of parts of a dotted key, so a 64 KiB key of 32000 parts allocates over
+// 12 GiB. Both are measured here first, by a scanner that follows TOML's
+// string and comment rules exactly. Exactness matters in one direction only:
+// wherever this scanner believes it is inside a string, a comment or a value,
+// the real lexer must either agree or have already rejected the file.
+func tomlGuard(text []byte) string {
+	var (
+		stack  [maxTOMLNesting]byte
+		depth  int
+		keyPos = true // reading a key: line start at top level, or inside an inline table
+		header bool   // inside a [table] or [[array-of-tables]] header
+		dots   int
+		values int
+	)
 	n := len(text)
 	for i := 0; i < n; i++ {
-		switch text[i] {
+		c := text[i]
+		switch c {
 		case '#':
 			for i < n && text[i] != '\n' {
 				i++
 			}
+			i-- // let the newline be seen
 		case '"', '\'':
 			i = skipTOMLString(text, i)
+		case '\n':
+			if depth == 0 {
+				keyPos, header, dots = true, false, 0
+			}
+		case '=':
+			if keyPos && !header {
+				keyPos = false
+				values++
+			}
+		case '.':
+			if keyPos {
+				dots++
+				if dots > maxTOMLKeyParts {
+					return "too deeply nested"
+				}
+			}
 		case '[', '{':
+			if c == '[' && keyPos && depth == 0 {
+				header = true
+				continue
+			}
+			if header {
+				continue
+			}
+			if depth >= maxTOMLNesting {
+				return "too deeply nested"
+			}
+			stack[depth] = c
 			depth++
-			if depth > maxTOMLNesting {
-				return false
+			values++
+			if c == '{' {
+				keyPos, dots = true, 0
 			}
 		case ']', '}':
+			if header {
+				continue
+			}
 			if depth > 0 {
 				depth--
 			}
+			keyPos = false
+		case ',':
+			values++
+			if depth > 0 && stack[depth-1] == '{' {
+				keyPos, dots = true, 0
+			}
+		}
+		if values > maxNodes {
+			return "too many values in"
 		}
 	}
-	return true
+	return ""
 }
 
 // skipTOMLString returns the index of the last byte of the string that opens
@@ -320,7 +474,7 @@ func skipTOMLString(text []byte, i int) int {
 	for j < n {
 		c := text[j]
 		if c == '\n' {
-			return j
+			return j - 1 // the caller still has to see the newline
 		}
 		if basic && c == '\\' {
 			j += 2

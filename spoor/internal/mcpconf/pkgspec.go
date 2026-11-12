@@ -65,10 +65,15 @@ func parseNpmSpec(s string) pkgSpec {
 		return pkgSpec{name: s, local: true}
 	}
 	ls := strings.ToLower(s)
-	for _, p := range []string{"git+", "git://", "github:", "gitlab:", "bitbucket:", "gist:", "http://", "https://", "ssh://"} {
+	for _, p := range []string{"git+", "github:", "gitlab:", "bitbucket:", "gist:"} {
 		if strings.HasPrefix(ls, p) {
 			return remoteSpec(s, "#")
 		}
+	}
+	if strings.Contains(s, "://") {
+		// A URL anywhere (also "alias@https://...") is kept whole so that
+		// output redaction sees it as a URL, credentials included.
+		return remoteSpec(s, "#")
 	}
 	name, ver := s, ""
 	if at := strings.LastIndex(s, "@"); at > 0 {

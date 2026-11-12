@@ -30,6 +30,9 @@ func platformHostID() (id, src string) {
 // byte. It is tried first because spawning ioreg costs tens of milliseconds
 // and the hook process pays that on every tool call.
 //
+// The kernel side (XNU bsd/kern/sys_generic.c) copies out IOPlatformUUID
+// after waiting at most the given time for IOKit to publish it.
+//
 // UNVERIFIED: not executed on macOS in the build environment. A failure or an
 // all-zero answer falls back to ioreg.
 func hostUUIDSyscall() string {

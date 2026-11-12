@@ -18,6 +18,28 @@
 // before they replace anything. An overlay that fails validation leaves the
 // catalog exactly as it was.
 //
+// # Adding a product
+//
+// Add an entry to the data file for its category (agents, ides, desktop,
+// runtimes, extensions, browsers). The keys are the YAML spellings of the
+// Product fields. Path lists take the same paths for every OS as a plain
+// list, or a mapping keyed by all, posix, linux, darwin and windows. Paths
+// may use ~, $VAR, %VAR% and ${VAR:-default}; the last form is how a
+// relocatable state directory is written
+// ("${CODEX_HOME:-~/.codex}/sessions/..."). List where each fact came from
+// in sources and name every field you could not check in unverified. Load
+// (and the package tests) reject unknown keys, generic binary names,
+// fingerprints shared without mutual aliases and paths that are not rooted.
+//
+// A site can add or override products without rebuilding by dropping YAML
+// files of the same shape into a directory given to LoadOverlay.
+//
+// # Cost
+//
+// The first Load in a process parses the embedded YAML, which takes about
+// 12 ms; later calls share the parsed data and cost nothing. The hook entry
+// point runs once per agent event and should not load the catalog.
+//
 // # Identity needs two kinds of evidence for short names
 //
 // A process called goose, amp, q, agent or gemini is very often not an AI
@@ -25,7 +47,11 @@
 // therefore refuses to identify a process from an ambiguous name alone; it
 // needs a second, independent class of evidence: an install path specific to
 // the product, a package directory in the executable or script path, or a
-// command-line pattern. The list of ambiguous names is data
+// command-line pattern. A path never identifies a process on its own, with
+// one exception: the main executable of a catalogued macOS app bundle, whose
+// file name is arbitrary (Visual Studio Code runs as "Electron"). All path
+// evidence is lexical; checking a code signature against Product.Signers is
+// the caller's job. The list of ambiguous names is data
 // (ambiguous_names in the YAML files); names of one or two characters are
 // always ambiguous.
 //

@@ -52,8 +52,8 @@ func jsonLine(v any) []byte {
 func proceed() ([]byte, []byte, int) { return nil, nil, 0 }
 
 // exitBlock is the exit-code form of a block: code 2 with the reason on
-// stderr. Claude Code, Codex, Copilot (preToolUse, permissionRequest) and
-// Gemini document it; it carries no stdout so nothing can be misparsed.
+// stderr and nothing on stdout, so nothing can be misparsed. It is Codex's
+// documented block for PreToolUse, UserPromptSubmit and PermissionRequest.
 func exitBlock(msg string) ([]byte, []byte, int) {
 	return nil, []byte(msg + "\n"), 2
 }

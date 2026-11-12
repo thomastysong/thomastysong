@@ -11,8 +11,11 @@ import (
 )
 
 // PeerCred returns the effective uid and the pid of the process on the other
-// end of a unix socket (LOCAL_PEERCRED and LOCAL_PEERPID). pid is 0 when the
-// kernel does not report one.
+// end of a unix socket (LOCAL_PEERCRED and LOCAL_PEERPID). The uid was
+// recorded by the kernel at connect time. The pid is the last process that
+// operated on the peer's socket (XNU bsd/kern/uipc_usrreq.c), so a peer that
+// hands its descriptor to another process changes it; treat it as a hint and
+// the uid as the credential. pid is 0 when the kernel does not report one.
 //
 // UNVERIFIED: compiled and vetted for darwin, not executed in the build
 // environment. The option names and levels are the ones x/sys/unix tests.

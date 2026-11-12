@@ -122,10 +122,11 @@ func urlCredential(raw string) bool {
 	u := splitURL(raw)
 	if u.userinfo != "" {
 		user, pass, hasPass := strings.Cut(u.userinfo, ":")
-		// A lone userinfo is a token for many APIs (https://TOKEN@host/).
-		cred := user
-		if hasPass {
-			cred = pass
+		cred := pass
+		if !hasPass && len(user) >= 16 {
+			// A lone userinfo is the token for many APIs
+			// (https://TOKEN@host/); a short one is a user name.
+			cred = user
 		}
 		if cred != "" && !isReference(cred) && !isDocPlaceholder(cred) {
 			return true
@@ -146,31 +147,43 @@ var (
 	reTok  = regexp.MustCompile(`^[A-Za-z0-9_\-.~+=]+$`)
 )
 
-// pathToken classifies one path segment.
-//
-//	opaque: long and random-looking; redacted from output because capability
-//	        URLs (the path is the credential) are common for hosted MCP.
-//	secret: opaque and not shaped like an identifier (UUID, hex id); enough
-//	        evidence for the token_in_url flag.
-func pathToken(seg string) (opaque, secret bool) {
-	if len(seg) < 24 || !reTok.MatchString(seg) || isReference(seg) {
-		return false, false
+// opaqueToken reports whether s reads as machine-generated: long, one run of
+// token characters, a mix of letters and digits, high entropy and few
+// separators. Hyphenated names ("prod-us-east-1-cluster-2024") are not opaque.
+func opaqueToken(s string) bool {
+	if len(s) < 24 || !reTok.MatchString(s) || isReference(s) {
+		return false
 	}
-	var digits, letters int
-	for i := 0; i < len(seg); i++ {
-		c := seg[i]
+	var digits, letters, seps int
+	for i := 0; i < len(s); i++ {
+		c := s[i]
 		switch {
 		case c >= '0' && c <= '9':
 			digits++
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z':
+		case isLetter(c):
 			letters++
+		case c == '-' || c == '_' || c == '.':
+			seps++
 		}
 	}
-	if digits < 3 || letters < 3 || shannon(seg) < 3.5 {
+	return digits >= 3 && letters >= 3 && seps <= len(s)/12 && shannon(s) >= 3.5
+}
+
+// identifierShaped reports a UUID or a short hex id: opaque, but more often
+// a tenant or workspace id than a credential.
+func identifierShaped(s string) bool {
+	return reUUID.MatchString(s) || (reHex.MatchString(s) && len(s) <= 40)
+}
+
+// pathToken classifies one URL path segment.
+//
+//	opaque: machine-generated; redacted from output because capability URLs
+//	        (the path is the credential) are common for hosted MCP servers.
+//	secret: opaque, at least 32 bytes and not shaped like an identifier;
+//	        enough evidence for the token_in_url flag.
+func pathToken(seg string) (opaque, secret bool) {
+	if !opaqueToken(seg) {
 		return false, false
 	}
-	if reUUID.MatchString(seg) || (reHex.MatchString(seg) && len(seg) <= 40) {
-		return true, false
-	}
-	return true, len(seg) >= 32
+	return true, len(seg) >= 32 && !identifierShaped(seg)
 }

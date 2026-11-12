@@ -1,7 +1,6 @@
 package transcript
 
 import (
-	"encoding/json"
 	"strings"
 	"time"
 
@@ -31,11 +30,14 @@ func (p copilotParser) ParseLine(line []byte, st *FileState) ([]*event.Event, er
 	return parseGuard(p.AgentID(), line, st, parseCopilot)
 }
 
+// copilotEnvelope is decoded in one pass, data included: copilotData is the
+// union of the fields read from any handled event, with polymorphic values
+// left generic.
 type copilotEnvelope struct {
-	Type      string          `json:"type"`
-	Timestamp string          `json:"timestamp"`
-	AgentID   string          `json:"agentId"`
-	Data      json.RawMessage `json:"data"`
+	Type      string       `json:"type"`
+	Timestamp string       `json:"timestamp"`
+	AgentID   string       `json:"agentId"`
+	Data      *copilotData `json:"data"`
 }
 
 type copilotContext struct {
@@ -55,20 +57,20 @@ type copilotData struct {
 	PreviousMode string `json:"previousMode"`
 	ShutdownType string `json:"shutdownType"`
 	// user.message
-	Content                 json.RawMessage `json:"content"`
-	Source                  string          `json:"source"`
-	IsAutopilotContinuation bool            `json:"isAutopilotContinuation"`
+	Content                 any    `json:"content"`
+	Source                  string `json:"source"`
+	IsAutopilotContinuation bool   `json:"isAutopilotContinuation"`
 	// tool.execution_start / tool.execution_complete
-	ToolCallID    string          `json:"toolCallId"`
-	ToolName      string          `json:"toolName"`
-	MCPServerName string          `json:"mcpServerName"`
-	MCPToolName   string          `json:"mcpToolName"`
-	Arguments     json.RawMessage `json:"arguments"`
-	Model         string          `json:"model"`
-	TurnID        string          `json:"turnId"`
-	Success       *bool           `json:"success"`
-	Result        json.RawMessage `json:"result"`
-	Error         json.RawMessage `json:"error"`
+	ToolCallID    string `json:"toolCallId"`
+	ToolName      string `json:"toolName"`
+	MCPServerName string `json:"mcpServerName"`
+	MCPToolName   string `json:"mcpToolName"`
+	Arguments     any    `json:"arguments"`
+	Model         string `json:"model"`
+	TurnID        string `json:"turnId"`
+	Success       *bool  `json:"success"`
+	Result        any    `json:"result"`
+	Error         any    `json:"error"`
 	// shellExecution.exitCode is set on shell tools even when success is true.
 	ShellExecution *struct {
 		ExitCode *int `json:"exitCode"`
@@ -138,25 +140,22 @@ func parseCopilot(c *lineCtx) error {
 	if st.SessionID == "" {
 		st.SessionID = copilotSessionFromPath(st.Path)
 	}
-	// Only the types handled below need their data decoded; everything
-	// else (deltas, usage, canvas ...) is skipped without touching it.
 	if !copilotHandled[env.Type] {
 		if !copilotKnown[env.Type] {
 			st.Unknown++
 		}
 		return nil
 	}
-	var d copilotData
-	if rawKind(env.Data) == '{' && decode(env.Data, &d) != nil {
-		st.Unknown++
-		return nil
+	d := env.Data
+	if d == nil {
+		d = &copilotData{}
 	}
 	if env.Type == "user.message" && env.AgentID != "" {
 		// Inside a subagent the "user" is the parent agent.
 		return nil
 	}
 	n0 := len(c.out)
-	c.copilotEvent(env.Type, &d, ts)
+	c.copilotEvent(env.Type, d, ts)
 	if env.AgentID != "" {
 		for _, e := range c.out[n0:] {
 			if e.Session != nil && e.Session.SubagentID == "" {
@@ -199,8 +198,9 @@ func (c *lineCtx) copilotEvent(typ string, d *copilotData, ts time.Time) {
 		if d.Context != nil && d.Context.CWD != "" {
 			st.CWD = clip(d.Context.CWD, maxCWDLen)
 		}
+		// No surface is claimed: the VS Code Copilot harness shares this
+		// runtime and log format, and the record does not say which it is.
 		e := c.newEvent(event.TypeSessionStart, ts)
-		e.Agent.Surface = "cli"
 		if typ == "session.resume" {
 			c.label(e, "start", "resume")
 		}
@@ -239,7 +239,7 @@ func (c *lineCtx) copilotEvent(typ string, d *copilotData, ts time.Time) {
 		if strings.HasPrefix(d.Source, "skill-") || strings.HasPrefix(d.Source, "agent-") || d.IsAutopilotContinuation {
 			return
 		}
-		if text := textOf(d.Content); text != "" {
+		if text := anyText(d.Content); text != "" {
 			c.prompt(ts, text)
 		}
 	case "assistant.turn_end":
@@ -332,9 +332,9 @@ func (c *lineCtx) copilotMode(ts time.Time) {
 }
 
 func (c *lineCtx) copilotToolStart(d *copilotData, ts time.Time) {
-	input := rawObject(d.Arguments)
+	input := anyObject(d.Arguments)
 	if input == nil {
-		if s := rawString(d.Arguments); s != "" {
+		if s := anyString(d.Arguments); s != "" {
 			input = map[string]any{"input": s}
 		}
 	}
@@ -357,38 +357,29 @@ func (c *lineCtx) copilotToolStart(d *copilotData, ts time.Time) {
 }
 
 func (c *lineCtx) copilotToolComplete(d *copilotData, ts time.Time) {
-	var res struct {
-		Content         json.RawMessage `json:"content"`
-		DetailedContent json.RawMessage `json:"detailedContent"`
-		Contents        []struct {
-			Type     string `json:"type"`
-			Text     string `json:"text"`
-			ExitCode *int   `json:"exitCode"`
-		} `json:"contents"`
-	}
-	_ = decode(d.Result, &res)
-	text := textOf(res.Content)
+	res := anyObject(d.Result)
+	text := anyText(res["content"])
 	if text == "" {
-		text = textOf(res.DetailedContent)
+		text = anyText(res["detailedContent"])
 	}
 	var exit *int
 	if d.ShellExecution != nil {
 		exit = d.ShellExecution.ExitCode
 	}
-	for _, it := range res.Contents {
-		if text == "" && it.Text != "" {
-			text = it.Text
+	contents, _ := res["contents"].([]any)
+	for _, raw := range contents {
+		it := anyObject(raw)
+		if text == "" {
+			text = anyString(it["text"])
 		}
-		if exit == nil && it.Type == "shell_exit" {
-			exit = it.ExitCode
+		if exit == nil && anyString(it["type"]) == "shell_exit" {
+			if n, ok := anyInt(it["exitCode"]); ok {
+				exit = &n
+			}
 		}
 	}
 	if text == "" {
-		var e struct {
-			Message string `json:"message"`
-		}
-		_ = decode(d.Error, &e)
-		text = e.Message
+		text = anyString(anyObject(d.Error)["message"])
 	}
 	oc := &event.Outcome{Status: statusOK, ExitCode: exit}
 	switch {
@@ -412,17 +403,14 @@ func (c *lineCtx) copilotToolComplete(d *copilotData, ts time.Time) {
 // copilotPermission turns permission.completed into permission.decision.
 // Result kinds are the PermissionResult union of the schema.
 func (c *lineCtx) copilotPermission(d *copilotData, ts time.Time) {
-	var res struct {
-		Kind string `json:"kind"`
-	}
-	_ = decode(d.Result, &res)
+	kind := anyString(anyObject(d.Result)["kind"])
 	req := c.st.takeHint("req:" + d.RequestID)
 	callID := clip(d.ToolCallID, maxIDLen)
 	if callID == "" && req != nil {
 		callID = req.tool
 	}
 	oc := &event.Outcome{}
-	switch res.Kind {
+	switch kind {
 	case "approved", "approved-for-session", "approved-for-location", "approved-read-only-for-session":
 		oc.Decision = "allow"
 	case "denied-interactively-by-user":
@@ -435,7 +423,7 @@ func (c *lineCtx) copilotPermission(d *copilotData, ts time.Time) {
 	case "cancelled":
 		oc.Status = statusInterrupted
 	default:
-		if strings.HasPrefix(res.Kind, "denied-") {
+		if strings.HasPrefix(kind, "denied-") {
 			oc.Decision, oc.DecisionSource = "deny", "policy"
 		} else {
 			c.st.Unknown++
@@ -466,8 +454,8 @@ func (c *lineCtx) copilotPermission(d *copilotData, ts time.Time) {
 		}
 	}
 	// Result kinds are a closed set, safe to emit as a label.
-	if copilotResultKinds[res.Kind] {
-		c.label(e, "result", res.Kind)
+	if copilotResultKinds[kind] {
+		c.label(e, "result", kind)
 	}
 	if req != nil {
 		c.label(e, "request", req.request)

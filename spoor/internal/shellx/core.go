@@ -116,6 +116,7 @@ type simple struct {
 	hasIn   bool // inFile is set
 	outFile arg  // stdout redirected to this file
 	hasOut  bool
+	outAppend bool
 	origin  string
 	depth   int
 	wraps   int
@@ -143,6 +144,10 @@ type analyzer struct {
 	decoded map[string]struct{}
 
 	gitRemotes []string // remote names added or re-pointed on this command line
+	unpacked   bool     // downloaded content was unpacked or cloned into the working tree
+	// pendingKill holds security-tool names looked up with pidof/pgrep.
+	pendingKill []string
+	shadowSeen  bool // a WMI query for Win32_ShadowCopy was seen
 }
 
 func newAnalyzer(f *Facts) *analyzer {
@@ -314,6 +319,10 @@ func (a *analyzer) droppedTaint(path string) (taint, bool) {
 
 // ranFile links the execution of path to how the file got there.
 func (a *analyzer) ranFile(path string) {
+	if a.unpacked && relativePath(path) {
+		// curl -LO x.tgz && tar xzf x.tgz && ./install.sh
+		a.f.DownloadAndExecute = true
+	}
 	t, ok := a.droppedTaint(path)
 	if !ok {
 		return
@@ -322,6 +331,18 @@ func (a *analyzer) ranFile(path string) {
 		a.f.DownloadAndExecute = true
 	}
 	a.obfTaint(t)
+}
+
+// relativePath reports a path inside the working tree.
+func relativePath(p string) bool {
+	if p == "" || strings.Contains(p, "://") {
+		return false
+	}
+	switch p[0] {
+	case '/', '~', '$', '%', '\\', '-', '<':
+		return false
+	}
+	return !(len(p) > 1 && p[1] == ':')
 }
 
 func baseName(p string) string {

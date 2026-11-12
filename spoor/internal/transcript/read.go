@@ -123,7 +123,7 @@ func readLines(f *os.File, start, size int64, maxLine int, skipping bool, budget
 			return res, err
 		}
 		if *budget <= 0 && consumed > 0 {
-			res.more = pos < size || len(buf) > 0
+			res.more = pos < size
 			break
 		}
 	}

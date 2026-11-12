@@ -17,9 +17,12 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// UNVERIFIED: this file was compiled and vetted for windows/amd64 and
-// windows/arm64 but not executed in the build environment. The environment
-// block parser it relies on is unit-tested with fixtures on every platform.
+// UNVERIFIED: this file was compiled, vetted and linked for windows/amd64
+// and windows/arm64 but not executed in the build environment. The approach
+// (limited-information handle, ProcessCommandLineInformation, PEB read for
+// environment and current directory) was cross-checked against gopsutil's
+// process_windows.go; structure offsets come from x/sys/windows. The
+// environment block parser is unit-tested with fixtures on every platform.
 
 const ptrSize = unsafe.Sizeof(uintptr(0))
 
@@ -332,8 +335,11 @@ func openForRead(pid int) (windows.Handle, error) {
 
 // readProcessParameters returns the leading part of the target's
 // RTL_USER_PROCESS_PARAMETERS (through EnvironmentSize), found via the
-// native PEB. A 32-bit (WOW64) target also has a native PEB whose parameters
-// carry the same strings, so one code path serves both.
+// native PEB.
+//
+// UNVERIFIED: a 32-bit (WOW64) target is assumed to have a native PEB whose
+// parameters carry the same start-up strings, so one code path serves both.
+// (gopsutil reads the 32-bit PEB for such targets instead.)
 func readProcessParameters(h windows.Handle) ([]byte, error) {
 	var pbi processBasicInformation
 	var ret uint32
@@ -408,15 +414,15 @@ func ProcEnv(pid int) (env map[string]string, err error) {
 	if addr == 0 {
 		return map[string]string{}, nil
 	}
-	size := int(readPtr(params[offParamsEnvSize:]))
-	if size <= 0 || size > maxEnvBytes {
+	limit := int(readPtr(params[offParamsEnvSize:]))
+	if limit <= 0 || limit > maxEnvBytes {
 		// The size field is the target's own word for it; never trust it
-		// past the cap. The parser stops at the terminating empty string.
-		size = maxEnvBytes
+		// past the cap. Reading stops at the block's terminator anyway.
+		limit = maxEnvBytes
 	}
-	raw, err := readRemote(h, addr, size)
-	if err != nil {
-		return nil, fmt.Errorf("platform: pid %d: %w", pid, err)
+	raw := readEnvBlockPaged(func(at uintptr, n int) ([]byte, error) { return readRemote(h, at, n) }, addr, limit)
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("platform: pid %d: environment block unreadable", pid)
 	}
 	return parseEnvBlock16(bytesToUTF16(raw)), nil
 }

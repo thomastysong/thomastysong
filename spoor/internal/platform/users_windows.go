@@ -22,6 +22,9 @@ const profileListKey = `SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList
 var (
 	privilegedOnce sync.Once
 	privilegedVal  bool
+	identityOnce   sync.Once
+	identitySID    string
+	identityHome   string
 	currentOnce    sync.Once
 	currentVal     UserHome
 )
@@ -41,31 +44,61 @@ func IsPrivileged() bool {
 	return privilegedVal
 }
 
-// CurrentUser returns the account this process runs as: bare account name
-// (no domain), SID, and profile directory.
-func CurrentUser() UserHome {
-	currentOnce.Do(func() {
-		var u UserHome
+// currentIdentity returns the SID and profile directory of this process's
+// account using only the token and the registry. It deliberately does not
+// resolve the account name: that is an LSA round trip (possibly to a domain
+// controller), and this function is on the path of every hook invocation.
+func currentIdentity() (sid, home string) {
+	identityOnce.Do(func() {
 		var tok windows.Token
 		if err := windows.OpenProcessToken(windows.CurrentProcess(), windows.TOKEN_QUERY, &tok); err == nil {
 			defer tok.Close()
 			if tu, err := tok.GetTokenUser(); err == nil && tu.User.Sid != nil {
-				u.UID = tu.User.Sid.String()
-				if name, _, _, err := tu.User.Sid.LookupAccount(""); err == nil {
-					u.Name = name
+				identitySID = tu.User.Sid.String()
+			}
+			if identitySID != "" {
+				if k, err := registry.OpenKey(registry.LOCAL_MACHINE, profileListKey, registry.QUERY_VALUE|registry.WOW64_64KEY); err == nil {
+					if p := profileImagePath(k, identitySID); p != "" && isDir(p) {
+						identityHome = p
+					}
+					k.Close()
 				}
 			}
-			if dir, err := tok.GetUserProfileDirectory(); err == nil && isDir(dir) {
-				u.Home = dir
+			if identityHome == "" {
+				if dir, err := tok.GetUserProfileDirectory(); err == nil && isDir(dir) {
+					identityHome = dir
+				}
+			}
+		}
+		if identityHome == "" {
+			if h := os.Getenv("USERPROFILE"); filepath.IsAbs(h) && isDir(h) {
+				identityHome = filepath.Clean(h)
+			}
+		}
+	})
+	return identitySID, identityHome
+}
+
+func currentHome() string {
+	_, home := currentIdentity()
+	return home
+}
+
+// CurrentUser returns the account this process runs as: bare account name
+// (no domain), SID, and profile directory.
+func CurrentUser() UserHome {
+	currentOnce.Do(func() {
+		sid, home := currentIdentity()
+		u := UserHome{UID: sid, Home: home}
+		if sid != "" {
+			if s, err := windows.StringToSid(sid); err == nil {
+				if name, _, _, err := s.LookupAccount(""); err == nil {
+					u.Name = name
+				}
 			}
 		}
 		if u.Name == "" {
 			u.Name = cleanAccountName(os.Getenv("USERNAME"))
-		}
-		if u.Home == "" {
-			if h := os.Getenv("USERPROFILE"); filepath.IsAbs(h) && isDir(h) {
-				u.Home = filepath.Clean(h)
-			}
 		}
 		currentVal = u
 	})
@@ -154,7 +187,10 @@ func profileImagePath(list registry.Key, sid string) string {
 	if err != nil {
 		return ""
 	}
-	if p, err := registry.ExpandString(v); err == nil {
+	// Stored as an expandable string, normally with no variables in it.
+	if p := expandSystemDrive(v, systemDrive()); p != "" {
+		v = p
+	} else if p, err := registry.ExpandString(v); err == nil {
 		v = p
 	}
 	if !filepath.IsAbs(v) {

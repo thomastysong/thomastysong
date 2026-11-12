@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"math"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -130,21 +129,23 @@ func toolArgs(v any) map[string]any {
 	}
 }
 
-// setTool fills Tool, Target and the tool part of Content.
+// setTool fills Tool, Target and the tool part of Content. Classification,
+// input keys and the input hash come from toolmap so that a hook event and
+// the transcript record of the same call agree field for field.
 func setTool(ev *event.Event, agentID, name string, args any, useID string) {
 	in := toolArgs(args)
 	t := &event.Tool{}
 	t.Name = field(ev, "tool.name", name, maxName)
 	t.UseID = field(ev, "tool.use_id", useID, maxID)
 	if t.Name != "" {
-		kind, server, tool := toolmap.Kind(agentID, t.Name)
+		kind, server, tool := toolmap.KindWithInput(agentID, t.Name, in)
 		t.Kind = kind
 		t.MCPServer, _ = cleanID(server, maxName)
 		t.MCPTool, _ = cleanID(tool, maxName)
 	}
-	if in != nil {
-		t.InputKeys = inputKeys(in)
-		t.InputSHA256 = canonicalSHA256(in)
+	if len(in) > 0 {
+		t.InputKeys = toolmap.InputKeys(in)
+		t.InputSHA256 = toolmap.InputHash(in)
 		ev.Content.ToolInput = in
 	}
 	ev.Tool = t
@@ -162,35 +163,8 @@ func forceKind(ev *event.Event, kind event.ToolKind) {
 		return
 	}
 	ev.Tool.Kind = kind
-	ev.Target = nil
+	ev.Content.FileContent = ""
 	setTarget(ev, ev.Content.ToolInput)
-}
-
-func inputKeys(in map[string]any) []string {
-	keys := make([]string, 0, len(in))
-	for k := range in {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	if len(keys) > maxKeys {
-		keys = keys[:maxKeys]
-	}
-	for i, k := range keys {
-		keys[i], _ = cleanID(k, maxLabel)
-	}
-	return keys
-}
-
-// canonicalSHA256 hashes encoding/json's serialization of a decoded value.
-// Map keys are emitted sorted, so the same arguments hash the same whatever
-// order the agent wrote them in.
-func canonicalSHA256(v any) string {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return ""
-	}
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:])
 }
 
 func sha256Hex(s string) string {
@@ -370,15 +344,9 @@ func exitCode(s string) (int, bool) {
 	return n, true
 }
 
-// token reduces a short machine code from the payload (an error class, a
-// status) to a safe serialized value.
-func token(s string) string {
-	v := labelValue(s)
-	if len(v) > 64 {
-		v = v[:64]
-	}
-	return v
-}
+// token reduces a short machine code from the payload (an error class such
+// as "rate_limit" or "AuthError") to a safe serialized value; see enumValue.
+func token(s string) string { return enumValue(s) }
 
 // unknownEvent is the fallback for an event name the dialect has no mapping
 // for: keep it as a notification and flag it, so new agent events surface as

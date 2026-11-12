@@ -3,6 +3,7 @@ package classify
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -315,9 +316,7 @@ func scanAssignments(s, low string, raw []rawHit) []rawHit {
 	return raw
 }
 
-func collectAssignments(s string, re interface {
-	FindAllStringSubmatchIndex(string, int) [][]int
-}, flag bool, raw []rawHit) []rawHit {
+func collectAssignments(s string, re *regexp.Regexp, flag bool, raw []rawHit) []rawHit {
 	for _, loc := range re.FindAllStringSubmatchIndex(s, -1) {
 		name := s[loc[2]:loc[3]]
 		tier := secretName(name)

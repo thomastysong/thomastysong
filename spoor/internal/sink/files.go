@@ -53,6 +53,9 @@ type filesSink struct {
 	mu     sync.Mutex
 	open   map[string]*openSegment // by stream
 	closed bool
+	// dirDirty is set when this process created a segment: the new
+	// directory entry is not durable until the directory itself is synced.
+	dirDirty bool
 }
 
 type openSegment struct {
@@ -205,15 +208,13 @@ func (s *filesSink) usable(seg *openSegment, bucket time.Time) bool {
 // that one is full or cannot be appended to. In-memory state is never
 // trusted for the choice because other processes roll segments too.
 func (s *filesSink) openSegment(stream string, bucket time.Time) (*openSegment, error) {
-	segs, err := listSegments(s.o.Dir, func(g segment) bool {
-		return g.stream == stream && g.bucket.Equal(bucket)
-	})
+	segs, err := listSegments(s.o.Dir, hourPrefix(stream, bucket))
 	if err != nil {
 		return nil, err
 	}
 	n := 1
 	for _, g := range segs {
-		if g.n > n {
+		if g.stream == stream && g.bucket.Equal(bucket) && g.n > n {
 			n = g.n
 		}
 	}
@@ -251,6 +252,7 @@ func (s *filesSink) openSegment(stream string, bucket time.Time) (*openSegment, 
 		}
 		seg := &openSegment{f: f, seg: segment{name: name, stream: stream, bucket: bucket, n: n}}
 		if created {
+			s.dirDirty = true
 			// Retention runs when the log grows by a file, which is the
 			// only time the total can newly exceed a limit. Best effort: a
 			// failed prune must not cost the event being written.
@@ -264,6 +266,8 @@ func (s *filesSink) openSegment(stream string, bucket time.Time) (*openSegment, 
 	return nil, fmt.Errorf("open segment for %s: %w", stream, last)
 }
 
+// closeSegment closes a segment this writer is done with (full, or its
+// hour is over), syncing it first if needed since no later Flush will.
 func (s *filesSink) closeSegment(stream string) error {
 	seg := s.open[stream]
 	if seg == nil {
@@ -280,13 +284,18 @@ func (s *filesSink) closeSegment(stream string) error {
 	return err
 }
 
-// Flush fsyncs every segment written since the last Flush.
+// Flush fsyncs every segment written since the last Flush, and the
+// directory if a segment was created.
 func (s *filesSink) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
 		return ErrClosed
 	}
+	return s.sync()
+}
+
+func (s *filesSink) sync() error {
 	var errs []error
 	for _, seg := range s.open {
 		if !seg.dirty {
@@ -298,10 +307,24 @@ func (s *filesSink) Flush() error {
 		}
 		seg.dirty = false
 	}
+	if s.dirDirty {
+		if err := syncDir(s.o.Dir); err != nil {
+			errs = append(errs, err)
+		} else {
+			s.dirDirty = false
+		}
+	}
 	return errors.Join(errs...)
 }
 
-// Close flushes and closes all segments. It is idempotent.
+// Close closes all segments. It is idempotent.
+//
+// Close does not fsync. Every line is already in the kernel when Write
+// returns, so nothing is lost when the process exits; what fsync adds is
+// survival of a power cut, at the price of a disk flush. A hook process
+// writes one event and exits between an agent and its tool call, where that
+// price would be paid on every call. Callers that want durability call
+// Flush before Close, as the daemon does on a timer and at shutdown.
 func (s *filesSink) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -310,7 +333,8 @@ func (s *filesSink) Close() error {
 	}
 	s.closed = true
 	var errs []error
-	for stream := range s.open {
+	for stream, seg := range s.open {
+		seg.dirty = false
 		if err := s.closeSegment(stream); err != nil {
 			errs = append(errs, err)
 		}
@@ -340,7 +364,7 @@ func (s *filesSink) Prune() error {
 // say: it is the one writers hold open.
 func (s *filesSink) prune() error {
 	now := s.o.Now().UTC()
-	segs, err := listSegments(s.o.Dir, nil)
+	segs, err := listSegments(s.o.Dir, "")
 	if err != nil {
 		return err
 	}

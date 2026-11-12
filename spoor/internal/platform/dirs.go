@@ -34,14 +34,14 @@ func DefaultDirs() Dirs {
 // on, must agree on the socket path.
 func UserDirs(home string) Dirs {
 	if home == "" {
-		home = CurrentUser().Home
+		home = currentHome()
 	}
 	if home == "" {
 		// No passwd entry and no HOME (arbitrary-uid container). The caller
 		// must create this 0700 and verify ownership: the name is guessable.
 		return layout(runtime.GOOS, joinPath(runtime.GOOS, os.TempDir(), "spoor-"+firstNonEmpty(CurrentUser().UID, "user")), "")
 	}
-	return userDirs(runtime.GOOS, home, localAppDataDir(home))
+	return userDirs(runtime.GOOS, home)
 }
 
 func systemDirs(goos, programData string) Dirs {
@@ -68,15 +68,15 @@ func systemDirs(goos, programData string) Dirs {
 	}
 }
 
-func userDirs(goos, home, localAppData string) Dirs {
+func userDirs(goos, home string) Dirs {
 	switch goos {
 	case "darwin":
 		return layout(goos, joinPath(goos, home, "Library", "Application Support", "spoor"), "")
 	case "windows":
-		if localAppData == "" {
-			localAppData = joinPath(goos, home, "AppData", "Local")
-		}
-		return layout(goos, joinPath(goos, localAppData, "spoor"), "")
+		// The default location of %LOCALAPPDATA%. The variable itself is not
+		// consulted (see UserDirs), and asking the shell would load shell32
+		// into the hook process on every tool call.
+		return layout(goos, joinPath(goos, home, "AppData", "Local", "spoor"), "")
 	default:
 		return layout(goos, joinPath(goos, home, ".local", "state", "spoor"), "")
 	}
@@ -95,6 +95,43 @@ func layout(goos, base, run string) Dirs {
 		Run:     run,
 		Socket:  joinPath(goos, run, "hook.sock"),
 		StateDB: joinPath(goos, base, "state.db"),
+	}
+}
+
+// expandSystemDrive resolves a registry path such as
+// "%SystemDrive%\ProgramData" using a drive obtained from the system, not
+// from the environment. It returns "" when the value uses any other
+// variable.
+func expandSystemDrive(value, drive string) string {
+	const name = "%systemdrive%"
+	var out strings.Builder
+	for {
+		// Matched on the original bytes: lower-casing the whole string first
+		// can change its length and misplace the cut.
+		i := -1
+		for j := 0; j+len(name) <= len(value); j++ {
+			if strings.EqualFold(value[j:j+len(name)], name) {
+				i = j
+				break
+			}
+		}
+		literal := value
+		if i >= 0 {
+			literal = value[:i]
+		}
+		if strings.Contains(literal, "%") {
+			return ""
+		}
+		out.WriteString(literal)
+		if i < 0 {
+			return out.String()
+		}
+		if drive == "" {
+			return ""
+		}
+		// The drive is appended, never rescanned, so it cannot recurse.
+		out.WriteString(drive)
+		value = value[i+len(name):]
 	}
 }
 

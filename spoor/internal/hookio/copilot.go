@@ -123,9 +123,9 @@ func (c copilot) build(p obj, env map[string]string, raw []byte) ([]*event.Event
 
 	switch kind {
 	case cpSessionStart:
-		label(ev, "session_source", p.str("source"))
+		enumLabel(ev, "session_source", p.str("source"))
 	case cpSessionEnd:
-		label(ev, "end_reason", p.str("reason"))
+		enumLabel(ev, "end_reason", p.str("reason"))
 	case cpPrompt:
 		// Command-hook output is dropped for this event, so a prompt cannot
 		// be blocked from a hook (hooks reference, userPromptSubmitted).
@@ -151,28 +151,29 @@ func (c copilot) build(p obj, env map[string]string, raw []byte) ([]*event.Event
 		c.tool(ev, p)
 		ev.Outcome = failure(ev, p.str("error"), false)
 	case cpAgentStop:
-		label(ev, "stop_reason", p.str("stopReason", "stop_reason"))
+		enumLabel(ev, "stop_reason", p.str("stopReason", "stop_reason"))
 	case cpSubagentStop:
-		label(ev, "stop_reason", p.str("stopReason", "stop_reason"))
+		enumLabel(ev, "stop_reason", p.str("stopReason", "stop_reason"))
 		ev.Content.ToolOutput = p.str("response", "last_assistant_message")
 	case cpError:
 		// error.message and error.stack are free text; only the error class
 		// and where it happened are emitted.
-		label(ev, "error_context", p.str("errorContext", "error_context"))
+		enumLabel(ev, "error_context", p.str("errorContext", "error_context"))
 		ev.Outcome = &event.Outcome{Status: "error", Error: token(p.sub("error").str("name"))}
 	case cpPreCompact:
 		label(ev, "compact_phase", "pre")
-		label(ev, "compact_trigger", p.str("trigger"))
+		enumLabel(ev, "compact_trigger", p.str("trigger"))
 	case cpNotification:
-		label(ev, "notification_type", p.str("notification_type", "notificationType"))
+		enumLabel(ev, "notification_type", p.str("notification_type", "notificationType"))
 	}
 	return []*event.Event{ev}, req, nil
 }
 
 func (copilot) tool(ev *event.Event, p obj) {
-	// toolArgs is "unknown" in the reference and has been a JSON-encoded
-	// string in practice; setTool decodes either form. The permission
-	// request payload names the arguments toolInput.
+	// The reference types toolArgs as unknown and describes the snake_case
+	// tool_input as "parsed from JSON string when possible", so the
+	// camelCase form can arrive as a JSON-encoded string; setTool decodes
+	// either form. The permission request text refers to toolInput.
 	args, _ := p.raw("toolArgs", "tool_input", "toolInput", "tool_args")
 	// UNVERIFIED: Copilot documents no tool-call id in hook payloads; these
 	// keys are read only so an id is not lost if one is added.
@@ -186,7 +187,8 @@ func (copilot) tool(ev *event.Event, p obj) {
 }
 
 // copilotStatus maps toolResult.resultType. Only "success" is documented for
-// postToolUse; the other values are the result types the runtime uses.
+// postToolUse (and "failure" for a rewritten result).
+// UNVERIFIED: "error", "denied" and "rejected" as result types.
 func copilotStatus(resultType string) string {
 	switch strings.ToLower(resultType) {
 	case "success":
@@ -330,7 +332,8 @@ func (copilot) respond(req *Request, d Decision) ([]byte, []byte, int) {
 
 func (copilot) events() []HookEvent {
 	// Copilot has no background-hook option, so nothing is Async. The
-	// PascalCase spellings select the self-describing snake_case payload.
+	// PascalCase spellings select the self-describing snake_case payload
+	// (the spelling Endor Labs' and Snyk's managed policies use as well).
 	return []HookEvent{
 		{Name: "SessionStart"},
 		{Name: "UserPromptSubmit"},
@@ -340,9 +343,10 @@ func (copilot) events() []HookEvent {
 		{Name: "PermissionRequest", Blocking: true},
 		{Name: "PostToolUse"},
 		{Name: "PostToolUseFailure"},
-		// UNVERIFIED: the reference documents subagentStart in camelCase
-		// only; snyk/agent-scan registers the PascalCase alias.
-		{Name: "SubagentStart"},
+		// The reference documents subagentStart in camelCase only, so the
+		// documented spelling is used. Its payload names no event; it is
+		// recognized by agentName without stopReason, or by EnvHookEvent.
+		{Name: "subagentStart"},
 		{Name: "SubagentStop"},
 		{Name: "Stop"},
 		{Name: "PreCompact"},

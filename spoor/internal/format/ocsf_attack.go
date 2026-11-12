@@ -59,7 +59,7 @@ func attackFromTag(tag string) map[string]any {
 			return attackObj(AttackVersion, "", "", t, sub)
 		}
 		if id, ok := tacticID(rest, "TA"); ok {
-			return attackObj(AttackVersion, id, "", "", "")
+			return attackObj(AttackVersion, id, attackTacticName(id), "", "")
 		}
 		if tac, ok := attackTactics[strings.ReplaceAll(rest, "_", "-")]; ok {
 			return attackObj(AttackVersion, tac[0], tac[1], "", "")
@@ -74,6 +74,16 @@ func attackFromTag(tag string) map[string]any {
 		}
 	}
 	return nil
+}
+
+// attackTacticName returns the v20.1 name for an ATT&CK tactic id, or "".
+func attackTacticName(id string) string {
+	for _, t := range attackTactics {
+		if t[0] == id {
+			return t[1]
+		}
+	}
+	return ""
 }
 
 func attackObj(version, tacticUID, tacticName, technique, sub string) map[string]any {

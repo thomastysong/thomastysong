@@ -1,0 +1,142 @@
+{
+  "activity_id": 1,
+  "activity_name": "Create",
+  "actor": {
+    "app_name": "Claude Code",
+    "app_uid": "claude-code",
+    "process": {
+      "name": "Claude Code",
+      "pid": 48120
+    },
+    "user": {
+      "name": "alice",
+      "uid": "501"
+    }
+  },
+  "category_name": "Findings",
+  "category_uid": 2,
+  "class_name": "Compliance Finding",
+  "class_uid": 2003,
+  "compliance": {
+    "checks": [
+      {
+        "name": "Managed hooks are installed",
+        "severity": "High",
+        "severity_id": 4,
+        "status": "Fail",
+        "status_id": 3,
+        "uid": "SP-POST-010"
+      }
+    ],
+    "control": "SP-POST-010",
+    "status": "Fail",
+    "status_detail": "expected: hooks present; actual: file missing",
+    "status_id": 3
+  },
+  "device": {
+    "hostname": "dev-mbp-042",
+    "os": {
+      "name": "macOS",
+      "type": "macOS",
+      "type_id": 300
+    },
+    "type": "Unknown",
+    "type_id": 0,
+    "uid": "6F1D2C3B-0000-4000-8000-ABCDEF012345"
+  },
+  "finding_info": {
+    "analytic": {
+      "name": "Managed hooks are installed",
+      "type": "Rule",
+      "type_id": 1,
+      "uid": "SP-POST-010"
+    },
+    "created_time": 1794391203123,
+    "title": "Managed hooks are installed",
+    "uid": "SP-POST-010/b4716edc33efb26e"
+  },
+  "message": "Managed hooks are installed: fail",
+  "metadata": {
+    "correlation_uid": "3f6c1f0e-1111-4222-8333-444455556666",
+    "event_code": "posture.check",
+    "log_name": "spoor.posture",
+    "product": {
+      "name": "spoor",
+      "vendor_name": "spoor"
+    },
+    "profiles": [
+      "host"
+    ],
+    "sequence": 42,
+    "uid": "019a7a00-0000-7000-8000-000000000001",
+    "version": "1.9.0"
+  },
+  "remediation": {
+    "desc": "Deploy the managed settings profile."
+  },
+  "resources": [
+    {
+      "name": "/Library/Application Support/ClaudeCode/managed-settings.json",
+      "owner": {
+        "name": "alice"
+      },
+      "type": "managed"
+    }
+  ],
+  "severity": "High",
+  "severity_id": 4,
+  "status": "New",
+  "status_id": 1,
+  "time": 1794391203123,
+  "type_name": "Compliance Finding: Create",
+  "type_uid": 200301,
+  "unmapped": {
+    "spoor": {
+      "agent": {
+        "id": "claude-code",
+        "name": "Claude Code",
+        "pid": 48120,
+        "surface": "cli",
+        "version": "2.1.0"
+      },
+      "check": {
+        "actual": "file missing",
+        "agent_id": "claude-code",
+        "expected": "hooks present",
+        "id": "SP-POST-010",
+        "owner": "alice",
+        "remedy": "Deploy the managed settings profile.",
+        "scope": "managed",
+        "severity": "high",
+        "status": "fail",
+        "subject": "/Library/Application Support/ClaudeCode/managed-settings.json",
+        "title": "Managed hooks are installed"
+      },
+      "fidelity": "observed",
+      "host": {
+        "arch": "arm64",
+        "id": "6F1D2C3B-0000-4000-8000-ABCDEF012345",
+        "name": "dev-mbp-042",
+        "os": "darwin"
+      },
+      "id": "019a7a00-0000-7000-8000-000000000001",
+      "kind": "posture",
+      "privacy": "redacted",
+      "seq": 42,
+      "session": {
+        "cwd": "/Users/alice/src/app",
+        "id": "3f6c1f0e-1111-4222-8333-444455556666",
+        "model": "claude-sonnet-4-5",
+        "permission_mode": "default"
+      },
+      "source": "scan",
+      "ts": "2026-11-11T10:00:03.123456Z",
+      "type": "posture.check",
+      "user": {
+        "id": "501",
+        "name": "alice"
+      },
+      "v": 1
+    }
+  }
+}

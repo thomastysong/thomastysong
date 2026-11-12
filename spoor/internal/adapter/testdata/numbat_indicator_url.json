@@ -1,0 +1,21 @@
+{
+  "schema_version": "0.5.0",
+  "record_type": "indicator",
+  "run_id": "run-example-01",
+  "endpoint": {
+    "hostname": "developer-workstation",
+    "os": "linux",
+    "arch": "arm64",
+    "username": "agent",
+    "uid": "10001"
+  },
+  "type": "url",
+  "value": "https://get.example.sh/install",
+  "count": 2,
+  "first_seen": "2026-06-02T10:00:00Z",
+  "last_seen": "2026-06-02T10:04:12Z",
+  "source_agent": "codex",
+  "sample_event_id": "evt_01",
+  "sample_session_id": "s1",
+  "sample_project_path_hash": "sha256:6780eeb53603bd5da1c0ec3e25d9e94d8be668392f24def8903a2a34f8e3fcb0"
+}

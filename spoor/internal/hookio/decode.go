@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"unicode/utf8"
 )
 
 var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
@@ -118,6 +119,10 @@ const (
 	// ids, names and paths, never a payload-sized string.
 	salvageFields = 64
 	salvageValue  = 4096
+	// salvageWindow bounds how far a salvage reads. ReadInput never hands
+	// over more than MaxInput+1 bytes; a caller that buffered more gets a
+	// few payloads' worth of linear scanning and no more.
+	salvageWindow = 4 * MaxInput
 )
 
 // salvage extracts the top-level string fields of a JSON object without
@@ -127,8 +132,8 @@ const (
 func salvage(stdin []byte) map[string]any {
 	out := map[string]any{}
 	b := bytes.TrimPrefix(stdin, utf8BOM)
-	if len(b) > MaxInput+1 {
-		b = b[:MaxInput+1]
+	if len(b) > salvageWindow {
+		b = b[:salvageWindow]
 	}
 	i := skipSpace(b, 0)
 	if i >= len(b) || b[i] != '{' {
@@ -223,6 +228,13 @@ func scanString(b []byte, i int) (string, int, bool) {
 	// bytes per decoded byte, hence the factor.)
 	if j-i > 6*salvageValue {
 		return "", j + 1, true
+	}
+	body := b[i+1 : j]
+	if bytes.IndexByte(body, '\\') < 0 && utf8.Valid(body) {
+		// No escapes: the bytes are the value. (Control characters that
+		// strict JSON would reject are tolerated; the caller strips them
+		// from identifiers anyway.)
+		return string(body), j + 1, true
 	}
 	var s string
 	if err := json.Unmarshal(b[i:j+1], &s); err != nil {

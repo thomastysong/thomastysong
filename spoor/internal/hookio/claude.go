@@ -119,19 +119,19 @@ func (c claudeWire) build(p obj, env map[string]string, raw []byte) ([]*event.Ev
 
 	switch name {
 	case "SessionStart":
-		label(ev, "session_source", p.str("source"))
+		enumLabel(ev, "session_source", p.str("source"))
 	case "SessionEnd":
-		label(ev, "end_reason", p.str("reason"))
+		enumLabel(ev, "end_reason", p.str("reason"))
 	case "Setup":
-		label(ev, "setup_trigger", p.str("trigger"))
+		enumLabel(ev, "setup_trigger", p.str("trigger"))
 	case "UserPromptSubmit":
 		setPrompt(ev, p.str("prompt"))
 		req.Blocking = true
 	case "UserPromptExpansion":
 		setPrompt(ev, p.str("prompt"))
 		label(ev, "prompt_kind", "expansion")
-		label(ev, "expansion_type", p.str("expansion_type"))
-		label(ev, "command_source", p.str("command_source"))
+		enumLabel(ev, "expansion_type", p.str("expansion_type"))
+		enumLabel(ev, "command_source", p.str("command_source"))
 		req.Blocking = true
 	case "PreToolUse":
 		c.tool(ev, p)
@@ -174,7 +174,7 @@ func (c claudeWire) build(p obj, env map[string]string, raw []byte) ([]*event.Ev
 	case "PostToolBatch":
 		return c.batch(ev, p, env, name), req, nil
 	case "Notification":
-		label(ev, "notification_type", p.str("notification_type"))
+		enumLabel(ev, "notification_type", p.str("notification_type"))
 	case "SubagentStop", "Stop":
 		ev.Content.ToolOutput = p.str("last_assistant_message")
 	case "StopFailure":
@@ -184,7 +184,7 @@ func (c claudeWire) build(p obj, env map[string]string, raw []byte) ([]*event.Ev
 		ev.Outcome = &event.Outcome{Status: "interrupted"}
 	case "ConfigChange":
 		src := p.str("source")
-		label(ev, "config_source", src)
+		enumLabel(ev, "config_source", src)
 		if fp := p.str("file_path"); fp != "" {
 			ev.Target = &event.Target{Path: pathField(ev, "target.path", fp)}
 		}
@@ -192,18 +192,18 @@ func (c claudeWire) build(p obj, env map[string]string, raw []byte) ([]*event.Ev
 		// enterprise settings always apply (hooks reference, ConfigChange).
 		req.Blocking = src != "policy_settings"
 	case "InstructionsLoaded":
-		label(ev, "memory_type", p.str("memory_type"))
-		label(ev, "load_reason", p.str("load_reason"))
+		enumLabel(ev, "memory_type", p.str("memory_type"))
+		enumLabel(ev, "load_reason", p.str("load_reason"))
 		if fp := p.str("file_path"); fp != "" {
 			ev.Target = &event.Target{Path: pathField(ev, "target.path", fp)}
 		}
 	case "FileChanged":
-		label(ev, "file_event", p.str("event"))
+		enumLabel(ev, "file_event", p.str("event"))
 		if fp := p.str("file_path"); fp != "" {
 			ev.Target = &event.Target{Path: pathField(ev, "target.path", fp)}
 		}
 	case "DirectoryAdded":
-		label(ev, "directory_source", p.str("source"))
+		enumLabel(ev, "directory_source", p.str("source"))
 		if dir := p.str("directory"); dir != "" {
 			ev.Target = &event.Target{Path: pathField(ev, "target.path", dir)}
 		}
@@ -213,10 +213,10 @@ func (c claudeWire) build(p obj, env map[string]string, raw []byte) ([]*event.Ev
 		}
 	case "PreCompact":
 		label(ev, "compact_phase", "pre")
-		label(ev, "compact_trigger", p.str("trigger"))
+		enumLabel(ev, "compact_trigger", p.str("trigger"))
 	case "PostCompact":
 		label(ev, "compact_phase", "post")
-		label(ev, "compact_trigger", p.str("trigger"))
+		enumLabel(ev, "compact_trigger", p.str("trigger"))
 	case "PreModelSwitch", "PostModelSwitch":
 		label(ev, "model_from", p.str("from_model"))
 		if to := p.str("to_model"); to != "" {
@@ -224,13 +224,15 @@ func (c claudeWire) build(p obj, env map[string]string, raw []byte) ([]*event.Ev
 		}
 	case "Elicitation", "ElicitationResult":
 		// An MCP server is asking the user for input; URL mode sends the
-		// user to a page the server chose, which is a phishing vector.
-		label(ev, "mcp_server", p.str("mcp_server_name"))
-		label(ev, "elicitation_mode", p.str("mode"))
-		label(ev, "elicitation_action", p.str("action"))
-		if u := p.str("url"); u != "" {
-			ev.Target = &event.Target{URL: u, Host: hostOf(u)}
+		// user to a page the server chose, which is a phishing vector. The
+		// server is recorded the way tool calls record it, so one query
+		// over tool.mcp_server finds both.
+		if name, _ := cleanID(p.str("mcp_server_name"), maxName); name != "" {
+			ev.Tool = &event.Tool{Kind: event.ToolMCP, MCPServer: name}
 		}
+		enumLabel(ev, "elicitation_mode", p.str("mode"))
+		enumLabel(ev, "elicitation_action", p.str("action"))
+		ev.Target = urlTarget(p.str("url"))
 	}
 	return []*event.Event{ev}, req, nil
 }
@@ -321,7 +323,7 @@ func (c claudeWire) mcpServer(ev *event.Event, p obj) {
 	if len(ms) == 0 || ev.Tool == nil {
 		return
 	}
-	label(ev, "mcp_source", ms.str("source"))
+	enumLabel(ev, "mcp_source", ms.str("source"))
 	name, _ := cleanID(ms.str("name"), maxName)
 	if name == "" {
 		return

@@ -132,9 +132,11 @@ func segmentLess(a, b segment) bool {
 	return a.stream < b.stream
 }
 
-// listSegments returns every name in dir that parses as a segment and passes
-// keep (nil keeps all), unsorted. Names only: nothing is opened or followed.
-func listSegments(dir string, keep func(segment) bool) ([]segment, error) {
+// listSegments returns the names in dir that start with prefix and parse as
+// segments, unsorted. Names only: nothing is opened or followed. The prefix
+// is checked before parsing because a hook process lists a directory that
+// may hold a week of segments just to find the handful for this hour.
+func listSegments(dir, prefix string) ([]segment, error) {
 	d, err := os.Open(dir)
 	if err != nil {
 		return nil, err
@@ -144,7 +146,10 @@ func listSegments(dir string, keep func(segment) bool) ([]segment, error) {
 	for {
 		names, err := d.Readdirnames(dirBatch)
 		for _, name := range names {
-			if seg, ok := parseSegment(name); ok && (keep == nil || keep(seg)) {
+			if !strings.HasPrefix(name, prefix) {
+				continue
+			}
+			if seg, ok := parseSegment(name); ok {
 				out = append(out, seg)
 			}
 		}
@@ -155,6 +160,13 @@ func listSegments(dir string, keep func(segment) bool) ([]segment, error) {
 			return out, err
 		}
 	}
+}
+
+// hourPrefix is the part of a segment name shared by every segment of one
+// stream and hour.
+func hourPrefix(stream string, bucket time.Time) string {
+	name := SegmentName(stream, bucket, 0)
+	return name[:len(name)-len("0000"+segmentExt)]
 }
 
 func sortSegments(segs []segment) {

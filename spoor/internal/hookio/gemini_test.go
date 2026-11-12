@@ -40,7 +40,7 @@ func TestGeminiGolden(t *testing.T) {
 			eq(t, "tool.kind", e.Tool.Kind, event.ToolWebFetch)
 			eq(t, "target.url", target(e).URL, "https://example.com/a?x=1")
 			eq(t, "target.host", target(e).Host, "example.com")
-			eq(t, "target.hosts", target(e).Hosts, []string{"example.com", "pastebin.com"})
+			eq(t, "target.hosts", target(e).Hosts, []string{"pastebin.com"}) // hosts beyond the primary
 		}},
 		{"AfterTool.json", "AfterTool", event.TypeToolPost, false, func(t *testing.T, e *event.Event) {
 			eq(t, "tool.kind", e.Tool.Kind, event.ToolFileRead)

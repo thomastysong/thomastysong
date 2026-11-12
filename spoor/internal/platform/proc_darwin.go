@@ -14,16 +14,20 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// UNVERIFIED: this file was compiled and vetted for darwin/amd64 and
-// darwin/arm64 but not executed in the build environment. The kern.procargs2
-// parser it relies on is unit-tested with fixtures on every platform.
+// UNVERIFIED: this file was compiled, vetted and linked for darwin/amd64 and
+// darwin/arm64 but not executed in the build environment. System call
+// numbers, argument order, structure sizes and permission rules were checked
+// against the XNU sources (bsd/kern/syscalls.master, bsd/kern/proc_info.c,
+// bsd/sys/proc_info.h, bsd/kern/kern_sysctl.c). The kern.procargs2 parser is
+// unit-tested with fixtures on every platform.
 
 // commMax is MAXCOMLEN: the longest name the kernel keeps in p_comm.
 const commMax = 16
 
 // proc_info(2) arguments, from XNU bsd/sys/proc_info.h. The call is made
 // directly (Go issues the trap itself on darwin) because libproc's wrappers
-// need cgo; a failure is an errno, never a crash.
+// need cgo; a failure is an errno, never a crash. PROC_PIDPATHINFO has no
+// same-user check in the kernel; PROC_PIDVNODEPATHINFO does.
 const (
 	procInfoCallPIDInfo  = 2    // PROC_INFO_CALL_PIDINFO
 	procPIDVnodePathInfo = 9    // PROC_PIDVNODEPATHINFO

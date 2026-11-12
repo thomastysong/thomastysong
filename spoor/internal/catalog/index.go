@@ -36,18 +36,48 @@ type snapshot struct {
 	matchers     []procMatcher
 }
 
+// winPattern is one DisplayName pattern: lowercased text, optionally
+// anchored at the start ("^Cursor") and/or the end ("^Arc$").
 type winPattern struct {
-	pattern string // lowercased
-	idx     int
+	text       string
+	start, end bool
+	idx        int
+}
+
+func parseWinPattern(p string, idx int) winPattern {
+	wp := winPattern{idx: idx}
+	if strings.HasPrefix(p, "^") {
+		wp.start = true
+		p = p[1:]
+	}
+	if strings.HasSuffix(p, "$") {
+		wp.end = true
+		p = p[:len(p)-1]
+	}
+	wp.text = strings.ToLower(p)
+	return wp
+}
+
+func (wp winPattern) match(hay string) bool {
+	switch {
+	case wp.start && wp.end:
+		return hay == wp.text
+	case wp.start:
+		return strings.HasPrefix(hay, wp.text) && (len(hay) == len(wp.text) || !isAlnum(hay[len(wp.text)]))
+	case wp.end:
+		return strings.HasSuffix(hay, wp.text) && (len(hay) == len(wp.text) || !isAlnum(hay[len(hay)-len(wp.text)-1]))
+	}
+	return containsWord(hay, wp.text)
 }
 
 // procMatcher is the precompiled process evidence for one product.
 type procMatcher struct {
 	args     []*regexp.Regexp
 	paths    []*regexp.Regexp
-	pkgPaths []string          // lowercased path fragments that only this product's packages produce
-	pkgByEco map[string]string // ecosystem -> set marker, to know which interpreters corroborate a script name
-	ociRefs  []string          // lowercased image references
+	bundles  []*regexp.Regexp // main executables of macOS app bundles
+	pkgPaths []string         // lowercased path fragments that only this product's packages produce
+	ecos     map[string]bool  // package ecosystems; says which interpreters corroborate a script name
+	ociRefs  []string         // lowercased image references
 }
 
 // build validates the accumulated state and indexes it.
@@ -150,7 +180,7 @@ func (st *state) build() (*snapshot, error) {
 			addIdx(s.byHost, v, i)
 		}
 		for _, v := range p.WinDisplay {
-			s.winDisplay = append(s.winDisplay, winPattern{strings.ToLower(v), i})
+			s.winDisplay = append(s.winDisplay, parseWinPattern(v, i))
 		}
 		m, err := compileMatcher(p)
 		if err != nil {
@@ -160,7 +190,7 @@ func (st *state) build() (*snapshot, error) {
 	}
 	// Longest pattern first, so "Antigravity IDE" wins over "Antigravity".
 	sort.SliceStable(s.winDisplay, func(a, b int) bool {
-		return len(s.winDisplay[a].pattern) > len(s.winDisplay[b].pattern)
+		return len(s.winDisplay[a].text) > len(s.winDisplay[b].text)
 	})
 	return s, nil
 }
@@ -177,7 +207,7 @@ func appendUnique(l []int, i int) []int {
 }
 
 func compileMatcher(p *Product) (procMatcher, error) {
-	m := procMatcher{pkgByEco: map[string]string{}}
+	m := procMatcher{ecos: map[string]bool{}}
 	for _, pat := range p.ProcessArgs {
 		re, err := regexp.Compile(pat)
 		if err != nil {
@@ -196,11 +226,20 @@ func compileMatcher(p *Product) (procMatcher, error) {
 			return m, fmt.Errorf("install_paths %q: %w", op.path, err)
 		}
 		m.paths = append(m.paths, re)
+		if op.os == "darwin" {
+			bre, err := bundleExecutableRegexp(op.path)
+			if err != nil {
+				return m, fmt.Errorf("install_paths %q: %w", op.path, err)
+			}
+			if bre != nil {
+				m.bundles = append(m.bundles, bre)
+			}
+		}
 	}
 	for _, pkg := range p.Packages {
 		mgr, name, _ := strings.Cut(pkg, ":")
 		eco := managerCanon[mgr]
-		m.pkgByEco[eco] = name
+		m.ecos[eco] = true
 		lower := strings.ToLower(name)
 		switch eco {
 		case "npm":
@@ -237,11 +276,11 @@ func compileMatcher(p *Product) (procMatcher, error) {
 
 // Version returns the catalog data version, with an "+overlay.<digest>"
 // suffix when overlay files are loaded.
-func (c *Catalog) Version() string { return c.snap.Load().version }
+func (c *Catalog) Version() string { return c.current().version }
 
 // Products returns a copy of every product in catalog order.
 func (c *Catalog) Products() []Product {
-	s := c.snap.Load()
+	s := c.current()
 	out := make([]Product, len(s.products))
 	for i := range s.products {
 		out[i] = s.products[i].clone()
@@ -250,11 +289,11 @@ func (c *Catalog) Products() []Product {
 }
 
 // Len returns the number of products.
-func (c *Catalog) Len() int { return len(c.snap.Load().products) }
+func (c *Catalog) Len() int { return len(c.current().products) }
 
 // Get returns the product with exactly this id.
 func (c *Catalog) Get(id string) (Product, bool) {
-	s := c.snap.Load()
+	s := c.current()
 	if i, ok := s.byID[id]; ok {
 		return s.products[i].clone(), true
 	}
@@ -265,11 +304,11 @@ func (c *Catalog) Get(id string) (Product, bool) {
 // Aliases (case-insensitive). An alias that several products carry does not
 // resolve: a rename has exactly one successor.
 func (c *Catalog) Resolve(nameOrID string) (Product, bool) {
-	s := c.snap.Load()
+	s := c.current()
 	if i, ok := s.byID[nameOrID]; ok {
 		return s.products[i].clone(), true
 	}
-	key := strings.ToLower(strings.TrimSpace(nameOrID))
+	key := strings.TrimSpace(lookupKey(nameOrID))
 	if i, ok := s.byID[key]; ok {
 		return s.products[i].clone(), true
 	}
@@ -283,48 +322,48 @@ func (c *Catalog) Resolve(nameOrID string) (Product, bool) {
 // without ".exe", any case) as a binary or process name. Several products
 // can share a name; use MatchProcess to choose between them.
 func (c *Catalog) ByBinary(name string) []Product {
-	s := c.snap.Load()
+	s := c.current()
 	return s.many(s.byExe[exeKey(name)])
 }
 
 // ByBundleID returns the product owning a macOS bundle identifier.
 func (c *Catalog) ByBundleID(id string) (Product, bool) {
-	s := c.snap.Load()
-	return s.first(s.byBundle[strings.ToLower(id)])
+	s := c.current()
+	return s.first(s.byBundle[lookupKey(id)])
 }
 
 // ByExtensionID returns the product owning a VS Code family extension id
 // ("publisher.name", any case).
 func (c *Catalog) ByExtensionID(id string) (Product, bool) {
-	s := c.snap.Load()
-	return s.first(s.byExt[strings.ToLower(id)])
+	s := c.current()
+	return s.first(s.byExt[lookupKey(id)])
 }
 
 // ByJetBrainsID returns the product owning a JetBrains plugin id.
 func (c *Catalog) ByJetBrainsID(id string) (Product, bool) {
-	s := c.snap.Load()
-	return s.first(s.byJB[strings.ToLower(id)])
+	s := c.current()
+	return s.first(s.byJB[lookupKey(id)])
 }
 
 // ByChromeID returns the product owning a Chromium extension id.
 func (c *Catalog) ByChromeID(id string) (Product, bool) {
-	s := c.snap.Load()
+	s := c.current()
 	return s.first(s.byChrome[id])
 }
 
 // ByDesktopID returns the product owning a Linux .desktop id (with or
 // without the ".desktop" suffix).
 func (c *Catalog) ByDesktopID(id string) (Product, bool) {
-	s := c.snap.Load()
-	return s.first(s.byDesktop[strings.TrimSuffix(strings.ToLower(id), ".desktop")])
+	s := c.current()
+	return s.first(s.byDesktop[strings.TrimSuffix(lookupKey(id), ".desktop")])
 }
 
 // ByAppx returns the product owning an AppX/MSIX package. It accepts a
 // package name ("Microsoft.Copilot"), a family name
 // ("Microsoft.Copilot_8wekyb3d8bbwe") or a full name with version.
 func (c *Catalog) ByAppx(name string) (Product, bool) {
-	s := c.snap.Load()
-	key := strings.ToLower(name)
+	s := c.current()
+	key := lookupKey(name)
 	if p, ok := s.first(s.byAppx[key]); ok {
 		return p, true
 	}
@@ -344,21 +383,26 @@ func (c *Catalog) ByAppx(name string) (Product, bool) {
 // ByPackage returns the product installed by a package. Managers that share
 // an ecosystem are interchangeable (pip, pipx and uv all name PyPI projects).
 func (c *Catalog) ByPackage(mgr, name string) (Product, bool) {
-	s := c.snap.Load()
+	s := c.current()
+	if len(mgr) > maxStringLen || len(name) > maxStringLen {
+		return Product{}, false
+	}
 	return s.first(s.byPackage[packageKeyParts(mgr, name)])
 }
 
 // ByWinDisplay returns the product whose DisplayName pattern occurs in a
 // registry Uninstall display name. Patterns match case-insensitively and
-// only on word boundaries: "Dia" must not match "NVIDIA Control Panel".
+// only on word boundaries: "Dia" must not match "NVIDIA Control Panel". A
+// pattern may be anchored with a leading "^" and a trailing "$", which is
+// how ordinary words stay safe ("^Arc$" does not match "Arc Welder Pro").
 func (c *Catalog) ByWinDisplay(displayName string) (Product, bool) {
-	s := c.snap.Load()
+	s := c.current()
 	if len(displayName) > maxStringLen {
 		displayName = displayName[:maxStringLen]
 	}
-	hay := strings.ToLower(displayName)
+	hay := strings.ToLower(strings.TrimSpace(displayName))
 	for _, wp := range s.winDisplay {
-		if containsWord(hay, wp.pattern) {
+		if wp.match(hay) {
 			return s.products[wp.idx].clone(), true
 		}
 	}
@@ -368,21 +412,24 @@ func (c *Catalog) ByWinDisplay(displayName string) (Product, bool) {
 // ByPort returns the products whose default listening port this is. A port
 // is corroboration only; never report a runtime from a port alone.
 func (c *Catalog) ByPort(port int) []Product {
-	s := c.snap.Load()
+	s := c.current()
 	return s.many(s.byPort[port])
 }
 
 // ByEnvMarker returns the products that set an environment variable for
 // their child processes (EnvMarkers and SessionEnv).
 func (c *Catalog) ByEnvMarker(name string) []Product {
-	s := c.snap.Load()
+	s := c.current()
 	return s.many(s.byEnv[name])
 }
 
 // ByAPIHost returns the products known to talk to a host. Entries written
 // as "*.example.com" match any subdomain.
 func (c *Catalog) ByAPIHost(host string) []Product {
-	s := c.snap.Load()
+	s := c.current()
+	if len(host) > 255 { // longer than any DNS name
+		return nil
+	}
 	host = strings.TrimSuffix(strings.ToLower(host), ".")
 	idx := append([]int(nil), s.byHost[host]...)
 	for rest := host; ; {
@@ -401,11 +448,22 @@ func (c *Catalog) ByAPIHost(host string) []Product {
 // IsAmbiguousName reports whether a process name needs a second class of
 // evidence before it identifies anything.
 func (c *Catalog) IsAmbiguousName(name string) bool {
-	return c.snap.Load().isAmbiguous(exeKey(name))
+	return c.current().isAmbiguous(exeKey(name))
 }
 
 func (s *snapshot) isAmbiguous(key string) bool {
 	return len(key) <= 2 || s.ambiguous[key]
+}
+
+// lookupKey lowercases an identifier taken from the endpoint (a bundle id
+// read from an Info.plist, an extension id from a manifest). No real
+// identifier is longer than the cap; an over-long one is somebody's
+// multi-megabyte manifest field and simply does not match.
+func lookupKey(id string) string {
+	if len(id) > maxStringLen {
+		return "\x00too-long"
+	}
+	return strings.ToLower(id)
 }
 
 func (s *snapshot) first(idx []int) (Product, bool) {

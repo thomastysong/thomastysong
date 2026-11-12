@@ -1,0 +1,131 @@
+{
+  "activity_id": 1,
+  "activity_name": "Launch",
+  "actor": {
+    "app_name": "Claude Code",
+    "app_uid": "claude-code",
+    "process": {
+      "name": "Claude Code",
+      "pid": 48120
+    },
+    "user": {
+      "name": "alice",
+      "uid": "501"
+    }
+  },
+  "ai_agent": {
+    "ai_model": {
+      "ai_provider": "Anthropic",
+      "name": "claude-sonnet-4-5"
+    },
+    "instance_uid": "3f6c1f0e-1111-4222-8333-444455556666",
+    "name": "Claude Code",
+    "type": "Unknown",
+    "type_id": 0,
+    "uid": "claude-code",
+    "version": "2.1.0"
+  },
+  "category_name": "System Activity",
+  "category_uid": 1,
+  "class_name": "Process Activity",
+  "class_uid": 1007,
+  "device": {
+    "hostname": "dev-mbp-042",
+    "os": {
+      "name": "macOS",
+      "type": "macOS",
+      "type_id": 300
+    },
+    "type": "Unknown",
+    "type_id": 0,
+    "uid": "6F1D2C3B-0000-4000-8000-ABCDEF012345"
+  },
+  "duration": 5321,
+  "exit_code": 2,
+  "message": "claude-code tool.post Bash",
+  "metadata": {
+    "correlation_uid": "3f6c1f0e-1111-4222-8333-444455556666",
+    "event_code": "tool.post",
+    "log_name": "spoor.activity",
+    "product": {
+      "name": "spoor",
+      "vendor_name": "spoor"
+    },
+    "profiles": [
+      "host",
+      "ai_operation"
+    ],
+    "sequence": 42,
+    "uid": "019a7a00-0000-7000-8000-000000000001",
+    "version": "1.9.0"
+  },
+  "process": {
+    "cmd_line": "make test",
+    "uid": "toolu_01ABC",
+    "working_directory": "/Users/alice/src/app"
+  },
+  "severity": "Informational",
+  "severity_id": 1,
+  "status": "Failure",
+  "status_detail": "exit status 2",
+  "status_id": 2,
+  "time": 1794391203123,
+  "type_name": "Process Activity: Launch",
+  "type_uid": 100701,
+  "unmapped": {
+    "spoor": {
+      "agent": {
+        "id": "claude-code",
+        "name": "Claude Code",
+        "pid": 48120,
+        "surface": "cli",
+        "version": "2.1.0"
+      },
+      "fidelity": "observed",
+      "host": {
+        "arch": "arm64",
+        "id": "6F1D2C3B-0000-4000-8000-ABCDEF012345",
+        "name": "dev-mbp-042",
+        "os": "darwin"
+      },
+      "id": "019a7a00-0000-7000-8000-000000000001",
+      "kind": "activity",
+      "outcome": {
+        "duration_ms": 5321,
+        "error": "exit status 2",
+        "exit_code": 2,
+        "status": "error"
+      },
+      "privacy": "redacted",
+      "seq": 42,
+      "session": {
+        "cwd": "/Users/alice/src/app",
+        "id": "3f6c1f0e-1111-4222-8333-444455556666",
+        "model": "claude-sonnet-4-5",
+        "permission_mode": "default"
+      },
+      "source": "hook",
+      "sources": [
+        "hook",
+        "transcript"
+      ],
+      "target": {
+        "command": "make test"
+      },
+      "tool": {
+        "kind": "shell",
+        "name": "Bash",
+        "output_len": 17,
+        "output_sha256": "bb22",
+        "use_id": "toolu_01ABC"
+      },
+      "ts": "2026-11-11T10:00:03.123456Z",
+      "type": "tool.post",
+      "user": {
+        "id": "501",
+        "name": "alice"
+      },
+      "v": 1
+    }
+  }
+}

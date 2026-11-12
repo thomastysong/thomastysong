@@ -14,6 +14,16 @@ type UserHome struct{ Name, UID, Home string }
 
 // Proc is one row of the process table. Fields the caller may not read, or
 // that the OS does not have, are left empty.
+//
+// Args (and, on Linux and macOS, Name) are whatever the process chose to show
+// and can be forged by it; Exe, PPID, Start and UID come from the kernel. UID
+// is the real uid on POSIX and the token user's SID on Windows; User is the
+// account name when it can be resolved locally.
+//
+// (PID, Start) identifies one process instance for as long as the sensor
+// runs: a later process that reuses the pid has a different Start. On Linux
+// Start is derived from the boot time, so a wall-clock step of two seconds or
+// more shifts it once for every process (see clock in proc_linux.go).
 type Proc struct {
 	PID, PPID int
 	Name, Exe string

@@ -16,9 +16,12 @@ func IsPrivileged() bool { return os.Geteuid() == 0 }
 // CurrentUser returns the account this process runs as. Home is the account
 // database's home directory when it exists, otherwise $HOME; it is empty when
 // neither is an existing directory.
-func CurrentUser() UserHome {
+func CurrentUser() (u UserHome) {
 	uid := os.Getuid()
-	u := UserHome{UID: strconv.Itoa(uid)}
+	u = UserHome{UID: strconv.Itoa(uid)}
+	// The account database is parsed here; whatever it holds, the uid alone
+	// is still a valid answer.
+	defer func() { _ = recover() }()
 	if name, home, ok := lookupUID(uint32(uid)); ok {
 		u.Name = name
 		// The database wins over $HOME: under sudo, HOME may still name the
@@ -39,6 +42,8 @@ func CurrentUser() UserHome {
 	}
 	return u
 }
+
+func currentHome() string { return CurrentUser().Home }
 
 // Users lists accounts with an existing home directory. A privileged caller
 // gets every person's home on the machine; an unprivileged caller gets only

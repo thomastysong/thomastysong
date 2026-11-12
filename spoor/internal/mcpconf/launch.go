@@ -48,15 +48,21 @@ func (l *launch) pinned() bool {
 	return l.has && !l.spec.local && !l.unpinned
 }
 
+// analyze reads the launch of a declared server.
 func analyze(s Server) launch {
-	var l launch
 	cmd := strings.TrimSpace(s.Command)
-	if cmd == "" {
-		return l
-	}
 	args := s.Args
-	if len(args) == 0 && strings.ContainsAny(cmd, " \t") {
+	if cmd != "" && len(args) == 0 && strings.ContainsAny(cmd, " \t") {
 		cmd, args = splitCommandLine(cmd)
+	}
+	return analyzeArgv(cmd, args)
+}
+
+// analyzeArgv reads the launch of an executable and its arguments.
+func analyzeArgv(cmd string, args []string) launch {
+	var l launch
+	if strings.TrimSpace(cmd) == "" {
+		return l
 	}
 	l.declCmd, l.declArgs = cmd, args
 	l.resolve(cmd, args, 0)
@@ -338,6 +344,13 @@ func (l *launch) posixShell(args []string, depth int) {
 		}
 		if !isFlag(a) && !strings.HasPrefix(a, "+") {
 			break
+		}
+		if !strings.HasPrefix(a, "--") && strings.Contains(a, "s") && !strings.Contains(a, "c") {
+			// -s: commands come from standard input, operands are its
+			// parameters. There is no script file to point at.
+			l.runner = "binary"
+			l.rest = args[i+1:]
+			return
 		}
 		if !strings.HasPrefix(a, "--") && strings.Contains(a, "c") {
 			// -c, -lc, -ic ...: the next word is the script.

@@ -35,18 +35,6 @@ func rawKind(raw json.RawMessage) byte {
 	return raw[0]
 }
 
-// rawString returns raw decoded as a JSON string, or "" when it is not one.
-func rawString(raw json.RawMessage) string {
-	if rawKind(raw) != '"' {
-		return ""
-	}
-	var s string
-	if json.Unmarshal(raw, &s) != nil {
-		return ""
-	}
-	return s
-}
-
 // rawObject returns raw decoded as a JSON object, or nil when it is not one.
 func rawObject(raw json.RawMessage) map[string]any {
 	if rawKind(raw) != '{' {
@@ -59,53 +47,11 @@ func rawObject(raw json.RawMessage) map[string]any {
 	return m
 }
 
-// textDepth bounds how deep textOf looks into nested arrays. Real content
+// textDepth bounds how deep anyText looks into nested values. Real content
 // nests at most twice (a list of blocks whose content is a list of blocks);
 // the bound keeps a hostile, deeply nested value from being rescanned once
 // per level.
 const textDepth = 3
-
-// textOf flattens a message body to text: a string, an object with a "text"
-// field, or an array of either. Images and unknown shapes yield nothing.
-func textOf(raw json.RawMessage) string { return textOfDepth(raw, textDepth) }
-
-func textOfDepth(raw json.RawMessage, depth int) string {
-	switch rawKind(raw) {
-	case '"':
-		return rawString(raw)
-	case '{':
-		var b struct {
-			Text    json.RawMessage `json:"text"`
-			Content json.RawMessage `json:"content"`
-		}
-		if json.Unmarshal(raw, &b) != nil {
-			return ""
-		}
-		if s := rawString(b.Text); s != "" {
-			return s
-		}
-		if depth > 0 && rawKind(b.Content) != 0 {
-			return textOfDepth(b.Content, depth-1)
-		}
-		return ""
-	case '[':
-		if depth == 0 {
-			return ""
-		}
-		var blocks []json.RawMessage
-		if json.Unmarshal(raw, &blocks) != nil {
-			return ""
-		}
-		var parts []string
-		for _, b := range blocks {
-			if t := textOfDepth(b, depth-1); t != "" {
-				parts = append(parts, t)
-			}
-		}
-		return strings.Join(parts, "\n")
-	}
-	return ""
-}
 
 // parseTime accepts the RFC 3339 forms the agents write. Anything else is
 // the zero time, which callers treat as "no timestamp on this record".
@@ -176,18 +122,112 @@ func exitCodeAfter(s string, last bool, markers ...string) (int, bool) {
 
 func intPtr(n int) *int { return &n }
 
-// rustDuration decodes a serde-serialized std::time::Duration
-// ({"secs":1,"nanos":5}) to milliseconds.
-func rustDuration(raw json.RawMessage) int64 {
-	var d struct {
-		Secs  float64 `json:"secs"`
-		Nanos float64 `json:"nanos"`
+// The parsers decode each line once, into a typed envelope whose polymorphic
+// parts are `any`. The helpers below read those generic values without
+// re-parsing; every recursive one is depth-bounded because encoding/json
+// accepts nesting up to 10,000 levels.
+
+func anyString(v any) string {
+	s, _ := v.(string)
+	return s
+}
+
+func anyObject(v any) map[string]any {
+	m, _ := v.(map[string]any)
+	return m
+}
+
+func anyBool(v any) bool {
+	b, _ := v.(bool)
+	return b
+}
+
+// anyInt returns v as an int when it is a JSON number with an integral value
+// in a sane range.
+func anyInt(v any) (int, bool) {
+	f, ok := v.(float64)
+	if !ok || f != float64(int64(f)) || f > 1<<31 || f < -(1<<31) {
+		return 0, false
 	}
-	if rawKind(raw) != '{' || json.Unmarshal(raw, &d) != nil {
+	return int(f), true
+}
+
+// anyText flattens a decoded message body to text: a string, an object with
+// a "text" field (or a nested "content"), or an array of either.
+func anyText(v any) string { return anyTextDepth(v, textDepth) }
+
+func anyTextDepth(v any, depth int) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case map[string]any:
+		if s, ok := t["text"].(string); ok && s != "" {
+			return s
+		}
+		if c, ok := t["content"]; ok && depth > 0 {
+			return anyTextDepth(c, depth-1)
+		}
+	case []any:
+		if depth == 0 {
+			return ""
+		}
+		if len(t) == 1 {
+			return anyTextDepth(t[0], depth-1)
+		}
+		var parts []string
+		for _, b := range t {
+			if s := anyTextDepth(b, depth-1); s != "" {
+				parts = append(parts, s)
+			}
+		}
+		return strings.Join(parts, "\n")
+	}
+	return ""
+}
+
+// anyContains reports whether needle occurs in any string within v, looking
+// at most depth levels down and at a bounded number of values.
+func anyContains(v any, needle string, depth int, budget *int) bool {
+	if *budget <= 0 {
+		return false
+	}
+	*budget--
+	switch t := v.(type) {
+	case string:
+		return strings.Contains(t, needle)
+	case map[string]any:
+		if depth == 0 {
+			return false
+		}
+		for k, e := range t {
+			if strings.Contains(k, needle) || anyContains(e, needle, depth-1, budget) {
+				return true
+			}
+		}
+	case []any:
+		if depth == 0 {
+			return false
+		}
+		for _, e := range t {
+			if anyContains(e, needle, depth-1, budget) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// anyDuration decodes a serde-serialized std::time::Duration
+// ({"secs":1,"nanos":5}) to milliseconds.
+func anyDuration(v any) int64 {
+	m := anyObject(v)
+	if m == nil {
 		return 0
 	}
-	ms := d.Secs*1000 + d.Nanos/1e6
-	if ms < 0 || ms > 1e15 {
+	secs, _ := m["secs"].(float64)
+	nanos, _ := m["nanos"].(float64)
+	ms := secs*1000 + nanos/1e6
+	if !(ms >= 0 && ms <= 1e15) {
 		return 0
 	}
 	return int64(ms)

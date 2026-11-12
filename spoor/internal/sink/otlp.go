@@ -56,17 +56,19 @@ func (e *HTTPStatusError) Error() string {
 	return fmt.Sprintf("otlp: http status %d: %s", e.Code, e.Body)
 }
 
-// Permanent reports whether the request must not be retried as is. OTLP
-// names 429, 502, 503 and 504 as the retryable statuses; this client also
-// retries the rest of 5xx plus 408, and auth failures (401, 403) because a
-// credential can be fixed while the data waits on disk. What is left, such
-// as 400 and 413, means the payload itself was refused.
+// Permanent reports whether the payload itself was refused, so that sending
+// the same bytes again cannot succeed: 400 (malformed), 413 (too large) and
+// 422. Everything else is treated as a condition that can change while the
+// data waits on disk: 429 and 5xx by the OTLP rules, 401 and 403 because a
+// credential can be fixed, and 404 or 405 because they describe the
+// endpoint, not the data. Calling those permanent would let a wrong URL
+// talk the shipper into discarding events.
 func (e *HTTPStatusError) Permanent() bool {
-	switch {
-	case e.Code >= 500, e.Code == 429, e.Code == 408, e.Code == 401, e.Code == 403:
-		return false
+	switch e.Code {
+	case http.StatusBadRequest, http.StatusRequestEntityTooLarge, http.StatusUnprocessableEntity:
+		return true
 	}
-	return e.Code >= 400
+	return false
 }
 
 // RejectedError is returned when the receiver accepted the request but
@@ -80,8 +82,9 @@ func (e *RejectedError) Error() string {
 	return fmt.Sprintf("otlp: receiver rejected %d log records: %s", e.Rejected, e.Message)
 }
 
-// Permanent is true: the receiver has said which data it will not take, and
-// OTLP forbids retrying a partial success.
+// Permanent is true: OTLP forbids retrying a partial success, and a retry
+// would duplicate every record the receiver did accept. The Shipper counts
+// the rejected records as dropped and moves on.
 func (e *RejectedError) Permanent() bool { return true }
 
 type otlpSink struct {

@@ -261,7 +261,7 @@ func redactURL(raw string, mark marker, paths bool) string {
 	var b strings.Builder
 	b.WriteString(u.scheme + "://")
 	if u.userinfo != "" {
-		if isReference(u.userinfo) || allRefs(strings.Split(u.userinfo, ":")) {
+		if marked(u.userinfo) || allRefs(strings.Split(u.userinfo, ":")) {
 			b.WriteString(u.userinfo + "@")
 		} else {
 			b.WriteString(mark("userinfo", u.userinfo) + "@")
@@ -284,7 +284,7 @@ func redactURL(raw string, mark marker, paths bool) string {
 		params := strings.Split(u.query, "&")
 		for i, kv := range params {
 			k, v, ok := strings.Cut(kv, "=")
-			if ok && v != "" && isSecretParam(k) && !isReference(v) {
+			if ok && v != "" && isSecretParam(k) && !isReference(v) && !marked(v) {
 				params[i] = k + "=" + mark("query", v)
 			}
 		}
@@ -311,7 +311,7 @@ func redactPath(path string, mark marker) string {
 	}
 	segs := strings.Split(path, "/")
 	for i, seg := range segs {
-		if opaque, _ := pathToken(seg); opaque {
+		if opaque, _ := pathToken(seg); opaque && !marked(seg) {
 			segs[i] = mark("path", seg)
 		}
 	}
@@ -327,33 +327,45 @@ type redactor struct {
 	scan bool
 }
 
-// text applies the structure-independent rules to free text: URLs,
-// NAME=value assignments with credential names, inline Authorization
-// headers, scanner hits and PEM blocks.
+// text applies the structure-independent rules to free text: scanner hits,
+// URLs, NAME=value assignments with credential names, inline Authorization
+// headers and PEM blocks.
+//
+// The scanner runs first, on the text as written, so its offsets are right
+// and it never sees this package's own markers; the structural rules then
+// leave anything already marked alone.
 func (r redactor) text(s string) string {
 	if s == "" {
 		return s
 	}
-	s = reURLInText.ReplaceAllStringFunc(s, func(m string) string {
-		return redactURL(m, r.mark, r.scan)
-	})
-	s = reAssign.ReplaceAllStringFunc(s, func(m string) string {
-		k, v, _ := strings.Cut(m, "=")
-		bare := strings.Trim(v, `"'`)
-		if !isSecretName(k) || bare == "" || isReference(bare) || strings.HasPrefix(bare, "[REDACTED") {
-			return m
-		}
-		return k + "=" + r.mark("assignment", bare)
-	})
-	s = reAuthHeader.ReplaceAllStringFunc(s, func(m string) string {
-		sub := reAuthHeader.FindStringSubmatch(m)
-		if sub == nil || isReference(sub[2]) || strings.HasPrefix(sub[2], "[REDACTED") {
-			return m
-		}
-		return sub[1] + r.mark("header", sub[2])
-	})
 	if r.scan {
 		s = redactHits(s, r.mark)
+	}
+	// Each rule is gated on a literal it cannot match without. The hash
+	// runs these rules over whole arguments, which can be megabytes.
+	if strings.Contains(s, "://") {
+		s = reURLInText.ReplaceAllStringFunc(s, func(m string) string {
+			return redactURL(m, r.mark, r.scan)
+		})
+	}
+	if strings.Contains(s, "=") {
+		s = reAssign.ReplaceAllStringFunc(s, func(m string) string {
+			k, v, _ := strings.Cut(m, "=")
+			bare := strings.Trim(v, `"'`)
+			if !isSecretName(k) || bare == "" || isReference(bare) || marked(bare) {
+				return m
+			}
+			return k + "=" + r.mark("assignment", bare)
+		})
+	}
+	if containsFold(s, "authorization") {
+		s = reAuthHeader.ReplaceAllStringFunc(s, func(m string) string {
+			sub := reAuthHeader.FindStringSubmatch(m)
+			if sub == nil || isReference(sub[2]) || marked(sub[2]) {
+				return m
+			}
+			return sub[1] + r.mark("header", sub[2])
+		})
 	}
 	// A private key cut by a size limit no longer matches a BEGIN..END
 	// pattern; everything after a BEGIN marker goes, matched or not.
@@ -362,6 +374,28 @@ func (r redactor) text(s string) string {
 	}
 	return s
 }
+
+// containsFold reports whether s contains the lower-case ASCII word sub in
+// any letter case, without allocating a lowered copy of s.
+func containsFold(s, sub string) bool {
+	n := len(sub)
+	if n == 0 {
+		return true
+	}
+	first := sub[0]
+	for i := 0; i+n <= len(s); i++ {
+		if s[i]|0x20 != first {
+			continue
+		}
+		if strings.EqualFold(s[i:i+n], sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// marked reports whether v already contains a redaction marker.
+func marked(v string) bool { return strings.Contains(v, "[REDACTED") }
 
 func redactHits(s string, mark marker) string {
 	hits := secretHits(s)
@@ -438,6 +472,8 @@ func (r redactor) args(args []string, container bool) []string {
 			out[i] = r.headerLine(a)
 		case container && (prev == "-e" || prev == "--env"):
 			out[i] = r.envPair(a)
+		case container && strings.HasPrefix(a, "-e") && len(a) > 2 && !strings.HasPrefix(a, "-e=") && reEnvAssign.MatchString(a[2:]):
+			out[i] = "-e" + r.envPair(a[2:]) // attached form: -eNAME=value
 		case strings.HasPrefix(a, "-") && strings.Contains(a, "="):
 			flag, v, _ := strings.Cut(a, "=")
 			lf := strings.ToLower(flag)
@@ -451,8 +487,11 @@ func (r redactor) args(args []string, container bool) []string {
 			default:
 				out[i] = flag + "=" + r.text(v)
 			}
-		case container && strings.HasPrefix(a, "-e") && len(a) > 2 && !strings.HasPrefix(a, "--") && strings.Contains(a, "="):
-			out[i] = "-e" + r.envPair(a[2:])
+		case r.scan && len(a) >= 32 && !isFlag(a) && opaqueToken(a) && !reHex.MatchString(a) && !reUUID.MatchString(a):
+			// A long random word passed as an argument is a credential more
+			// often than not. With no pattern to confirm it, it is withheld
+			// from output (when in doubt, redact) but raises no flag.
+			out[i] = r.mark("opaque", a)
 		default:
 			out[i] = r.text(a)
 		}

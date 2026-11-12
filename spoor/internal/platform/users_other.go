@@ -27,6 +27,8 @@ func CurrentUser() UserHome {
 	return u
 }
 
+func currentHome() string { return CurrentUser().Home }
+
 // Users returns only the current user on this OS: enumerating other
 // accounts' homes is implemented for linux, darwin and windows.
 func Users() ([]UserHome, error) {

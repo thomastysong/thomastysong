@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/thomastysong/spoor/internal/event"
@@ -98,7 +99,7 @@ func PackageManagers() []string {
 	for m := range managerCanon {
 		out = append(out, m)
 	}
-	sortStrings(out)
+	sort.Strings(out)
 	return out
 }
 
@@ -125,7 +126,7 @@ func Capabilities() []string {
 	for c := range capabilities {
 		out = append(out, c)
 	}
-	sortStrings(out)
+	sort.Strings(out)
 	return out
 }
 

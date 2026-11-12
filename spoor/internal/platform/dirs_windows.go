@@ -5,32 +5,58 @@ package platform
 import (
 	"os"
 	"path/filepath"
-	"strings"
+	"sync"
 
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 )
 
-// programDataDir asks the shell rather than the environment: the hook process
-// runs with whatever environment the agent hands it, and a rewritten
-// %ProgramData% must not be able to point it at a different socket.
-func programDataDir() string {
-	if p, err := windows.KnownFolderPath(windows.FOLDERID_ProgramData, windows.KF_FLAG_DEFAULT); err == nil && p != "" {
-		return p
+var (
+	programDataOnce sync.Once
+	programDataVal  string
+)
+
+// systemDrive returns the drive Windows is installed on ("C:"), from the
+// kernel rather than from %SystemDrive%.
+func systemDrive() string {
+	dir, err := windows.GetSystemWindowsDirectory()
+	if err != nil {
+		return ""
 	}
-	if p := os.Getenv("ProgramData"); filepath.IsAbs(p) {
-		return p
-	}
-	return `C:\ProgramData`
+	return filepath.VolumeName(dir)
 }
 
-// localAppDataDir returns %LOCALAPPDATA% for home. The shell can only answer
-// for the calling user; other profiles get the default location.
-func localAppDataDir(home string) string {
-	cur := CurrentUser().Home
-	if cur != "" && strings.EqualFold(filepath.Clean(home), filepath.Clean(cur)) {
-		if p, err := windows.KnownFolderPath(windows.FOLDERID_LocalAppData, windows.KF_FLAG_DEFAULT); err == nil && p != "" {
-			return p
+// programDataDir locates %ProgramData% without trusting the environment and
+// without the shell. The hook process runs on every tool call with whatever
+// environment the agent hands it: a rewritten %ProgramData% must not be able
+// to point it at a different socket, and SHGetKnownFolderPath would load
+// shell32 into each of those short-lived processes.
+//
+// UNVERIFIED: not executed on Windows in the build environment; the
+// ProfileList\ProgramData value ("%SystemDrive%\ProgramData" by default) is
+// cited from memory. When it is missing or unusable the answer is
+// <system drive>\ProgramData.
+func programDataDir() string {
+	programDataOnce.Do(func() {
+		drive := systemDrive()
+		if k, err := registry.OpenKey(registry.LOCAL_MACHINE, profileListKey, registry.QUERY_VALUE|registry.WOW64_64KEY); err == nil {
+			v, _, verr := k.GetStringValue("ProgramData")
+			k.Close()
+			if verr == nil {
+				if p := expandSystemDrive(v, drive); filepath.IsAbs(p) {
+					programDataVal = filepath.Clean(p)
+					return
+				}
+			}
 		}
-	}
-	return filepath.Join(home, "AppData", "Local")
+		switch {
+		case drive != "":
+			programDataVal = drive + `\ProgramData`
+		case filepath.IsAbs(os.Getenv("ProgramData")):
+			programDataVal = filepath.Clean(os.Getenv("ProgramData"))
+		default:
+			programDataVal = `C:\ProgramData`
+		}
+	})
+	return programDataVal
 }

@@ -142,8 +142,6 @@ func cases() map[string]*event.Event {
 	e.Check = &event.Check{ID: "SP-POST-011", Status: "pass", Severity: event.SevHigh}
 	m["posture_pass"] = e
 
-	pinned := false
-	_ = pinned
 	e = base(event.KindInventory, event.TypeInventoryAsset, event.SourceScan)
 	e.Asset = &event.Asset{
 		ID: "ast-7c1d", Kind: event.AssetMCPServer, Name: "filesystem", Parent: "claude-code", Path: "/Users/alice/.claude.json",

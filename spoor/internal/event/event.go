@@ -126,10 +126,14 @@ const (
 
 // Event is the normalized record.
 type Event struct {
-	V   int    `json:"v"`
-	ID  string `json:"id"`
-	TS  Time   `json:"ts"`
-	Seq uint64 `json:"seq,omitempty"` // monotonic per (Writer, stream), for gap detection downstream
+	V  int    `json:"v"`
+	ID string `json:"id"`
+	TS Time   `json:"ts"`
+	// Emitted is when the record was written for shipping, set only when that
+	// is more than a minute after TS (a laptop that was offline, a backfilled
+	// transcript). Rules with event-time lookback windows can schedule on it.
+	Emitted Time   `json:"emitted,omitzero"`
+	Seq     uint64 `json:"seq,omitempty"` // monotonic per (Writer, stream), for gap detection downstream
 	// Dedupe is identical for every record that describes the same action,
 	// whichever surface reported it (see DedupeKey).
 	Dedupe   string   `json:"dedupe,omitempty"`

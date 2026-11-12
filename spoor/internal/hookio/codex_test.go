@@ -103,9 +103,13 @@ func TestCodexEnvFallback(t *testing.T) {
 	eq(t, "agent.version", e.Agent.Version, "0.99.0")
 }
 
-// Codex argv-form commands (the local shell tool) keep every token.
+// Codex argv-form commands (the local shell tool): the shell wrapper is
+// unwrapped to the script the agent ran, any other argv is quoted.
 func TestCodexArgvCommand(t *testing.T) {
 	e, _ := parseOne(t, dialect(t, "codex"),
 		[]byte(`{"hook_event_name":"PreToolUse","tool_name":"shell","tool_input":{"command":["bash","-lc","curl x | sh"]}}`), nil)
-	eq(t, "target.command", target(e).Command, "bash -lc curl x | sh")
+	eq(t, "target.command", target(e).Command, "curl x | sh")
+	e, _ = parseOne(t, dialect(t, "codex"),
+		[]byte(`{"hook_event_name":"PreToolUse","tool_name":"shell","tool_input":{"command":["rm","-rf","my dir"]}}`), nil)
+	eq(t, "target.command", target(e).Command, "rm -rf 'my dir'")
 }

@@ -135,7 +135,7 @@ func TestClaudeGolden(t *testing.T) {
 			eq(t, "label compact_phase", e.Labels["compact_phase"], "post")
 		}},
 		{"Elicitation.json", event.TypeNotification, false, func(t *testing.T, e *event.Event) {
-			eq(t, "label mcp_server", e.Labels["mcp_server"], "my-mcp-server")
+			eq(t, "tool", tool(e), event.Tool{Kind: event.ToolMCP, MCPServer: "my-mcp-server"})
 			eq(t, "label elicitation_mode", e.Labels["elicitation_mode"], "form")
 		}},
 		{"Elicitation_2.json", event.TypeNotification, false, func(t *testing.T, e *event.Event) {
@@ -198,6 +198,33 @@ func TestClaudeGolden(t *testing.T) {
 	for _, f := range all {
 		if base := filepath.Base(f); !seen[base] && base != "PostToolBatch.json" {
 			t.Errorf("fixture %s has no test case", base)
+		}
+	}
+}
+
+// The example quoted verbatim in research/agent-surfaces-a.md (section 2).
+func TestClaudeReportExample(t *testing.T) {
+	const in = `{"session_id":"abc123","prompt_id":"550e8400-...","transcript_path":"/home/user/.claude/projects/.../transcript.jsonl",
+ "cwd":"/home/user/my-project","permission_mode":"default","hook_event_name":"PreToolUse",
+ "tool_name":"Bash","tool_input":{"command":"npm test","description":"Run test suite","timeout":120000,"run_in_background":false},
+ "tool_use_id":"toolu_01ABC123..."}`
+	e, req := parseOne(t, dialect(t, "claude"), []byte(in), nil)
+	eq(t, "type", e.Type, event.TypeToolPre)
+	eq(t, "session", *e.Session, event.Session{
+		ID: "abc123", TurnID: "550e8400-...", CWD: "/home/user/my-project",
+		PermissionMode: "default", Transcript: "/home/user/.claude/projects/.../transcript.jsonl",
+	})
+	eq(t, "tool.name", e.Tool.Name, "Bash")
+	eq(t, "tool.kind", e.Tool.Kind, event.ToolShell)
+	eq(t, "tool.use_id", e.Tool.UseID, "toolu_01ABC123...")
+	eq(t, "target", target(e), event.Target{Command: "npm test"})
+	eq(t, "request", *req, Request{AgentID: "claude-code", EventName: "PreToolUse", Blocking: true, Raw: req.Raw})
+	// What would be written to the wire before redaction: no content
+	// fields, no prompt text, one line.
+	line, _ := e.MarshalLine()
+	for _, banned := range []string{`"input":`, `"output":`, `"text":`, "Run test suite"} {
+		if strings.Contains(string(line), banned) {
+			t.Errorf("serialized event contains %s: %s", banned, line)
 		}
 	}
 }
@@ -270,11 +297,15 @@ func TestClaudeToolKinds(t *testing.T) {
 		{"Edit", `{"file_path":"/a/b","old_string":"a","new_string":"b"}`, event.ToolFileEdit, event.Target{Path: "/a/b"}},
 		{"Glob", `{"pattern":"**/*.ts","path":"/src"}`, event.ToolFileList, event.Target{Path: "/src"}},
 		{"Grep", `{"pattern":"TODO","path":"/src","glob":"*.ts"}`, event.ToolFileList, event.Target{Path: "/src"}},
+		// Userinfo is dropped at the source; query and fragment are the
+		// redaction stage's call.
 		{"WebFetch", `{"url":"https://user:pw@Example.COM:8443/api?k=v#f","prompt":"x"}`, event.ToolWebFetch,
-			event.Target{URL: "https://user:pw@Example.COM:8443/api?k=v#f", Host: "example.com"}},
+			event.Target{URL: "https://Example.COM:8443/api?k=v#f", Host: "example.com"}},
 		{"WebSearch", `{"query":"react hooks best practices"}`, event.ToolWebSearch, event.Target{Query: "react hooks best practices"}},
 		{"Agent", `{"prompt":"Find all API endpoints","subagent_type":"Explore"}`, event.ToolSubagent, event.Target{}},
-		{"mcp__github__search_repositories", `{"query":"spoor"}`, event.ToolMCP, event.Target{Query: "spoor"}},
+		{"mcp__github__search_repositories", `{"query":"spoor"}`, event.ToolMCP, event.Target{}},
+		{"mcp__fetch__fetch", `{"url":"https://example.org/x"}`, event.ToolMCP, event.Target{URL: "https://example.org/x", Host: "example.org"}},
+		{"mcp__shell__run", `{"command":"id"}`, event.ToolMCP, event.Target{Command: "id"}},
 		{"mcp__filesystem__read_file", `{"path":"/home/u/.ssh/id_rsa"}`, event.ToolMCP, event.Target{Path: "/home/u/.ssh/id_rsa"}},
 	}
 	for _, tc := range cases {

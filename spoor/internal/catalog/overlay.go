@@ -34,9 +34,14 @@ func (c *Catalog) LoadOverlay(dir string) (err error) {
 			err = fmt.Errorf("catalog: internal error loading overlay: %v", r)
 		}
 	}()
+	if c == nil {
+		return errors.New("catalog: LoadOverlay on a nil Catalog")
+	}
 	if dir == "" {
 		return errors.New("catalog: overlay directory is empty")
 	}
+	c.overlayMu.Lock()
+	defer c.overlayMu.Unlock()
 	di, err := os.Lstat(dir)
 	if err != nil {
 		return fmt.Errorf("catalog: overlay: %w", err)
@@ -68,8 +73,7 @@ func (c *Catalog) LoadOverlay(dir string) (err error) {
 	}
 	sort.Strings(names)
 
-	base := c.snap.Load()
-	st := base.source.copy()
+	st := c.current().source.copy()
 	digest := sha256.New()
 	io.WriteString(digest, st.overlay)
 	for _, name := range names {

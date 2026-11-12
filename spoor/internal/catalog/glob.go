@@ -15,12 +15,19 @@ const maxGlobLen = 1024
 // matches "a/b"). Both separators are accepted in either argument. Matching
 // ignores case for windows and darwin, whose default filesystems do. The
 // pattern must already be expanded (see Expand); character classes are not
-// supported and match literally.
+// supported and match literally. A path containing a ".." element never
+// matches.
 func MatchGlob(pattern, path, goos string) bool {
 	if goos == "" {
 		goos = runtime.GOOS
 	}
 	if len(pattern) > maxGlobLen || len(path) > 32<<10 {
+		return false
+	}
+	// Matching is lexical, so "projects/*/x.jsonl" would accept
+	// "projects/../x.jsonl", which names a file outside the tree the pattern
+	// describes. A path that has not been cleaned never matches.
+	if hasDotDotElement(path) {
 		return false
 	}
 	re, err := regexp.Compile(globRegexp(pattern, goos != "linux", "^", "$"))
@@ -83,6 +90,10 @@ func slashed(p string) string {
 // any user's home, so a leading "~", $VAR, ${VAR...} or %VAR% element becomes
 // "any directory prefix". A match means the executable is that path or lives
 // underneath it.
+//
+// The match is lexical evidence, not proof: "~" stands for any directory, so
+// a binary placed in /tmp/.local/bin/ earns the same credit as one in a real
+// home. Code-signature checks are what turn evidence into identity.
 func installPathRegexp(entry string) (*regexp.Regexp, error) {
 	p := slashed(entry)
 	anchored := true
@@ -105,15 +116,34 @@ func installPathRegexp(entry string) (*regexp.Regexp, error) {
 			p = p[i+2:]
 			anchored = false
 		}
+	}
+	p = strings.TrimRight(p, "/")
+	return regexp.Compile(globRegexp(p, true, installPrefix(p, anchored), "(?:/.*)?$"))
+}
+
+func installPrefix(p string, anchored bool) string {
+	switch {
 	case strings.HasPrefix(p, "/Applications/"):
 		// Per-user installs of a macOS app live in ~/Applications with the
 		// same bundle layout.
-		anchored = false
+		return "^(?:/Users/[^/]+)?"
+	case anchored:
+		return "^"
 	}
-	p = strings.TrimRight(p, "/")
-	prefix := "^"
-	if !anchored {
-		prefix = "^.*"
+	return "^.*"
+}
+
+// bundleExecutableRegexp matches the main executable of a macOS app bundle
+// named by an InstallPaths entry: <bundle>.app/Contents/MacOS/<file>. It
+// returns nil for entries that are not app bundles.
+//
+// The main executable of a bundle is identity even when its file name is
+// not: Visual Studio Code runs as "Electron". Helpers, bundled tools and
+// anything deeper in the bundle do not match.
+func bundleExecutableRegexp(entry string) (*regexp.Regexp, error) {
+	p := strings.TrimRight(slashed(entry), "/")
+	if !strings.HasSuffix(strings.ToLower(p), ".app") || !strings.HasPrefix(p, "/") {
+		return nil, nil
 	}
-	return regexp.Compile(globRegexp(p, true, prefix, "(?:/.*)?$"))
+	return regexp.Compile(globRegexp(p, true, installPrefix(p, true), "/Contents/MacOS/[^/]+$"))
 }

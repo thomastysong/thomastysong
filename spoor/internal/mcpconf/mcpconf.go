@@ -97,7 +97,7 @@ var (
 type SyntaxError struct {
 	Syntax string // json | toml | yaml
 	Line   int    // 1-based; 0 when unknown
-	Reason string // malformed | too deeply nested
+	Reason string // malformed | too deeply nested | too many values in
 }
 
 func (e *SyntaxError) Error() string {

@@ -95,9 +95,10 @@ var otlpSeverityText = [...]string{"", event.SevInfo, event.SevLow, event.SevMed
 //
 // timeUnixNano is the event time as a decimal string; events without a time
 // omit it so the receiver falls back to ingestion time instead of 1970. JSON
-// null has no AnyValue counterpart: null members of a map are omitted and
-// null array elements become empty values. nil events are skipped. An empty
-// input yields {"resourceLogs":[]}.
+// null has no AnyValue counterpart: null members of a map are omitted and a
+// null array element becomes an empty AnyValue (Fluent Bit 5.2.0 renders
+// that as an empty map; run-verified by the sink package's integration
+// test). nil events are skipped. An empty input yields {"resourceLogs":[]}.
 func OTLPLogs(events []*event.Event, serviceVersion string) (out []byte, err error) {
 	defer func() {
 		if r := recover(); r != nil {

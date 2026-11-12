@@ -8,7 +8,10 @@ package mcpconf
 // result match the original, which keeps SyntaxError.Line honest. Both passes
 // are single forward scans; the look-ahead after a comma only crosses the
 // whitespace run that follows it, so hostile input cannot make this quadratic.
-func jsoncToJSON(src []byte) []byte {
+//
+// nodes is an upper estimate of the values the document holds (commas plus
+// opening brackets), which the caller uses as a memory budget.
+func jsoncToJSON(src []byte) (clean []byte, nodes int) {
 	out := make([]byte, len(src))
 	copy(out, src)
 	n := len(out)
@@ -72,7 +75,10 @@ func jsoncToJSON(src []byte) []byte {
 		switch c {
 		case '"':
 			inStr = true
+		case '[', '{':
+			nodes++
 		case ',':
+			nodes++
 			j := i + 1
 			for j < n && isJSONSpace(out[j]) {
 				j++
@@ -82,7 +88,7 @@ func jsoncToJSON(src []byte) []byte {
 			}
 		}
 	}
-	return out
+	return out, nodes
 }
 
 func isJSONSpace(c byte) bool {

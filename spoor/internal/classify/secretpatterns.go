@@ -76,7 +76,7 @@ const (
 	KindRubyGemsKey           = "rubygems_key"
 	KindFlyToken              = "fly_token"
 	KindSquareToken           = "square_token"
-	KindURLParam              = "url_param"    // RedactURL / RedactArgs: value of a secret-named query parameter
+	KindURLParam              = "url_param"     // RedactURL / RedactArgs: value of a secret-named query parameter
 	KindSensitiveKey          = "sensitive_key" // RedactMap: value under a secret-named key
 	kindRedactionFailureLabel = "error"         // marker kind when redaction itself failed
 )

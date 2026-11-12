@@ -93,7 +93,9 @@ var exact = map[string]map[string]event.ToolKind{
 		"reportfindings": event.ToolOther, "schedulewakeup": event.ToolOther, "sendfeedback": event.ToolOther,
 		"sendmessage": event.ToolOther, "senduserfile": event.ToolOther, "shareonboardingguide": event.ToolOther,
 		"skill": event.ToolOther, "subagenthandback": event.ToolOther,
-		"taskcreate": event.ToolOther, "taskget": event.ToolOther, "tasklist": event.ToolOther,
+		// StructuredOutput is the Agent SDK's result tool (seen in 2.1.322 logs).
+		"structuredoutput": event.ToolOther,
+		"taskcreate":       event.ToolOther, "taskget": event.ToolOther, "tasklist": event.ToolOther,
 		"taskoutput": event.ToolOther, "taskstop": event.ToolOther, "taskupdate": event.ToolOther,
 		"todowrite": event.ToolOther, "toolsearch": event.ToolOther, "waitformcpservers": event.ToolOther,
 	},

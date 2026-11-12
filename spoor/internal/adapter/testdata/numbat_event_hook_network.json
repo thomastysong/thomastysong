@@ -1,0 +1,25 @@
+{
+  "actor": "assistant",
+  "confidence": "medium",
+  "content_preview": "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+  "endpoint": {
+    "hostname": "developer-workstation", "os": "linux", "arch": "arm64",
+    "username": "node", "uid": "1000"
+  },
+  "event_id": "hook-run-20260724T151125.690671167-fa0a4148090fa1ba",
+  "event_type": "network.indicator",
+  "evidence": {"artifact_type": "hook"},
+  "project_path": "/workspace/acme-api",
+  "record_type": "event",
+  "run_id": "run-20260724T151125.690671167-fa0a4148090fa1ba",
+  "schema_version": "0.5.0",
+  "session_id": "agent:research:metadata-review",
+  "source_agent": "openclaw",
+  "source_type": "hook",
+  "sub_agent": "research",
+  "tags": ["network"],
+  "timestamp": "2026-07-24T15:20:00Z",
+  "tool_call_id": "tool-cloud-metadata-01",
+  "tool_name": "browser",
+  "url": "http://169.254.169.254/latest/meta-data/iam/security-credentials/"
+}

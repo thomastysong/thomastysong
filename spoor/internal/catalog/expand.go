@@ -207,8 +207,9 @@ func (x *expander) lookup(name string) (string, bool) {
 		case "SYSTEMROOT", "WINDIR":
 			return `C:\Windows`, true
 		}
-		return "", false
 	}
+	// The XDG defaults apply on Windows too: tools built on xdg-basedir
+	// (opencode, Kilo) use ~/.config and ~/.local/share there.
 	switch key {
 	case "XDG_CONFIG_HOME":
 		return x.underHome(".config")
@@ -226,11 +227,11 @@ func (x *expander) underHome(rel string) (string, bool) {
 	if x.home == "" {
 		return "", false
 	}
-	sep := "/"
 	if x.windows {
-		sep = `\`
+		rel = toBackslashes(rel)
+		return strings.TrimRight(x.home, `/\`) + `\` + rel, true
 	}
-	return strings.TrimRight(x.home, `/\`) + sep + rel, true
+	return strings.TrimRight(x.home, "/") + "/" + rel, true
 }
 
 func (x *expander) envGet(name string) (string, bool) {

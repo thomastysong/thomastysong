@@ -77,8 +77,10 @@ func (c cursor) build(p obj, env map[string]string, raw []byte) ([]*event.Event,
 		transcript:   p.str("transcript_path"),
 		model:        p.str("model"),
 		agentVersion: p.str("cursor_version"),
-		// Cursor exports CURSOR_PROJECT_DIR (and CLAUDE_PROJECT_DIR as a
-		// compatibility alias) to hooks.
+		// UNVERIFIED: CURSOR_PROJECT_DIR in the hook environment (from
+		// search results only). CLAUDE_PROJECT_DIR is also set, as a
+		// compatibility alias (1Password/agent-hooks adapters/_lib.sh), but
+		// is not read here because it is ambiguous inside nested agents.
 		projectDir: envGet(env, "CURSOR_PROJECT_DIR"),
 	}
 	if s.agentVersion == "" {
@@ -96,11 +98,8 @@ func (c cursor) build(p obj, env map[string]string, raw []byte) ([]*event.Event,
 	applySession(ev, s)
 
 	switch name {
-	case "sessionStart":
-		// UNVERIFIED: composer_mode.
-		label(ev, "session_source", p.str("composer_mode"))
 	case "sessionEnd":
-		label(ev, "end_reason", p.str("reason"))
+		enumLabel(ev, "end_reason", p.str("reason"))
 	case "beforeSubmitPrompt":
 		setPrompt(ev, p.str("prompt"))
 		req.Blocking = true
@@ -122,7 +121,7 @@ func (c cursor) build(p obj, env map[string]string, raw []byte) ([]*event.Event,
 		ev.Outcome.DurationMS = durationMS(p, "duration", "duration_ms")
 		// UNVERIFIED: failure_type is timeout | error | permission_denied.
 		ft := p.str("failure_type")
-		label(ev, "failure_type", ft)
+		enumLabel(ev, "failure_type", ft)
 		if ft == "permission_denied" {
 			ev.Outcome.Status = "denied"
 		}
@@ -173,7 +172,7 @@ func (c cursor) build(p obj, env map[string]string, raw []byte) ([]*event.Event,
 	case "stop":
 		// status: completed | aborted | error.
 		st := p.str("status")
-		label(ev, "stop_status", st)
+		enumLabel(ev, "stop_status", st)
 		switch st {
 		case "completed":
 			ev.Outcome = &event.Outcome{Status: "ok"}
@@ -186,7 +185,7 @@ func (c cursor) build(p obj, env map[string]string, raw []byte) ([]*event.Event,
 		ev.Content.ToolOutput = p.str("text")
 	case "preCompact":
 		label(ev, "compact_phase", "pre")
-		label(ev, "compact_trigger", p.str("trigger"))
+		enumLabel(ev, "compact_trigger", p.str("trigger"))
 	}
 	return []*event.Event{ev}, req, nil
 }

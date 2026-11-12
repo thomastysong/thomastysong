@@ -107,7 +107,7 @@ products:
       - --dangerously-load-development-channels
     settings:
       - &cc_user
-        file: ["${CLAUDE_CONFIG_DIR:-~/.claude}/settings.json", "./.claude/settings.json", "./.claude/settings.local.json"]
+        file: &cc_user_files ["${CLAUDE_CONFIG_DIR:-~/.claude}/settings.json", "./.claude/settings.json", "./.claude/settings.local.json"]
         format: json
         key: permissions.defaultMode
         op: eq
@@ -119,7 +119,7 @@ products:
       - {<<: *cc_user, key: disableAllHooks, op: eq, value: "true", flag: hooks_disabled, severity: high}
       - {<<: *cc_user, key: sandbox.enabled, op: eq, value: "false", flag: sandbox_disabled, severity: medium}
       - {<<: *cc_user, key: sandbox.allowUnsandboxedCommands, op: eq, value: "true", flag: unsandboxed_commands_allowed, severity: low}
-      - {<<: *cc_user, key: env.ANTHROPIC_BASE_URL, op: exists, flag: api_base_url_override, severity: medium}
+      - {file: *cc_user_files, format: json, key: env.ANTHROPIC_BASE_URL, op: exists, flag: api_base_url_override, severity: medium}
       - &cc_managed
         file:
           darwin: ["/Library/Application Support/ClaudeCode/managed-settings.json"]
@@ -255,7 +255,7 @@ products:
       - research:os-telemetry.md#5
     # --full-auto no longer exists on main and is kept for older releases;
     # the layout under archived_sessions and the hosts are not confirmed.
-    unverified: [api_hosts, skills, plugins]
+    unverified: [api_hosts, skills, plugins, rules]
 
   - id: copilot-cli
     name: GitHub Copilot CLI
@@ -448,7 +448,6 @@ products:
     transcript:
       format: antigravity-jsonl
       globs: ["~/.gemini/antigravity-cli/brain/**/transcript.jsonl"]
-    api_hosts: [storage.googleapis.com]
     capabilities: [executes_shell, edits_files, mcp_client]
     notes: >-
       Replaced Gemini CLI for consumer plans on 2026-06-18. npm
@@ -593,7 +592,7 @@ products:
       - https://registry.npmjs.org/@ampcode/cli/latest
       - https://raw.githubusercontent.com/perplexityai/numbat/main/docs/agent-coverage.md
       - research:agent-surfaces-b.md#1a
-    unverified: [api_hosts, skills]
+    unverified: [api_hosts, skills, mcp]
 
   - id: goose
     name: goose
@@ -619,7 +618,6 @@ products:
     hooks:
       user_paths: ["~/.agents/plugins/*/hooks/hooks.json"]
       notes: Open Plugins packages discovered automatically; a plugin in disabledPlugins does not load. No spoor dialect.
-    api_hosts: [github.com]
     capabilities: [executes_shell, edits_files, mcp_client]
     notes: >-
       brew goose is pressly/goose, a database migration tool, and has no
@@ -628,7 +626,7 @@ products:
     sources:
       - https://raw.githubusercontent.com/perplexityai/numbat/main/docs/agent-coverage.md
       - research:agent-surfaces-b.md#1a
-    unverified: [install_paths, rules, api_hosts]
+    unverified: [install_paths, rules]
 
   - id: crush
     name: Crush
@@ -653,6 +651,7 @@ products:
       - https://registry.npmjs.org/@charmland/crush/latest
       - https://raw.githubusercontent.com/perplexityai/numbat/main/docs/agent-coverage.md
       - research:agent-surfaces-b.md#1a
+    unverified: [mcp]
 
   - id: qwen-code
     name: Qwen Code

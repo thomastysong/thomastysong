@@ -1,0 +1,64 @@
+{
+  "activity_id": 99,
+  "activity_name": "Other",
+  "category_name": "Uncategorized",
+  "category_uid": 0,
+  "class_name": "Base Event",
+  "class_uid": 0,
+  "device": {
+    "hostname": "dev-mbp-042",
+    "os": {
+      "name": "macOS",
+      "type": "macOS",
+      "type_id": 300
+    },
+    "type": "Unknown",
+    "type_id": 0,
+    "uid": "6F1D2C3B-0000-4000-8000-ABCDEF012345"
+  },
+  "message": "health.error sink_write_failed",
+  "metadata": {
+    "event_code": "health.error",
+    "log_name": "spoor.health",
+    "product": {
+      "name": "spoor",
+      "vendor_name": "spoor"
+    },
+    "profiles": [
+      "host"
+    ],
+    "sequence": 42,
+    "uid": "019a7a00-0000-7000-8000-000000000001",
+    "version": "1.9.0"
+  },
+  "severity": "Medium",
+  "severity_id": 3,
+  "time": 1794391203123,
+  "type_name": "Base Event: Other",
+  "type_uid": 99,
+  "unmapped": {
+    "spoor": {
+      "fidelity": "observed",
+      "health": {
+        "detail": "no space left on device",
+        "mode": "daemon",
+        "reason": "sink_write_failed",
+        "sensor_version": "0.1.0"
+      },
+      "host": {
+        "arch": "arm64",
+        "id": "6F1D2C3B-0000-4000-8000-ABCDEF012345",
+        "name": "dev-mbp-042",
+        "os": "darwin"
+      },
+      "id": "019a7a00-0000-7000-8000-000000000001",
+      "kind": "health",
+      "privacy": "redacted",
+      "seq": 42,
+      "source": "sensor",
+      "ts": "2026-11-11T10:00:03.123456Z",
+      "type": "health.error",
+      "v": 1
+    }
+  }
+}

@@ -65,9 +65,9 @@ func (g gemini) build(p obj, env map[string]string, raw []byte) ([]*event.Event,
 
 	switch name {
 	case "SessionStart":
-		label(ev, "session_source", p.str("source"))
+		enumLabel(ev, "session_source", p.str("source"))
 	case "SessionEnd":
-		label(ev, "end_reason", p.str("reason"))
+		enumLabel(ev, "end_reason", p.str("reason"))
 	case "BeforeAgent":
 		setPrompt(ev, p.str("prompt"))
 		req.Blocking = true
@@ -93,10 +93,10 @@ func (g gemini) build(p obj, env map[string]string, raw []byte) ([]*event.Event,
 		}
 	case "PreCompress":
 		label(ev, "compact_phase", "pre")
-		label(ev, "compact_trigger", p.str("trigger"))
+		enumLabel(ev, "compact_trigger", p.str("trigger"))
 	case "Notification":
 		nt := p.str("notification_type")
-		label(ev, "notification_type", nt)
+		enumLabel(ev, "notification_type", nt)
 		if nt == "ToolPermission" {
 			// The CLI is asking the user to approve a tool: the same moment
 			// as Claude Code's PermissionRequest, though a hook cannot

@@ -1,7 +1,6 @@
 package transcript
 
 import (
-	"bytes"
 	"encoding/json"
 	"strings"
 	"time"
@@ -39,39 +38,63 @@ func (p codexParser) ParseLine(line []byte, st *FileState) ([]*event.Event, erro
 	return parseGuard(p.AgentID(), line, st, parseCodex)
 }
 
+// codexLine is decoded in one pass: the payload is a union of the fields
+// this parser reads from any record type, with the polymorphic ones left
+// generic. Fields it never reads (base_instructions, encrypted reasoning,
+// aggregated output) are not declared and are skipped without allocation.
 type codexLine struct {
-	Timestamp string          `json:"timestamp"`
-	Type      string          `json:"type"`
-	Payload   json.RawMessage `json:"payload"`
+	Timestamp string        `json:"timestamp"`
+	Type      string        `json:"type"`
+	Payload   *codexPayload `json:"payload"`
 }
 
-type codexMeta struct {
-	ID             string          `json:"id"`
-	SessionID      string          `json:"session_id"`
-	ParentThreadID string          `json:"parent_thread_id"`
-	ForkedFromID   string          `json:"forked_from_id"`
-	Timestamp      string          `json:"timestamp"`
-	CWD            string          `json:"cwd"`
-	CLIVersion     string          `json:"cli_version"`
-	Source         json.RawMessage `json:"source"`
-	ThreadSource   string          `json:"thread_source"`
-	AgentRole      string          `json:"agent_role"`
-	AgentType      string          `json:"agent_type"` // serde alias of agent_role
-}
+type codexPayload struct {
+	Type string `json:"type"`
+	ID   string `json:"id"`
 
-type codexItem struct {
-	Type      string          `json:"type"`
-	Role      string          `json:"role"`
-	ID        string          `json:"id"`
-	Name      string          `json:"name"`
-	Namespace string          `json:"namespace"`
-	CallID    string          `json:"call_id"`
-	Status    string          `json:"status"`
-	Content   json.RawMessage `json:"content"`
-	Arguments json.RawMessage `json:"arguments"`
-	Input     json.RawMessage `json:"input"`
-	Output    json.RawMessage `json:"output"`
-	Action    json.RawMessage `json:"action"`
+	// session_meta
+	SessionID      string `json:"session_id"`
+	ParentThreadID string `json:"parent_thread_id"`
+	ForkedFromID   string `json:"forked_from_id"`
+	Timestamp      string `json:"timestamp"`
+	CWD            string `json:"cwd"`
+	CLIVersion     string `json:"cli_version"`
+	Source         any    `json:"source"`
+	ThreadSource   string `json:"thread_source"`
+	AgentRole      string `json:"agent_role"`
+	AgentType      string `json:"agent_type"` // serde alias of agent_role
+
+	// turn_context
+	TurnID            string `json:"turn_id"`
+	Model             string `json:"model"`
+	ApprovalPolicy    any    `json:"approval_policy"`
+	SandboxPolicy     any    `json:"sandbox_policy"`
+	PermissionProfile any    `json:"permission_profile"`
+
+	// response_item
+	Role      string `json:"role"`
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+	CallID    string `json:"call_id"`
+	Status    string `json:"status"`
+	Content   any    `json:"content"`
+	Arguments any    `json:"arguments"`
+	Input     any    `json:"input"`
+	Output    any    `json:"output"`
+	Action    any    `json:"action"`
+
+	// event_msg
+	Message any    `json:"message"`
+	Kind    string `json:"kind"`
+	Reason  string `json:"reason"`
+	Item    *struct {
+		Type    string `json:"type"`
+		Content any    `json:"content"`
+	} `json:"item"`
+	ExitCode *int  `json:"exit_code"`
+	Duration any   `json:"duration"`
+	Success  *bool `json:"success"`
+	Result   any   `json:"result"`
 }
 
 // Top-level rollout item types that carry nothing this parser emits.
@@ -137,32 +160,35 @@ func parseCodex(c *lineCtx) error {
 		}
 	}
 
+	p := rec.Payload
 	switch rec.Type {
-	case "session_meta":
-		c.codexMeta(rec, ts)
-	case "turn_context":
-		c.codexTurnContext(rec, ts)
-	case "response_item":
-		var it codexItem
-		if decode(rec.Payload, &it) != nil {
+	case "session_meta", "turn_context", "response_item", "event_msg":
+		if p == nil {
 			st.Unknown++
 			return nil
 		}
-		c.codexItem(&it, ts, false)
+	}
+	switch rec.Type {
+	case "session_meta":
+		c.codexMeta(p, rec.Timestamp, ts)
+	case "turn_context":
+		c.codexTurnContext(p, ts)
+	case "response_item":
+		c.codexItem(p, ts, false)
 	case "event_msg":
-		c.codexEvent(rec.Payload, ts)
+		c.codexEvent(p, ts)
 	case "compacted":
 		c.newEvent(event.TypeCompact, ts)
 	case "turn_aborted":
-		c.codexTurnEnd(rec.Payload, ts, true)
+		c.codexTurnEnd(p, ts, true)
 	default:
 		if codexTopKnown[rec.Type] {
 			return nil
 		}
 		// The oldest rollouts have no envelope: the line is the item, or
 		// a bare session header {"id","timestamp",...}.
-		if rawKind(rec.Payload) == 0 {
-			var it codexItem
+		if p == nil {
+			var it codexPayload
 			_ = decode(c.line, &it)
 			switch {
 			case codexIsItem(it.Type):
@@ -187,9 +213,8 @@ func codexIsItem(t string) bool {
 	return codexItemKnown[t]
 }
 
-func (c *lineCtx) codexMeta(rec codexLine, ts time.Time) {
-	var m codexMeta
-	if decode(rec.Payload, &m) != nil || m.ID == "" {
+func (c *lineCtx) codexMeta(m *codexPayload, recTS string, ts time.Time) {
+	if m.ID == "" {
 		c.st.Unknown++
 		return
 	}
@@ -223,8 +248,16 @@ func (c *lineCtx) codexMeta(rec codexLine, ts time.Time) {
 		if start := parseTime(m.Timestamp); !start.IsZero() {
 			st.setExtra("fork_start", m.Timestamp)
 		} else if !ts.IsZero() {
-			st.setExtra("fork_start", rec.Timestamp)
+			st.setExtra("fork_start", recTS)
 		}
+	}
+	switch source {
+	case "cli", "exec":
+		st.setExtra("surface", "cli")
+	case "vscode":
+		st.setExtra("surface", "ide")
+	case "mcp":
+		st.setExtra("surface", "sdk")
 	}
 	if again {
 		return // a resumed thread rewrites its header; one start is enough
@@ -234,14 +267,6 @@ func (c *lineCtx) codexMeta(rec codexLine, ts time.Time) {
 		typ = event.TypeSubagentStart
 	}
 	e := c.newEvent(typ, ts)
-	switch source {
-	case "cli", "exec":
-		e.Agent.Surface = "cli"
-	case "vscode":
-		e.Agent.Surface = "ide"
-	case "mcp":
-		e.Agent.Surface = "sdk"
-	}
 	c.label(e, "codex_source", source)
 	if m.ForkedFromID != "" {
 		c.label(e, "forked_from", clip(m.ForkedFromID, maxIDLen))
@@ -250,43 +275,28 @@ func (c *lineCtx) codexMeta(rec codexLine, ts time.Time) {
 
 // codexSource reduces SessionSource to a closed vocabulary. Unit variants
 // serialize as a string; SubAgent and Custom as single-key objects.
-func codexSource(raw json.RawMessage) string {
-	s := strings.ToLower(rawString(raw))
-	switch s {
-	case "cli", "vscode", "exec", "mcp", "unknown":
-		return s
-	case "":
-		if rawKind(raw) == '{' && bytes.Contains(bytes.ToLower(head2(raw, 256)), []byte("subagent")) {
-			return "subagent"
+func codexSource(v any) string {
+	switch t := v.(type) {
+	case string:
+		switch s := strings.ToLower(t); s {
+		case "cli", "vscode", "exec", "mcp", "unknown":
+			return s
+		case "":
+			return ""
 		}
-		if rawKind(raw) == '{' {
-			return "custom"
+		return "other"
+	case map[string]any:
+		for k := range t {
+			if strings.Contains(strings.ToLower(head(k, 64)), "subagent") {
+				return "subagent"
+			}
 		}
-		return ""
+		return "custom"
 	}
-	return "other"
+	return ""
 }
 
-func head2(b []byte, n int) []byte {
-	if len(b) > n {
-		return b[:n]
-	}
-	return b
-}
-
-func (c *lineCtx) codexTurnContext(rec codexLine, ts time.Time) {
-	var tc struct {
-		TurnID            string          `json:"turn_id"`
-		CWD               string          `json:"cwd"`
-		Model             string          `json:"model"`
-		ApprovalPolicy    json.RawMessage `json:"approval_policy"`
-		SandboxPolicy     json.RawMessage `json:"sandbox_policy"`
-		PermissionProfile json.RawMessage `json:"permission_profile"`
-	}
-	if decode(rec.Payload, &tc) != nil {
-		c.st.Unknown++
-		return
-	}
+func (c *lineCtx) codexTurnContext(tc *codexPayload, ts time.Time) {
 	st := c.st
 	if tc.TurnID != "" {
 		st.setExtra("turn_id", clip(tc.TurnID, maxIDLen))
@@ -323,12 +333,12 @@ func (c *lineCtx) codexTurnContext(rec codexLine, ts time.Time) {
 
 // codexApproval reduces AskForApproval to its tag: untrusted | on-request |
 // on-failure | never | granular.
-func codexApproval(raw json.RawMessage) string {
-	s := rawString(raw)
-	if s == "" && rawKind(raw) == '{' {
-		for k := range rawObject(raw) {
-			s = k
-			break
+func codexApproval(v any) string {
+	s := anyString(v)
+	if m := anyObject(v); m != nil {
+		s = "other"
+		if _, ok := m["granular"]; ok {
+			s = "granular"
 		}
 	}
 	switch s {
@@ -345,10 +355,10 @@ func codexApproval(raw json.RawMessage) string {
 // sandbox_policy {"type"|"mode": ...}.
 // UNVERIFIED: the shape of the newer permission_profile object; a named
 // preset is looked for under the usual keys, and as a last resort the
-// "danger-full-access" literal anywhere in its first 4 KiB.
-func codexSandbox(policy, profile json.RawMessage) string {
+// "danger-full-access" literal anywhere in its first few levels.
+func codexSandbox(policy, profile any) string {
 	known := func(s string) string {
-		switch strings.ReplaceAll(strings.TrimPrefix(s, ":"), "_", "-") {
+		switch strings.ReplaceAll(strings.TrimPrefix(head(s, 64), ":"), "_", "-") {
 		case "read-only":
 			return "read-only"
 		case "workspace-write", "workspace":
@@ -360,14 +370,14 @@ func codexSandbox(policy, profile json.RawMessage) string {
 		}
 		return ""
 	}
-	for _, raw := range []json.RawMessage{policy, profile} {
-		if s := rawString(raw); s != "" {
+	for _, v := range []any{policy, profile} {
+		if s := anyString(v); s != "" {
 			if k := known(s); k != "" {
 				return k
 			}
 			return "other"
 		}
-		if m := rawObject(raw); m != nil {
+		if m := anyObject(v); m != nil {
 			for _, key := range []string{"type", "mode", "name", "id", "preset", "kind"} {
 				if s, _ := m[key].(string); s != "" {
 					if k := known(s); k != "" {
@@ -375,7 +385,8 @@ func codexSandbox(policy, profile json.RawMessage) string {
 					}
 				}
 			}
-			if bytes.Contains(head2(raw, 4096), []byte("danger-full-access")) {
+			budget := 256
+			if anyContains(m, "danger-full-access", 6, &budget) {
 				return "danger-full-access"
 			}
 			return "other"
@@ -406,22 +417,23 @@ func (c *lineCtx) codexPosture(e *event.Event) {
 	c.label(e, "sandbox", c.st.extra("sandbox"))
 }
 
-func (c *lineCtx) codexItem(it *codexItem, ts time.Time, flat bool) {
+func (c *lineCtx) codexItem(it *codexPayload, ts time.Time, flat bool) {
 	switch it.Type {
 	case "function_call", "custom_tool_call":
-		var input map[string]any
-		text := rawString(it.Arguments)
+		// function_call arguments are a JSON document in a string;
+		// custom (freeform) tools such as apply_patch take plain text.
+		raw := it.Arguments
 		if it.Type == "custom_tool_call" {
-			text = rawString(it.Input)
+			raw = it.Input
 		}
-		if text == "" && rawKind(it.Arguments) == '{' {
-			input = rawObject(it.Arguments) // already an object in some captures
-		} else if strings.HasPrefix(strings.TrimLeft(text, " \t\r\n"), "{") {
-			input = rawObject(json.RawMessage(text))
-		}
-		if input == nil && text != "" {
-			// Freeform tools (apply_patch) take plain text.
-			input = map[string]any{"input": text}
+		input := anyObject(raw) // already an object in some captures
+		if text := anyString(raw); text != "" {
+			if strings.HasPrefix(strings.TrimLeft(head(text, 64), " \t\r\n"), "{") {
+				input = rawObject(json.RawMessage(text))
+			}
+			if input == nil {
+				input = map[string]any{"input": text}
+			}
 		}
 		name := it.Name
 		var e *event.Event
@@ -440,11 +452,11 @@ func (c *lineCtx) codexItem(it *codexItem, ts time.Time, flat bool) {
 		if id == "" {
 			id = it.ID
 		}
-		e := c.toolPre(ts, "local_shell", id, event.ToolShell, "", "", rawObject(it.Action))
+		e := c.toolPre(ts, "local_shell", id, event.ToolShell, "", "", anyObject(it.Action))
 		c.codexPosture(e)
 	case "web_search_call":
 		// Runs on the provider side and is recorded once, complete.
-		input := rawObject(it.Action)
+		input := anyObject(it.Action)
 		kind := event.ToolWebSearch
 		if t, _ := input["type"].(string); t == "open_page" || t == "find_in_page" {
 			kind = event.ToolWebFetch
@@ -493,7 +505,7 @@ func (c *lineCtx) codexItem(it *codexItem, ts time.Time, flat bool) {
 		// CLI injects (AGENTS.md, environment); the typed prompt arrives as
 		// an event_msg. The flat format has only this record.
 		if flat && it.Role == "user" {
-			if text := textOf(it.Content); text != "" && !codexInjected(text) {
+			if text := anyText(it.Content); text != "" && !codexInjected(text) {
 				c.codexPrompt(ts, text)
 			}
 		}
@@ -523,30 +535,52 @@ func (c *lineCtx) codexPrompt(ts time.Time, text string) {
 
 // codexOutputText flattens a tool output: a string, content items, or an
 // object carrying them.
-func codexOutputText(raw json.RawMessage) string {
-	if t := textOf(raw); t != "" {
+func codexOutputText(v any) string {
+	if t := anyText(v); t != "" {
 		return t
 	}
-	var o struct {
-		Content json.RawMessage `json:"content"`
-		Output  json.RawMessage `json:"output"`
-	}
-	if rawKind(raw) == '{' && json.Unmarshal(raw, &o) == nil {
-		if t := textOf(o.Content); t != "" {
-			return t
-		}
-		if t := textOf(o.Output); t != "" {
+	if m := anyObject(v); m != nil {
+		if t := anyText(m["output"]); t != "" {
 			return t
 		}
 	}
 	return ""
 }
 
+// codexFlags are the structured result flags a tool output may carry.
+type codexFlags struct {
+	Metadata *struct {
+		ExitCode        *int    `json:"exit_code"`
+		DurationSeconds float64 `json:"duration_seconds"`
+	} `json:"metadata"`
+	IsError bool  `json:"isError"`
+	Success *bool `json:"success"`
+}
+
+func (o *codexFlags) outcome() *event.Outcome {
+	oc := &event.Outcome{Status: statusOK}
+	if o.Metadata != nil {
+		if o.Metadata.ExitCode != nil {
+			oc.ExitCode = o.Metadata.ExitCode
+			if *o.Metadata.ExitCode != 0 {
+				oc.Status, oc.Error = statusError, "exit_code"
+			}
+		}
+		if d := o.Metadata.DurationSeconds; d > 0 && d < 1e9 {
+			oc.DurationMS = int64(d * 1000)
+		}
+	}
+	if o.IsError || (o.Success != nil && !*o.Success) {
+		oc.Status, oc.Error = statusError, "tool_error"
+	}
+	return oc
+}
+
 // codexOutcome maps a tool output to an outcome from the fixed messages
 // Codex writes for refusals and failures (table from Fleet's
 // ai_agent_sessions codexDecision). An MCP server's output is its own text,
 // so only its structured flags count.
-func codexOutcome(raw json.RawMessage, text string, mcp bool) *event.Outcome {
+func codexOutcome(v any, text string, mcp bool) *event.Outcome {
 	t := strings.TrimSpace(head(text, 4096))
 	if !mcp {
 		switch {
@@ -567,97 +601,66 @@ func codexOutcome(raw json.RawMessage, text string, mcp bool) *event.Outcome {
 		}
 	}
 	// Structured flags: the oldest rollouts wrote {"output","metadata":
-	// {"exit_code"}} as a JSON string, MCP results carry isError, and
-	// structured outputs a success flag.
-	for _, doc := range []string{t, string(head2(bytes.TrimSpace(raw), 4096))} {
-		if !strings.HasPrefix(doc, "{") {
-			continue
+	// {"exit_code"}} as a JSON document inside the string, MCP results
+	// carry isError, and structured outputs a success flag.
+	if strings.HasPrefix(t, "{") {
+		var o codexFlags
+		if decode([]byte(t), &o) == nil {
+			if oc := o.outcome(); oc.Status != statusOK || oc.ExitCode != nil {
+				return oc
+			}
 		}
-		var o struct {
-			Metadata *struct {
+	}
+	if m := anyObject(v); m != nil {
+		var o codexFlags
+		o.IsError = anyBool(m["isError"])
+		if b, ok := m["success"].(bool); ok {
+			o.Success = &b
+		}
+		if md := anyObject(m["metadata"]); md != nil {
+			o.Metadata = &struct {
 				ExitCode        *int    `json:"exit_code"`
 				DurationSeconds float64 `json:"duration_seconds"`
-			} `json:"metadata"`
-			IsError bool  `json:"isError"`
-			Success *bool `json:"success"`
-		}
-		if decode([]byte(doc), &o) != nil {
-			continue
-		}
-		oc := &event.Outcome{Status: statusOK}
-		if o.Metadata != nil {
-			if o.Metadata.ExitCode != nil {
-				oc.ExitCode = o.Metadata.ExitCode
-				if *o.Metadata.ExitCode != 0 {
-					oc.Status, oc.Error = statusError, "exit_code"
-				}
+			}{}
+			if n, ok := anyInt(md["exit_code"]); ok {
+				o.Metadata.ExitCode = &n
 			}
-			if d := o.Metadata.DurationSeconds; d > 0 && d < 1e9 {
-				oc.DurationMS = int64(d * 1000)
-			}
+			o.Metadata.DurationSeconds, _ = md["duration_seconds"].(float64)
 		}
-		if o.IsError || (o.Success != nil && !*o.Success) {
-			oc.Status, oc.Error = statusError, "tool_error"
-		}
-		if oc.Status != statusOK || oc.ExitCode != nil {
-			return oc
-		}
+		return o.outcome()
 	}
 	return &event.Outcome{Status: statusOK}
 }
 
-func (c *lineCtx) codexEvent(raw json.RawMessage, ts time.Time) {
-	var ev struct {
-		Type    string          `json:"type"`
-		Message json.RawMessage `json:"message"`
-		Kind    string          `json:"kind"`
-		TurnID  string          `json:"turn_id"`
-		CallID  string          `json:"call_id"`
-		Item    *struct {
-			Type    string          `json:"type"`
-			Content json.RawMessage `json:"content"`
-		} `json:"item"`
-		ExitCode   *int            `json:"exit_code"`
-		Duration   json.RawMessage `json:"duration"`
-		Success    *bool           `json:"success"`
-		Invocation *struct {
-			Server string `json:"server"`
-			Tool   string `json:"tool"`
-		} `json:"invocation"`
-		Result json.RawMessage `json:"result"`
-	}
-	if decode(raw, &ev) != nil {
-		c.st.Unknown++
-		return
-	}
+func (c *lineCtx) codexEvent(ev *codexPayload, ts time.Time) {
 	st := c.st
 	switch ev.Type {
 	case "user_message":
 		// Legacy history mode. Older builds tagged injected context with
 		// a kind other than "plain".
 		if ev.Kind == "" || ev.Kind == "plain" {
-			c.codexPrompt(ts, rawString(ev.Message))
+			c.codexPrompt(ts, anyString(ev.Message))
 		}
 	case "item_completed":
 		// Paginated history mode records the typed prompt as a turn item.
 		if ev.Item != nil && ev.Item.Type == "UserMessage" {
-			c.codexPrompt(ts, textOf(ev.Item.Content))
+			c.codexPrompt(ts, anyText(ev.Item.Content))
 		}
 	case "task_started", "turn_started":
 		if ev.TurnID != "" {
 			st.setExtra("turn_id", clip(ev.TurnID, maxIDLen))
 		}
 	case "task_complete", "turn_complete":
-		c.codexTurnEnd(raw, ts, false)
+		c.codexTurnEnd(ev, ts, false)
 	case "turn_aborted":
-		c.codexTurnEnd(raw, ts, true)
+		c.codexTurnEnd(ev, ts, true)
 	case "context_compacted":
 		// The top-level "compacted" item already reports the compaction.
 	case "exec_command_end":
 		if ev.CallID != "" {
 			h := st.hint(ev.CallID)
 			h.exit = ev.ExitCode
-			h.durMS = rustDuration(ev.Duration)
+			h.durMS = anyDuration(ev.Duration)
 		}
 	case "patch_apply_end":
 		if ev.CallID != "" && ev.Success != nil {
@@ -667,17 +670,12 @@ func (c *lineCtx) codexEvent(raw json.RawMessage, ts time.Time) {
 	case "mcp_tool_call_end":
 		if ev.CallID != "" {
 			h := st.hint(ev.CallID)
-			h.durMS = rustDuration(ev.Duration)
+			h.durMS = anyDuration(ev.Duration)
 			// result is Result<CallToolResult, String>: {"Ok":{...,
 			// "isError":bool}} or {"Err":"..."}.
-			var res struct {
-				Ok *struct {
-					IsError bool `json:"isError"`
-				} `json:"Ok"`
-				Err json.RawMessage `json:"Err"`
-			}
-			if decode(ev.Result, &res) == nil {
-				failed := rawKind(res.Err) != 0 || (res.Ok != nil && res.Ok.IsError)
+			if res := anyObject(ev.Result); res != nil {
+				_, isErr := res["Err"]
+				failed := isErr || anyBool(anyObject(res["Ok"])["isError"])
 				h.failed = &failed
 			}
 		}
@@ -688,14 +686,9 @@ func (c *lineCtx) codexEvent(raw json.RawMessage, ts time.Time) {
 	}
 }
 
-func (c *lineCtx) codexTurnEnd(raw json.RawMessage, ts time.Time, aborted bool) {
-	var p struct {
-		TurnID string `json:"turn_id"`
-		Reason string `json:"reason"`
-	}
-	_ = decode(raw, &p)
+func (c *lineCtx) codexTurnEnd(p *codexPayload, ts time.Time, aborted bool) {
 	e := c.newEvent(event.TypeTurnEnd, ts)
-	if p.TurnID != "" {
+	if p != nil && p.TurnID != "" {
 		e.Session.TurnID = clip(p.TurnID, maxIDLen)
 	}
 	if !aborted {
@@ -703,8 +696,10 @@ func (c *lineCtx) codexTurnEnd(raw json.RawMessage, ts time.Time, aborted bool) 
 		return
 	}
 	e.Outcome = &event.Outcome{Status: statusInterrupted}
-	switch p.Reason {
-	case "interrupted", "replaced", "review_ended", "budget_limited":
-		e.Outcome.Error = p.Reason
+	if p != nil {
+		switch p.Reason {
+		case "interrupted", "replaced", "review_ended", "budget_limited":
+			e.Outcome.Error = p.Reason
+		}
 	}
 }

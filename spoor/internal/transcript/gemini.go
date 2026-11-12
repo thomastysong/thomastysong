@@ -54,16 +54,18 @@ func (p geminiParser) ParseLine(line []byte, st *FileState) ([]*event.Event, err
 	return parseGuard(p.AgentID(), line, st, parseGemini)
 }
 
+// Records are decoded in one pass; args, content and results are left
+// generic and navigated as decoded values.
 type geminiToolCall struct {
-	ID            string          `json:"id"`
-	Name          string          `json:"name"`
-	DisplayName   string          `json:"displayName"`
-	Args          json.RawMessage `json:"args"`
-	Status        string          `json:"status"`
-	Timestamp     string          `json:"timestamp"`
-	AgentID       string          `json:"agentId"`
-	Result        json.RawMessage `json:"result"`
-	ResultDisplay json.RawMessage `json:"resultDisplay"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	DisplayName   string `json:"displayName"`
+	Args          any    `json:"args"`
+	Status        string `json:"status"`
+	Timestamp     string `json:"timestamp"`
+	AgentID       string `json:"agentId"`
+	Result        any    `json:"result"`
+	ResultDisplay any    `json:"resultDisplay"`
 }
 
 type geminiMessage struct {
@@ -71,7 +73,7 @@ type geminiMessage struct {
 	Timestamp string           `json:"timestamp"`
 	Type      string           `json:"type"`
 	Model     string           `json:"model"`
-	Content   json.RawMessage  `json:"content"`
+	Content   any              `json:"content"`
 	ToolCalls []geminiToolCall `json:"toolCalls"`
 }
 
@@ -81,13 +83,31 @@ type geminiMeta struct {
 	Kind      string `json:"kind"`
 }
 
+type geminiSet struct {
+	geminiMeta
+	Messages []geminiMessage `json:"messages"`
+}
+
+type geminiMsgPatch struct {
+	ID        string `json:"id"`
+	ToolCalls []struct {
+		ID     string `json:"id"`
+		Result any    `json:"result"`
+	} `json:"toolCalls"`
+}
+
+type geminiPatch struct {
+	geminiMsgPatch
+	Updates []geminiMsgPatch `json:"updates"`
+}
+
 type geminiRecord struct {
 	geminiMessage
 	geminiMeta
 	Messages []geminiMessage `json:"messages"` // legacy single-document sessions
 	RewindTo *string         `json:"$rewindTo"`
-	Set      json.RawMessage `json:"$set"`
-	Patch    json.RawMessage `json:"$patch"`
+	Set      *geminiSet      `json:"$set"`
+	Patch    *geminiPatch    `json:"$patch"`
 }
 
 // maxGeminiMessages bounds how many messages one record (a legacy document
@@ -104,18 +124,10 @@ func parseGemini(c *lineCtx) error {
 	case rec.RewindTo != nil:
 		// The user rewound the conversation. The journal keeps what was
 		// rewound, and its events were already emitted.
-	case rawKind(rec.Set) == '{':
-		var set struct {
-			geminiMeta
-			Messages []geminiMessage `json:"messages"`
-		}
-		if decode(rec.Set, &set) != nil {
-			st.Unknown++
-			return nil
-		}
-		c.geminiMetaRecord(set.geminiMeta)
-		c.geminiMessages(set.Messages)
-	case rawKind(rec.Patch) == '{':
+	case rec.Set != nil:
+		c.geminiMetaRecord(rec.Set.geminiMeta)
+		c.geminiMessages(rec.Set.Messages)
+	case rec.Patch != nil:
 		c.geminiPatch(rec.Patch)
 	case rec.geminiMessage.ID != "" && rec.geminiMessage.Type != "":
 		c.geminiMessage(&rec.geminiMessage)
@@ -147,16 +159,16 @@ func (c *lineCtx) geminiMetaRecord(m geminiMeta) {
 		st.setExtra("subagent_id", st.SessionID)
 		st.ParentSessionID = geminiParentFromPath(st.Path)
 	}
-	if st.SessionID == "" || st.extra("started") == "1" || m.StartTime == "" {
+	// The start is remembered in the id set, like messages and calls, so a
+	// journal that Gemini CLI rewrites does not announce the session twice.
+	if st.SessionID == "" || m.StartTime == "" || st.remember("start:"+st.SessionID) {
 		return
 	}
-	st.setExtra("started", "1")
 	typ := event.TypeSessionStart
 	if st.extra("subagent_id") != "" {
 		typ = event.TypeSubagentStart
 	}
-	e := c.newEvent(typ, parseTime(m.StartTime))
-	e.Agent.Surface = "cli"
+	c.newEvent(typ, parseTime(m.StartTime))
 }
 
 // geminiParentFromPath reads the parent session id from a subagent path:
@@ -187,7 +199,7 @@ func (c *lineCtx) geminiMessage(m *geminiMessage) {
 		if m.ID != "" && st.remember("m:"+clip(m.ID, maxIDLen)) {
 			return
 		}
-		if text := textOf(m.Content); text != "" {
+		if text := anyText(m.Content); text != "" {
 			c.prompt(ts, text)
 		}
 	case "gemini":
@@ -216,7 +228,7 @@ func (c *lineCtx) geminiToolCall(m *geminiMessage, tc *geminiToolCall, idx int, 
 		ts = t
 	}
 	if !st.remember("t:" + id) {
-		input := rawObject(tc.Args)
+		input := anyObject(tc.Args)
 		var e *event.Event
 		if server, tool, ok := geminiMCP(tc.DisplayName); ok {
 			e = c.toolPre(ts, tc.Name, id, event.ToolMCP, server, tool, input)
@@ -243,30 +255,15 @@ func (c *lineCtx) geminiToolCall(m *geminiMessage, tc *geminiToolCall, idx int, 
 
 // geminiPatch handles {"$patch":...}: late tool results attached to calls
 // that were first recorded without one.
-func (c *lineCtx) geminiPatch(raw json.RawMessage) {
-	type msgPatch struct {
-		ID        string `json:"id"`
-		ToolCalls []struct {
-			ID     string          `json:"id"`
-			Result json.RawMessage `json:"result"`
-		} `json:"toolCalls"`
-	}
-	var p struct {
-		msgPatch
-		Updates []msgPatch `json:"updates"`
-	}
-	if decode(raw, &p) != nil {
-		c.st.Unknown++
-		return
-	}
-	all := append([]msgPatch{p.msgPatch}, p.Updates...)
+func (c *lineCtx) geminiPatch(p *geminiPatch) {
+	all := append([]geminiMsgPatch{p.geminiMsgPatch}, p.Updates...)
 	if len(all) > maxGeminiMessages {
 		all = all[:maxGeminiMessages]
 	}
 	for _, u := range all {
 		for _, tp := range u.ToolCalls {
 			id := clip(tp.ID, maxIDLen)
-			if id == "" || rawKind(tp.Result) == 0 || rawKind(tp.Result) == 'n' {
+			if id == "" || tp.Result == nil {
 				continue
 			}
 			// Only complete a call this file opened and has not closed.
@@ -283,18 +280,9 @@ func (c *lineCtx) geminiPatch(raw json.RawMessage) {
 	}
 }
 
-func geminiHasFunctionResponse(content json.RawMessage) bool {
-	if rawKind(content) != '[' {
-		return false
-	}
-	var parts []struct {
-		FunctionResponse json.RawMessage `json:"functionResponse"`
-	}
-	if decode(content, &parts) != nil {
-		return false
-	}
-	for _, p := range parts {
-		if rawKind(p.FunctionResponse) == '{' {
+func geminiHasFunctionResponse(content any) bool {
+	for _, p := range geminiParts(content) {
+		if anyObject(p["functionResponse"]) != nil {
 			return true
 		}
 	}
@@ -318,64 +306,61 @@ func geminiMCP(displayName string) (server, tool string, ok bool) {
 	return body[i+2:], body[:i], true
 }
 
-type geminiPart struct {
-	Text             string `json:"text"`
-	FunctionResponse *struct {
-		Response map[string]json.RawMessage `json:"response"`
-	} `json:"functionResponse"`
+// geminiParts views a PartListUnion (a part, or a list of parts and
+// strings) as a list of part objects.
+func geminiParts(v any) []map[string]any {
+	switch t := v.(type) {
+	case map[string]any:
+		return []map[string]any{t}
+	case []any:
+		parts := make([]map[string]any, 0, len(t))
+		for _, e := range t {
+			if m := anyObject(e); m != nil {
+				parts = append(parts, m)
+			}
+		}
+		return parts
+	}
+	return nil
 }
 
-func geminiParts(raw json.RawMessage) []geminiPart {
-	var parts []geminiPart
-	switch rawKind(raw) {
-	case '[':
-		_ = decode(raw, &parts)
-	case '{':
-		var one geminiPart
-		if decode(raw, &one) == nil {
-			parts = []geminiPart{one}
-		}
-	}
-	return parts
+func geminiResponse(part map[string]any) map[string]any {
+	return anyObject(anyObject(part["functionResponse"])["response"])
 }
 
 // geminiResult is a tool call's output: the function responses sent back to
 // the model, else what the CLI displayed.
-func geminiResult(result, display json.RawMessage) string {
+func geminiResult(result, display any) string {
 	var out []string
 	for _, p := range geminiParts(result) {
-		if p.Text != "" {
-			out = append(out, p.Text)
+		if t := anyString(p["text"]); t != "" {
+			out = append(out, t)
 		}
-		if p.FunctionResponse == nil {
-			continue
-		}
+		resp := geminiResponse(p)
 		for _, k := range []string{"output", "error"} {
-			v := p.FunctionResponse.Response[k]
-			switch rawKind(v) {
-			case 0, 'n':
-			case '"':
-				out = append(out, rawString(v))
+			switch v := resp[k].(type) {
+			case nil:
+			case string:
+				out = append(out, v)
 			default:
-				out = append(out, string(v))
+				if b, err := json.Marshal(v); err == nil {
+					out = append(out, string(b))
+				}
 			}
 		}
 	}
 	if len(out) > 0 {
 		return strings.Join(out, "\n")
 	}
-	if s := rawString(result); s != "" {
+	if s := anyString(result); s != "" {
 		return s
 	}
-	return rawString(display)
+	return anyString(display)
 }
 
-func geminiResponseHasError(result json.RawMessage) bool {
+func geminiResponseHasError(result any) bool {
 	for _, p := range geminiParts(result) {
-		if p.FunctionResponse == nil {
-			continue
-		}
-		if k := rawKind(p.FunctionResponse.Response["error"]); k != 0 && k != 'n' {
+		if geminiResponse(p)["error"] != nil {
 			return true
 		}
 	}
@@ -392,7 +377,7 @@ const geminiShellTool = "run_shell_command"
 func geminiOutcome(tc *geminiToolCall, output string) *event.Outcome {
 	switch tc.Status {
 	case "cancelled":
-		for _, t := range []string{output, rawString(tc.ResultDisplay)} {
+		for _, t := range []string{output, anyString(tc.ResultDisplay)} {
 			if strings.HasPrefix(strings.TrimSpace(head(t, 256)), "User denied execution.") {
 				return &event.Outcome{Status: statusDenied, Decision: "deny", DecisionSource: "user", Error: "user_rejected"}
 			}

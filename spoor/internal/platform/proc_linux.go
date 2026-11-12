@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
 
 // procRoot is a variable so tests can run the readers against a fixture tree.
@@ -27,17 +29,56 @@ type linuxClock struct {
 	ticks int64 // clock ticks per second
 }
 
-var (
-	linuxClockOnce sync.Once
-	linuxClockVal  linuxClock
-)
+// clockStepThreshold is how far the wall clock must jump before process
+// start times are recomputed.
+const clockStepThreshold = 2 * time.Second
 
-// clock is read once per sensor process: btime follows wall-clock steps, so
-// re-reading it would make the same process appear to change its start time,
-// and Start is part of the process identity callers key on.
+var clockState struct {
+	sync.Mutex
+	loaded bool
+	val    linuxClock
+	ref    time.Duration // wall clock minus boot clock when val was read
+	refOK  bool
+}
+
+// wallMinusBoot measures the offset between the wall clock and the
+// time-since-boot clock. It is constant while the wall clock is only slewed
+// and jumps when the wall clock is stepped. A variable so tests can step it.
+var wallMinusBoot = func() (time.Duration, bool) {
+	var wall, boot unix.Timespec
+	if unix.ClockGettime(unix.CLOCK_REALTIME, &wall) != nil || unix.ClockGettime(unix.CLOCK_BOOTTIME, &boot) != nil {
+		return 0, false
+	}
+	return time.Duration(wall.Nano() - boot.Nano()), true
+}
+
+// clock returns the boot time used to turn /proc/<pid>/stat start ticks into
+// wall-clock times.
+//
+// Start is how callers tell a process from a later one that reuses its pid,
+// so it must not wobble: the boot time is therefore read once and kept, and
+// because it comes from /proc/stat (whole seconds) a restarted sensor
+// computes the very same Start values. But a sensor started before the clock
+// was set (dual-boot machines with the RTC in local time, devices without an
+// RTC) would then report every start time hours off for as long as it runs.
+// So each call makes one cheap measurement, and only a wall-clock step of at
+// least clockStepThreshold makes the boot time be read again. All Start
+// values shift once by that step; callers that key on Start see those
+// processes as new, which is true to what the clock did.
 func clock() linuxClock {
-	linuxClockOnce.Do(func() { linuxClockVal = readClock(procRoot) })
-	return linuxClockVal
+	st := &clockState
+	st.Lock()
+	defer st.Unlock()
+	off, ok := wallMinusBoot()
+	stepped := ok && st.refOK && (off-st.ref >= clockStepThreshold || st.ref-off >= clockStepThreshold)
+	if !st.loaded || stepped {
+		st.val = readClock(procRoot)
+		st.loaded, st.ref, st.refOK = true, off, ok
+	} else if ok && !st.refOK {
+		// The first measurement failed; start watching from this one.
+		st.ref, st.refOK = off, true
+	}
+	return st.val
 }
 
 func readClock(root string) linuxClock {

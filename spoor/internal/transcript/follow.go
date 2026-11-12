@@ -38,6 +38,7 @@ func (t *Tailer) process(p *pass, w *work) {
 		if tr.st != nil {
 			u := w.user
 			tr.st.user = &u
+			tr.st.key = t.key
 		}
 		if !t.changed(tr, w.meta, p.now) {
 			return
@@ -52,7 +53,7 @@ func (t *Tailer) process(p *pass, w *work) {
 			t.files[w.path] = &tracked{
 				path: w.path, format: formatOf(w.parser), lazy: true, lastSeen: nowUnix,
 				cp: Checkpoint{Offset: w.meta.size, Size: w.meta.size, FileID: w.meta.id, MTime: w.meta.mtime},
-				st: &FileState{Path: w.path, user: &u},
+				st: t.newState(w.path, &u),
 			}
 			t.dirty = true
 			return
@@ -80,7 +81,7 @@ func (t *Tailer) process(p *pass, w *work) {
 		tr = &tracked{
 			path: w.path, format: formatOf(w.parser), lastSeen: nowUnix,
 			cp: Checkpoint{FileID: meta.id},
-			st: &FileState{Path: w.path, user: &u},
+			st: t.newState(w.path, &u),
 		}
 		t.files[w.path] = tr
 		t.dirty = true
@@ -221,7 +222,7 @@ func (t *Tailer) verify(p *pass, tr *tracked, f *os.File, meta fileMeta) {
 	restart := func(kind, detail string) {
 		p.problem(kind, tr.path, sessionOf(tr), detail)
 		old := tr.st
-		tr.st = &FileState{Path: tr.path}
+		tr.st = t.newState(tr.path, nil)
 		if old != nil {
 			// Ids already turned into events stay known, so a format
 			// that rewrites its file (Gemini CLI) does not replay them.
@@ -279,8 +280,7 @@ func (t *Tailer) tail(p *pass, tr *tracked, parser Parser, f *os.File, meta file
 // archive reads a compressed rollout whole. There is nothing to tail: the
 // archive is written once, after the session went idle.
 func (t *Tailer) archive(p *pass, tr *tracked, parser Parser, f *os.File, meta fileMeta) {
-	user := tr.st.user
-	tr.st = &FileState{Path: tr.path, user: user}
+	tr.st = t.newState(tr.path, tr.st.user)
 	stop := func() bool { return p.ctx.Err() != nil }
 	oversize, err := readZstdLines(f, t.o.MaxLine, stop, func(line []byte) {
 		evs, _ := parser.ParseLine(line, tr.st)
@@ -291,7 +291,10 @@ func (t *Tailer) archive(p *pass, tr *tracked, parser Parser, f *os.File, meta f
 	t.dirty = true
 	if errors.Is(err, errStopped) {
 		// Cancelled midway: leave the checkpoint at zero so the archive
-		// is read again; the repeated events carry the same ids.
+		// is read again. Its records have no log ids (Codex), so the
+		// repeated events carry the same ids as long as the line key is
+		// the same: in this process always, after a restart when the key
+		// is kept (IdentityKey or the key file; keyfile.go).
 		tr.cp = Checkpoint{FileID: meta.id}
 		tr.more = true
 		return

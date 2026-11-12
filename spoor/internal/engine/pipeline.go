@@ -40,7 +40,8 @@ type Pipeline struct {
 	async     bool
 	ruleOpts  rules.Options
 	salt      []byte // per-process key for local-only dedup keys
-	idKey     []byte // identity key: Options.IdentityKey or the per-process key (identity.go)
+	idKey     []byte // identity key: Options.IdentityKey, the daemon's key file or the per-process key (identity.go)
+	keyStored bool   // idKey outlives the process (configured or read from the key file)
 
 	// ingest side (no processing lock)
 	qmu      sync.Mutex
@@ -157,14 +158,25 @@ func New(o Options) (*Pipeline, error) {
 	if err != nil {
 		return nil, err
 	}
-	idKey, err := identityKey(o.IdentityKey)
+	keyIn, keyStored := o.IdentityKey, len(o.IdentityKey) > 0
+	var keyErr error
+	if !keyStored {
+		// The daemon's identities must hold across restarts: it keeps its
+		// key under the checkpoint directory (identity.go).
+		if path := identityKeyPath(cfg, o.Mode); path != "" {
+			if keyIn, keyErr = LoadOrCreateIdentityKey(path); keyErr == nil {
+				keyStored = true
+			}
+		}
+	}
+	idKey, err := identityKey(keyIn)
 	if err != nil {
 		return nil, err
 	}
 	o.IdentityKey = nil // the pipeline's copy is idKey; Options is kept for reference only
 
 	p := &Pipeline{
-		o: o, cfg: cfg, mode: o.Mode, integrity: o.Integrity, idKey: idKey,
+		o: o, cfg: cfg, mode: o.Mode, integrity: o.Integrity, idKey: idKey, keyStored: keyStored,
 		forceHost:   o.Host.ID != "" || o.Host.Name != "",
 		started:     o.Now(),
 		minRank:     event.ClassRank(minClass),
@@ -227,11 +239,18 @@ func New(o Options) (*Pipeline, error) {
 	}
 	p.pol = pol
 
+	if keyErr != nil {
+		// A key file that cannot be trusted is never replaced: run with the
+		// per-process key (identities hold for this run only) and report it.
+		p.ctr.identityKeyErrors++
+	}
+
 	p.blPath = baselinePath(cfg, o.Mode)
 	var blErr error
-	p.bl, blErr = OpenBaseline(p.blPath, BaselineKeys)
+	p.bl, blErr = OpenBaseline(p.blPath, BaselineKeys, p.idKey)
 	if blErr != nil {
-		// A damaged baseline is a cache: start empty and report it.
+		// A damaged baseline, or one keyed with another identity key, is a
+		// cache: start empty and report it.
 		p.ctr.baselineErrors++
 	}
 

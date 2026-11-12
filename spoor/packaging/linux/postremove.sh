@@ -29,6 +29,9 @@ if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
 	systemctl reset-failed spoor.service >/dev/null 2>&1 || true
 fi
 
+# A completed removal: prerm's note for an aborted one is no longer needed.
+rm -f "$DATA/.osquery-extension"
+
 [ "$1" = purge ] || exit 0
 
 # data_dir from the configuration, if it names another directory.

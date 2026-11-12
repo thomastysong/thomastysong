@@ -12,6 +12,8 @@ manifests validate against the Kubernetes 1.31 API schemas (kubeconform
 or later.
 
 ```
+# on every Linux node first (section 1, "Seccomp profile"):
+install -D -m 0644 seccomp/node-sensor.json /var/lib/kubelet/seccomp/spoor/node-sensor.json
 kubectl apply -k .            # namespace.yaml, configmap.yaml, daemonset.yaml
 ```
 
@@ -47,7 +49,8 @@ only the two capabilities below.
 | Setting | Why |
 |---|---|
 | `hostPID: true` | the sensor must see other containers' processes. |
-| `runAsUser: 65532`, `runAsNonRoot` | a uid-0 sensor can write root-owned files in any other container through `/proc/<pid>/root`, even with every write capability dropped (red team E2, W3). A non-root sensor writes nothing that is not world-writable. |
+| `runAsUser: 65532`, `runAsNonRoot` | a uid-0 sensor can write root-owned files in any other container through `/proc/<pid>/root`, even with every write capability dropped (red team E2, W3). A non-root sensor cannot pass file permission checks for writing (`CAP_DAC_READ_SEARCH` bypasses read and search checks only), so it cannot write root-owned files through the file system. That alone does not make it write-safe: see `seccompProfile`. |
+| `seccompProfile: Localhost`, `spoor/node-sensor.json` | `CAP_SYS_PTRACE` with `hostPID` lets a process attach to any process on the node, root ones included, and rewrite its registers and memory (`ptrace`, `process_vm_writev`) or take its open files (`pidfd_getfd`); the runtime default profile allows those calls to a holder of the capability (Docker's, verified; containerd's default is built from the same list, UNVERIFIED here). Verified with Docker's default profile: a uid-65532 probe with exactly the sensor's capabilities attached to a root process in another container and read its registers. The sensor needs the capability only for the kernel's access checks on `/proc/<pid>/{environ,root,cwd}` reads, never those calls, so its profile is the default one without them (below). Verified: under it the same probe gets `EPERM` from `ptrace`, `process_vm_readv`, `process_vm_writev`, `pidfd_getfd` and `kcmp`, while reading the root process's `environ` still works and the sensor attributes the in-container agent as before. |
 | capabilities `drop: [ALL]`, `add: [SYS_PTRACE, DAC_READ_SEARCH]` | reading another uid's `/proc/<pid>/environ` and `/proc/<pid>/root` needs `CAP_SYS_PTRACE`; reading 0700 homes and 0600 transcripts needs `CAP_DAC_READ_SEARCH`. hostPID alone reads only `cmdline` and `cgroup` and silently misses every non-root agent (red team E1). |
 | file capabilities on the binary | a non-root container gets no effective capability from `add` (red team E1, variant I: CapEff 0). The image's `/usr/bin/spoor` carries `cap_dac_read_search,cap_sys_ptrace=ep`, set in the Dockerfile's build stage. Verified: the attribute survives `COPY --from` into the final image, and the running sensor has CapPrm = CapEff = `0x80004` (exactly those two). |
 | `allowPrivilegeEscalation: true` | `false` sets no_new_privs, which is meant to stop exec from granting file capabilities. Under Docker the sensor still got both (runc had put them in the permitted set before exec, and no_new_privs intersects with it); that is a runtime detail this deployment does not rely on. |
@@ -57,6 +60,43 @@ only the two capabilities below.
 | `appArmorProfile: Unconfined`, `seLinuxOptions.type: spc_t` | container default profiles allow ptrace-class reads only toward peers under the same profile, which would hide other containers' `environ` (containerd's AppArmor template). UNVERIFIED: the test node has neither AppArmor nor SELinux. |
 | namespace labelled `pod-security.kubernetes.io/enforce: privileged` | hostPID and these two capabilities are outside the Pod Security Standards' baseline. Keep nothing else in the namespace. |
 | `SPOOR_HOST_ID` from `spec.nodeName` | the container has no machine id of its own. `host.name` in records is the pod's hostname; the log pipeline adds node and pod metadata. |
+
+### What a compromised sensor can do
+
+Read: every file and every process's memory on the node (`CAP_DAC_READ_SEARCH`
+and `CAP_SYS_PTRACE` exist to read other users' files and `/proc` entries,
+and `/proc/<pid>/mem` opens for reading with them). Treat the sensor's
+image, configuration and namespace like any other node-level agent.
+
+Write: with the seccomp profile, only what is world-writable; opening
+another process's `/proc/<pid>/mem` for writing still fails on file
+permissions (verified: `EACCES`). With `RuntimeDefault` instead, or
+`Unconfined`, a compromised sensor is equivalent to root on the node.
+
+### Seccomp profile
+
+`seccomp/node-sensor.json` is the default profile Docker applies to a
+container with exactly these two capabilities on amd64 and arm64
+(moby/profiles `seccomp/v0.1.0`, `default.json`, Apache-2.0), without
+`ptrace`, `process_vm_readv`, `process_vm_writev`, `pidfd_getfd`, `kcmp`,
+`process_madvise` and `open_by_handle_at` (the last one opens files by
+handle outside the mount namespace with `CAP_DAC_READ_SEARCH`; spoor does
+not use it). It is written in the plain OCI form, without moby's
+`includes`/`excludes` conditions: those are not part of the OCI format, and
+a runtime that reads only the OCI fields would drop the conditions and allow
+every capability-gated call (UNVERIFIED which runtimes do: only Docker ran
+here). `packaging/packaging_test.go` checks the form and the removed calls.
+
+Kubernetes reads `Localhost` profiles from the kubelet's seccomp directory
+(`/var/lib/kubelet/seccomp` unless the kubelet's root directory moved), so
+the file must be on every Linux node before the DaemonSet starts: put it in
+the node image or the node bootstrap, or distribute it with the Security
+Profiles Operator (a `SeccompProfile` with the same rules; then set
+`localhostProfile` to the path the operator reports). Not run under a
+kubelet here. A pod on a node without the file stays in
+`CreateContainerError`, which is the intended failure. Switching to
+`type: RuntimeDefault` works everywhere and makes a compromised sensor
+root-equivalent on the node (above); do it only knowingly.
 
 ### What the node sensor does not do yet
 

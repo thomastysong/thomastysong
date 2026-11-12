@@ -11,7 +11,11 @@
 //     binary refuses to start without both capabilities, that the sensor
 //     finds the in-container agent and attributes its container id and
 //     session, that a scan of the container root refuses planted symbolic
-//     link escapes, and that the shipped ConfigMap configuration runs.
+//     link escapes, that the shipped ConfigMap configuration runs, and that
+//     under the DaemonSet's seccomp profile a process with exactly the
+//     sensor's privileges can no longer ptrace or write into a root process
+//     on the node (it can under Docker's default profile). Everything runs
+//     under that profile, as the DaemonSet does.
 //
 //   - TestContainerInImageHookMode runs the in-image hook mode layout
 //     (deploy/kubernetes/in-image): managed hooks in the image, the daemon
@@ -29,9 +33,12 @@
 // not used): mirror.gcr.io/library/redis:7 (Debian bookworm),
 // mirror.gcr.io/library/rockylinux:9 (rpm test; skipped without it), and the
 // Dockerfile's base images (or SPOOR_E2E_IMAGE naming a sensor image built
-// already). The package tests need nfpm (SPOOR_NFPM or PATH). Containers are
-// named spoor-e2e-* and removed afterwards; nothing outside t.TempDir() and
-// those containers is written. Lines starting with "EVIDENCE" are what
+// already). The package tests need nfpm (SPOOR_NFPM or PATH). The ptrace
+// probe needs root (it sets file capabilities on its binary) and is skipped
+// otherwise. Containers are named spoor-e2e-* and removed afterwards, and so
+// is the image the test builds (SPOOR_E2E_KEEP_IMAGE=1 keeps it); nothing
+// outside t.TempDir(), docker and the Go build and module caches is
+// written. Lines starting with "EVIDENCE" are what
 // deploy/kubernetes/VERIFIED.md and packaging/README.md quote.
 package e2e
 
@@ -54,7 +61,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -229,54 +235,45 @@ func ctrBinary(t *testing.T, dir, version string) string {
 	return out
 }
 
-var (
-	ctrImageOnce sync.Once
-	ctrImageName string
-	ctrImageErr  error
-)
-
-// ctrSensorImage builds the Dockerfile once per test binary. The build
-// context is a copy of the module with its dependencies vendored, so the
-// image builds without network access (the Dockerfile uses vendor/ when it
-// is there); the repository itself is not modified.
+// ctrSensorImage builds the Dockerfile. The build context is a copy of the
+// module in t.TempDir() with its dependencies vendored, so the image builds
+// without network access (the Dockerfile uses vendor/ when it is there);
+// the repository itself is not modified. The image is removed when the test
+// ends unless SPOOR_E2E_KEEP_IMAGE is set; SPOOR_E2E_IMAGE names an image
+// built already, which is left alone.
 func ctrSensorImage(t *testing.T) string {
 	t.Helper()
-	ctrImageOnce.Do(func() {
-		if img := os.Getenv("SPOOR_E2E_IMAGE"); img != "" {
-			ctrImageName = img
-			return
-		}
-		ctx, err := os.MkdirTemp("", "spoor-e2e-ctx-")
-		if err != nil {
-			ctrImageErr = err
-			return
-		}
-		defer os.RemoveAll(ctx)
-		if ctrImageErr = ctrCopyModule(repoRoot(t), ctx); ctrImageErr != nil {
-			return
-		}
-		vend := exec.Command("go", "mod", "vendor")
-		vend.Dir = ctx
-		vend.Env = append(os.Environ(), "GOFLAGS=-mod=mod")
-		if b, err := vend.CombinedOutput(); err != nil {
-			ctrImageErr = fmt.Errorf("go mod vendor: %v\n%s", err, b)
-			return
-		}
-		out, err := ctrDocker(15*time.Minute, nil, "build", "--build-arg", "VERSION=0.0.0-e2e", "-t", ctrSensorTag, ctx)
-		if err != nil {
-			ctrImageErr = fmt.Errorf("docker build: %v\n%s", err, ctrClip(out, 6000))
-			return
-		}
-		ctrImageName = ctrSensorTag
-	})
-	if ctrImageErr != nil {
-		t.Fatal(ctrImageErr)
+	if img := os.Getenv("SPOOR_E2E_IMAGE"); img != "" {
+		return img
 	}
-	return ctrImageName
+	ctx := filepath.Join(t.TempDir(), "context")
+	if err := os.Mkdir(ctx, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := ctrCopyModule(repoRoot(t), ctx); err != nil {
+		t.Fatal(err)
+	}
+	vend := exec.Command("go", "mod", "vendor")
+	vend.Dir = ctx
+	vend.Env = append(os.Environ(), "GOFLAGS=-mod=mod")
+	if b, err := vend.CombinedOutput(); err != nil {
+		t.Fatalf("go mod vendor: %v\n%s", err, b)
+	}
+	out, err := ctrDocker(15*time.Minute, nil, "build", "--build-arg", "VERSION=0.0.0-e2e", "-t", ctrSensorTag, ctx)
+	if err != nil {
+		t.Fatalf("docker build: %v\n%s", err, ctrClip(out, 6000))
+	}
+	if os.Getenv("SPOOR_E2E_KEEP_IMAGE") == "" {
+		t.Cleanup(func() { _, _ = ctrDocker(time.Minute, nil, "image", "rm", "-f", ctrSensorTag) })
+	}
+	// The context is not needed once the image exists.
+	_ = os.RemoveAll(ctx)
+	return ctrSensorTag
 }
 
 // ctrCopyModule copies the module's sources: no VCS data, build output,
-// test binaries or local databases (the same list as .dockerignore).
+// test binaries, binaries built in the module root or local databases (the
+// same list as .dockerignore).
 func ctrCopyModule(src, dst string) error {
 	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -294,6 +291,7 @@ func ctrCopyModule(src, dst string) error {
 			return os.MkdirAll(filepath.Join(dst, rel), 0o755)
 		}
 		if strings.HasSuffix(name, ".test") || strings.HasSuffix(name, ".out") || strings.Contains(name, ".db") ||
+			strings.HasSuffix(name, ".exe") || strings.HasSuffix(name, ".tar") || rel == "spoor" ||
 			(strings.HasPrefix(name, "zz_") && strings.HasSuffix(name, "_test.go")) || !d.Type().IsRegular() {
 			return nil
 		}
@@ -319,6 +317,7 @@ type daemonSetSpec struct {
 	capsAdd      []string
 	capsDrop     []string
 	allowEsc     bool
+	seccomp      string // the Localhost profile's file in deploy/kubernetes/seccomp
 	config       string // spoor.yaml from the ConfigMap
 }
 
@@ -352,6 +351,14 @@ func ctrLoadDaemonSet(t *testing.T) daemonSetSpec {
 		spec.hostPID, _ = pod["hostPID"].(bool)
 		spec.runAsUser, _ = ctrGet(pod, "securityContext.runAsUser").(int)
 		spec.runAsGroup, _ = ctrGet(pod, "securityContext.runAsGroup").(int)
+		// A Localhost profile is a path below the kubelet's seccomp
+		// directory; the manifest's spoor/<file> is seccomp/<file> here.
+		if ctrGet(pod, "securityContext.seccompProfile.type") == "Localhost" {
+			local, _ := ctrGet(pod, "securityContext.seccompProfile.localhostProfile").(string)
+			if name, ok := strings.CutPrefix(local, "spoor/"); ok && !strings.Contains(name, "/") {
+				spec.seccomp = filepath.Join(dir, "seccomp", name)
+			}
+		}
 		ctrs, _ := pod["containers"].([]any)
 		c, _ := ctrs[0].(map[string]any)
 		spec.readOnlyRoot, _ = ctrGet(c, "securityContext.readOnlyRootFilesystem").(bool)
@@ -367,7 +374,7 @@ func ctrLoadDaemonSet(t *testing.T) daemonSetSpec {
 		data, _ := m["data"].(map[string]any)
 		spec.config, _ = data["spoor.yaml"].(string)
 	}
-	if !spec.hostPID || spec.runAsUser == 0 || spec.config == "" || len(spec.capsAdd) == 0 {
+	if !spec.hostPID || spec.runAsUser == 0 || spec.config == "" || len(spec.capsAdd) == 0 || spec.seccomp == "" {
 		t.Fatalf("deploy/kubernetes did not parse as expected: %+v", spec)
 	}
 	return spec
@@ -391,6 +398,7 @@ func (s daemonSetSpec) sensorArgs(etc string) []string {
 	if !s.allowEsc {
 		args = append(args, "--security-opt", "no-new-privileges")
 	}
+	args = append(args, "--security-opt", "seccomp="+s.seccomp)
 	// emptyDir and the ConfigMap.
 	args = append(args,
 		"--tmpfs", fmt.Sprintf("/var/lib/spoor:uid=%d,gid=%d,mode=0700", s.runAsUser, s.runAsGroup),
@@ -464,6 +472,174 @@ func imageCapXattr(t *testing.T, img, dir string) (string, bool) {
 		}
 	}
 	return value, found
+}
+
+// ptraceProbeSource is a program that tries, against one pid, every call
+// through which a process holding CAP_SYS_PTRACE can control another
+// process or write into it, plus the reads the sensor relies on. Zero
+// iovecs: process_vm_* touch no memory but still pass the kernel's access
+// check, or are stopped by the seccomp filter first.
+const ptraceProbeSource = `package main
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"runtime"
+	"strconv"
+	"strings"
+	"syscall"
+)
+
+const (
+	sysPidfdOpen  = 434
+	sysPidfdGetfd = 438
+)
+
+func nr(amd64, arm64 uintptr) uintptr {
+	if runtime.GOARCH == "arm64" {
+		return arm64
+	}
+	return amd64
+}
+
+var (
+	sysProcessVMReadv  = nr(310, 270)
+	sysProcessVMWritev = nr(311, 271)
+	sysKcmp            = nr(312, 272)
+)
+
+func result(err error) string {
+	var en syscall.Errno
+	if err == nil {
+		return "ok"
+	}
+	if errors.As(err, &en) {
+		switch en {
+		case syscall.EPERM:
+			return "EPERM"
+		case syscall.EACCES:
+			return "EACCES"
+		}
+		return "errno" + strconv.Itoa(int(en))
+	}
+	return "error"
+}
+
+func errno(_, _ uintptr, e syscall.Errno) error {
+	if e != 0 {
+		return e
+	}
+	return nil
+}
+
+func main() {
+	pid, err := strconv.Atoi(os.Args[1])
+	if err != nil || pid <= 0 {
+		os.Exit(2)
+	}
+	st, _ := os.ReadFile("/proc/self/status")
+	for _, l := range strings.Split(string(st), "\n") {
+		if k, v, ok := strings.Cut(l, ":"); ok && (k == "Uid" || k == "CapEff") {
+			fmt.Println(k + "=" + strings.Join(strings.Fields(v), " "))
+		}
+	}
+	_, err = os.ReadFile(fmt.Sprintf("/proc/%d/environ", pid))
+	fmt.Println("environ_read=" + result(err))
+	for _, m := range []struct {
+		name string
+		flag int
+	}{{"mem_open_write", os.O_WRONLY}, {"mem_open_read", os.O_RDONLY}} {
+		f, err := os.OpenFile(fmt.Sprintf("/proc/%d/mem", pid), m.flag, 0)
+		if err == nil {
+			f.Close()
+		}
+		fmt.Println(m.name + "=" + result(err))
+	}
+	err = syscall.PtraceAttach(pid)
+	if err == nil {
+		var ws syscall.WaitStatus
+		_, _ = syscall.Wait4(pid, &ws, syscall.WALL, nil)
+		var regs syscall.PtraceRegs
+		err = syscall.PtraceGetRegs(pid, &regs)
+		_ = syscall.PtraceDetach(pid)
+	}
+	fmt.Println("ptrace_attach=" + result(err))
+	fmt.Println("process_vm_writev=" + result(errno(syscall.Syscall6(sysProcessVMWritev, uintptr(pid), 0, 0, 0, 0, 0))))
+	fmt.Println("process_vm_readv=" + result(errno(syscall.Syscall6(sysProcessVMReadv, uintptr(pid), 0, 0, 0, 0, 0))))
+	pfd, _, e := syscall.Syscall(sysPidfdOpen, uintptr(pid), 0, 0)
+	if e != 0 {
+		fmt.Println("pidfd_getfd=pidfd_open:" + result(e))
+	} else {
+		fd, _, e2 := syscall.Syscall(sysPidfdGetfd, pfd, 0, 0)
+		if e2 == 0 {
+			syscall.Close(int(fd))
+		}
+		fmt.Println("pidfd_getfd=" + result(errno(0, 0, e2)))
+		syscall.Close(int(pfd))
+	}
+	fmt.Println("kcmp=" + result(errno(syscall.Syscall6(sysKcmp, uintptr(os.Getpid()), uintptr(pid), 0, 0, 0, 0))))
+}
+`
+
+// ctrPtraceProbe builds the probe statically and gives it the sensor's file
+// capabilities with the repository's filecap tool (setting the
+// security.capability attribute needs root).
+func ctrPtraceProbe(t *testing.T) string {
+	t.Helper()
+	if os.Geteuid() != 0 {
+		t.Skip("setting file capabilities on the probe needs root")
+	}
+	dir := filepath.Join(t.TempDir(), "probe")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{"go.mod": "module probe\n\ngo 1.22\n", "main.go": ptraceProbeSource} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bin := filepath.Join(dir, "probe")
+	build := exec.Command("go", "build", "-o", bin, ".")
+	build.Dir = dir
+	build.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOWORK=off", "GOFLAGS=")
+	if b, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("probe build: %v\n%s", err, b)
+	}
+	setcap := exec.Command("go", "run", "./packaging/container/filecap", "set", "cap_dac_read_search,cap_sys_ptrace=ep", bin)
+	setcap.Dir = repoRoot(t)
+	if b, err := setcap.CombinedOutput(); err != nil {
+		t.Fatalf("filecap: %v\n%s", err, b)
+	}
+	if err := os.Chmod(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin
+}
+
+// ctrProbeResults parses the probe's key=value lines.
+func ctrProbeResults(out string) map[string]string {
+	res := map[string]string{}
+	for _, l := range strings.Split(out, "\n") {
+		if k, v, ok := strings.Cut(strings.TrimSpace(l), "="); ok {
+			res[k] = v
+		}
+	}
+	return res
+}
+
+// ctrWithoutSeccomp drops the seccomp option from docker flags, leaving the
+// engine's default profile.
+func ctrWithoutSeccomp(args []string) []string {
+	var out []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--security-opt" && i+1 < len(args) && strings.HasPrefix(args[i+1], "seccomp=") {
+			i++
+			continue
+		}
+		out = append(out, args[i])
+	}
+	return out
 }
 
 // workspaceSetup prepares the workspace container: an account dev (uid
@@ -693,6 +869,54 @@ func TestContainerNodeSensor(t *testing.T) {
 		}
 	})
 
+	t.Run("seccomp profile stops ptrace-class control of root processes", func(t *testing.T) {
+		probe := ctrPtraceProbe(t)
+		// The workspace's main process runs as root.
+		if st := procStatus(t, wsPID); !strings.HasPrefix(st["Uid"], "0\t") && !strings.HasPrefix(st["Uid"], "0 ") {
+			t.Fatalf("workspace main process is not root: %q", st["Uid"])
+		}
+		run := func(args []string) map[string]string {
+			t.Helper()
+			full := append([]string{"run", "--rm"}, args...)
+			full = append(full, "-v", probe+":/probe:ro", "--entrypoint", "/probe", img, wsPID)
+			out, err := ctrDocker(time.Minute, nil, full...)
+			if err != nil {
+				t.Fatalf("probe: %v\n%s", err, out)
+			}
+			return ctrProbeResults(out)
+		}
+		calls := []string{"ptrace_attach", "process_vm_writev", "process_vm_readv", "pidfd_getfd", "kcmp"}
+		show := func(r map[string]string) string {
+			var parts []string
+			for _, k := range append([]string{"Uid", "CapEff", "environ_read", "mem_open_write", "mem_open_read"}, calls...) {
+				parts = append(parts, k+"="+r[k])
+			}
+			return strings.Join(parts, " ")
+		}
+		args := spec.sensorArgs(etc)
+		def := run(ctrWithoutSeccomp(args))
+		t.Logf("EVIDENCE probe with the sensor's uid and file capabilities, hostPID, Docker's default seccomp profile, against root pid %s: %s", wsPID, show(def))
+		if def["CapEff"] != ctrCapMask {
+			t.Skipf("the probe did not receive its file capabilities (nosuid mount?): %v", def)
+		}
+		if def["ptrace_attach"] != "ok" {
+			t.Skipf("ptrace is refused even under the default profile (Yama ptrace_scope?); the profile's effect cannot be told apart: %v", def)
+		}
+		prof := run(args)
+		t.Logf("EVIDENCE same probe under deploy/kubernetes/seccomp/node-sensor.json: %s", show(prof))
+		for _, c := range calls {
+			if prof[c] != "EPERM" {
+				t.Errorf("under the profile %s = %q, want EPERM", c, prof[c])
+			}
+		}
+		if prof["CapEff"] != ctrCapMask || prof["environ_read"] != "ok" || prof["mem_open_read"] != "ok" {
+			t.Errorf("under the profile the reads the sensor relies on fail: %v", prof)
+		}
+		if prof["mem_open_write"] != "EACCES" || def["mem_open_write"] != "EACCES" {
+			t.Errorf("/proc/<pid>/mem of a root process opened for writing: default %q, profile %q", def["mem_open_write"], prof["mem_open_write"])
+		}
+	})
+
 	t.Run("shipped ConfigMap configuration runs", func(t *testing.T) {
 		etc2 := filepath.Join(tmp, "etc-shipped")
 		if err := os.MkdirAll(etc2, 0o755); err != nil {
@@ -901,8 +1125,12 @@ func pkgNFPM(t *testing.T) string {
 }
 
 // pkgLifecycle installs version 1, registers the osquery extension with the
-// Fleet post-install script, hooks two agents and makes one entry look like
-// an earlier release's, upgrades to version 2, removes, and (deb) purges.
+// Fleet post-install script, hooks Claude Code in fail-closed guard mode
+// with a 30 s timeout and Gemini CLI with the defaults, makes Gemini CLI's
+// entries what an earlier release wrote, upgrades to version 2 (which must
+// rewrite Gemini CLI's entries and leave Claude Code's options alone),
+// (deb) runs the deconfigure and aborted-removal paths of the maintainer
+// scripts, removes, and (deb) purges.
 func pkgLifecycle(t *testing.T, img, kind string) {
 	ctrRequireDocker(t)
 	ctrRequireImage(t, img)
@@ -945,25 +1173,53 @@ func pkgLifecycle(t *testing.T, img, kind string) {
 	expect(out, "spoor 0.1.0", "install")
 	expect(out, "systemd is not running", "install")
 
+	claude := "/etc/claude-code/managed-settings.d/50-spoor.json"
 	out = sh(`sh /fleet/register-extension.sh && cat /etc/osquery/extensions.load &&
-spoor hooks install --scope managed --agents claude-code,gemini-cli >/dev/null &&
-sed -i "s#\[ -x '/usr/bin/spoor' \] || exit 0; exec '/usr/bin/spoor' hook --agent gemini-cli#/usr/bin/spoor hook --agent gemini-cli#" /etc/gemini-cli/settings.json &&
-spoor hooks status --scope managed --agents claude-code,gemini-cli,codex`)
-	t.Logf("EVIDENCE %s before upgrade (extension registered, gemini-cli entry in an earlier release's form):\n%s", kind, out)
+spoor hooks install --scope managed --agents claude-code --guard --fail-closed --timeout 30 >/dev/null &&
+spoor hooks install --scope managed --agents gemini-cli >/dev/null &&
+sed -i "s#\[ -x '/usr/bin/spoor' \] || exit 0; exec '/usr/bin/spoor' hook --agent gemini-cli#'/usr/bin/spoor' hook --agent gemini-cli#" /etc/gemini-cli/settings.json &&
+sha256sum ` + claude + ` && spoor hooks status --scope managed --agents claude-code,gemini-cli,codex`)
+	t.Logf("EVIDENCE %s before upgrade (extension registered, claude-code fail-closed with a 30 s timeout, gemini-cli entries in an earlier release's form):\n%s", kind, out)
 	expect(out, "/opt/other/x.ext\n/usr/lib/spoor/spoor.ext", "register")
-	expect(out, "modified", "tamper")
+	expect(out, "gemini-cli (managed): written by an earlier spoor release", "earlier release's entries")
+	claudeSum := ""
+	for _, l := range strings.Split(out, "\n") {
+		if f := strings.Fields(l); len(f) == 2 && f[1] == claude {
+			claudeSum = f[0]
+		}
+	}
 
-	out = sh(upgrade + ` && spoor version && sha256sum /usr/bin/spoor /usr/lib/spoor/spoor.ext && spoor hooks status --scope managed --agents claude-code,gemini-cli,codex && cat /etc/osquery/extensions.load`)
+	out = sh(upgrade + ` && spoor version && sha256sum /usr/bin/spoor /usr/lib/spoor/spoor.ext ` + claude + ` && grep -c '"onFailure": "block"' ` + claude + ` && grep -c '"timeout": 30' ` + claude + ` && spoor hooks status --scope managed --agents claude-code,gemini-cli,codex && cat /etc/osquery/extensions.load`)
 	t.Logf("EVIDENCE %s upgrade:\n%s", kind, out)
 	expect(out, "spoor 0.1.1", "upgrade")
-	expect(out, "managed hooks rewritten for claude-code,gemini-cli", "upgrade")
-	if strings.Contains(out, "modified") {
-		t.Errorf("upgrade left a modified hook entry:\n%s", out)
+	expect(out, "managed hooks rewritten for gemini-cli\n", "upgrade")
+	expect(out, "managed hooks of claude-code left as they are", "upgrade")
+	expect(out, "gemini-cli   managed        managed", "upgrade")
+	if claudeSum == "" || !strings.Contains(out, claudeSum+"  "+claude) {
+		t.Errorf("the upgrade changed the administrator's fail-closed claude-code entries (sha256 before %s):\n%s", claudeSum, out)
 	}
 	if !regexpSameSums(out) {
 		t.Errorf("the extension copy was not refreshed:\n%s", out)
 	}
 	expect(out, "codex        managed        missing", "upgrade must not hook agents that were not hooked")
+
+	if kind == "deb" {
+		// deconfigure stops the daemon only; an aborted removal (prerm
+		// remove, then postinst abort-remove) gets the osquery extension
+		// registration and its copy back. No systemd in the container: the
+		// service steps only report.
+		out = sh(`sh /var/lib/dpkg/info/spoor.prerm deconfigure in-favour other 1.0 2>&1; echo deconfigure=$?; grep -cxF /usr/lib/spoor/spoor.ext /etc/osquery/extensions.load; ls /usr/lib/spoor/spoor.ext; sha256sum ` + claude + `
+sh /var/lib/dpkg/info/spoor.prerm remove 2>&1; echo prerm=$?; grep -cxF /usr/lib/spoor/spoor.ext /etc/osquery/extensions.load; cat /var/lib/spoor/.osquery-extension
+sh /var/lib/dpkg/info/spoor.postinst abort-remove 2>&1; echo postinst=$?; cat /etc/osquery/extensions.load; echo; sha256sum /usr/bin/spoor /usr/lib/spoor/spoor.ext; ls -a /var/lib/spoor`)
+		t.Logf("EVIDENCE deb deconfigure, then an aborted removal:\n%s", out)
+		expect(out, "deconfigure=0\n1\n/usr/lib/spoor/spoor.ext\n"+claudeSum, "deconfigure leaves hooks and extension alone")
+		expect(out, "prerm=0\n0\n/usr/lib/spoor/spoor.ext\n", "prerm remove unregisters and notes the extension")
+		expect(out, "osquery extension registration restored", "abort-remove")
+		expect(out, "postinst=0\n/opt/other/x.ext\n/usr/lib/spoor/spoor.ext\n", "abort-remove")
+		if !regexpSameSums(out) || strings.Contains(out, ".osquery-extension") {
+			t.Errorf("abort-remove did not restore the extension copy or left its note:\n%s", out)
+		}
+	}
 
 	out = sh(remove + ` ; echo removed=$?; ls /usr/bin/spoor /usr/lib/spoor 2>&1; cat /etc/osquery/extensions.load; echo; ls /etc/claude-code/managed-settings.d /etc/gemini-cli; getent group spoor; ls -d /etc/spoor /var/lib/spoor`)
 	t.Logf("EVIDENCE %s remove:\n%s", kind, out)

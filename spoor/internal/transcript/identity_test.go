@@ -14,14 +14,14 @@ import (
 	"github.com/thomastysong/spoor/internal/event"
 )
 
-// withLineKey simulates another process: a different line key for the
-// rest of the test.
+// withLineKey simulates another process: a different per-process line key
+// for the rest of the test.
 func withLineKey(t *testing.T, seed byte) {
 	t.Helper()
-	old := lineKey
+	old := processLineKey
 	k := bytes.Repeat([]byte{seed}, 32)
-	lineKey = func() []byte { return k }
-	t.Cleanup(func() { lineKey = old })
+	processLineKey = func() []byte { return k }
+	t.Cleanup(func() { processLineKey = old })
 }
 
 func claudeUUIDPrompt(uuid, text string) string {
@@ -284,7 +284,7 @@ func TestEventIDDictionaryAttack(t *testing.T) {
 			if c.name == "codex line digest" {
 				// Control: with the process key the same recomputation
 				// finds it, so the negative above is meaningful.
-				rec := "l:" + lineDigest(c.p.AgentID(), []byte(c.line(real)))
+				rec := "l:" + lineDigest(nil, c.p.AgentID(), []byte(c.line(real)))
 				if eventID(e.TS.Time, c.p.AgentID(), sess, rec, e.Type, "", 0) != e.ID {
 					t.Fatal("control: keyed recomputation does not give the id; the attack model is wrong")
 				}
@@ -341,10 +341,11 @@ func TestNoToolOutputDigest(t *testing.T) {
 
 // ---- checkpoints across processes ----
 
-// A restarted daemon has another line key. Its checkpoints still verify
-// (the tail fingerprint does not depend on the key): nothing is read twice
-// and no file looks replaced. A batch that was read but not committed comes
-// back with the same ids when the log gives record ids.
+// Checkpoints do not depend on any key (the tail fingerprint is unkeyed),
+// and records with log ids do not depend on the line key: across
+// processes with different per-process keys nothing is read twice, no file
+// looks replaced, and a batch that was read but not committed comes back
+// with the same ids. (Records without log ids: linekey_test.go.)
 func TestTailCheckpointsSurviveAnotherProcessKey(t *testing.T) {
 	e := newEnv(t)
 	e.opts.DeferCommit = true

@@ -60,8 +60,20 @@ spec:
         runAsNonRoot: true
         runAsUser: 65532
         runAsGroup: 65532
+        # The runtime's default profile lets a process holding CAP_SYS_PTRACE
+        # call ptrace, process_vm_writev and pidfd_getfd on any process it can
+        # see; with hostPID that is every root process on the node, so a
+        # compromised sensor would be root on the node (verified with Docker's
+        # default profile: VERIFIED.md). The sensor needs the capability only
+        # for the kernel's access checks on /proc/<pid>/{environ,root,cwd}
+        # reads, never those calls: this profile is the runtime default
+        # without them (seccomp/node-sensor.json). Install it on every Linux
+        # node as <kubelet root dir>/seccomp/spoor/node-sensor.json first
+        # (README.md); a node without it does not start the pod
+        # (CreateContainerError) rather than run the sensor without it.
         seccompProfile:
-          type: RuntimeDefault
+          type: Localhost
+          localhostProfile: spoor/node-sensor.json
         # AppArmor's container default profile lets ptrace-class reads reach
         # only peers under the same profile, which would hide every other
         # container's /proc/<pid>/environ (containerd

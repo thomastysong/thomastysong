@@ -27,12 +27,16 @@ func testKey(seed byte) []byte {
 }
 
 // keyedHarness is a standard-profile pipeline with the given identity key
-// (nil: the per-process key).
+// (nil: the per-process key, so the pipeline has no data directory to keep
+// a key file in).
 func keyedHarness(t *testing.T, key []byte) *harness {
 	t.Helper()
 	return newHarness(t, func(c *config.Config, o *Options) {
 		c.Privacy.Profile = "standard"
 		o.IdentityKey = key
+		if key == nil {
+			c.DataDir = ""
+		}
 	})
 }
 
@@ -96,7 +100,12 @@ func TestIdentityPromptPairsAcrossSurfaces(t *testing.T) {
 // calls).
 func identityRun(t *testing.T, key []byte) (pr, call idPair) {
 	t.Helper()
-	h := keyedHarness(t, key)
+	return identitySeq(t, keyedHarness(t, key))
+}
+
+// identitySeq is identityRun's sequence on a given pipeline.
+func identitySeq(t *testing.T, h *harness) (pr, call idPair) {
+	t.Helper()
 	h.ingest(hook(event.TypePromptSubmit, "ib", prompt("deploy the payments service to staging")))
 	h.ingest(hook(event.TypeToolPre, "ib", shellNoID("make deploy ENV=staging")))
 	h.tick()
@@ -542,5 +551,195 @@ func TestReadIdentityKeyRefuses(t *testing.T) {
 	}
 	if _, err := ReadIdentityKey(filepath.Join(dir, "missing")); err == nil || !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("missing file: %v", err)
+	}
+}
+
+// ---- the daemon's key file (the pipeline loads it itself) ----
+
+// daemonHarness is a standard-profile daemon over dir with no
+// Options.IdentityKey, as the daemon builds it.
+func daemonHarness(t *testing.T, dir string) *harness {
+	t.Helper()
+	return newHarness(t, func(c *config.Config, o *Options) {
+		c.Privacy.Profile = "standard"
+		c.DataDir = dir
+	})
+}
+
+// A daemon restart over the same data directory keeps every identity: a
+// hook prompt redelivered from the spool after a restart, or a transcript
+// line re-read after a crash, ships under the Dedupe and ID of its first
+// copy, so downstream collapses them.
+func TestDaemonIdentityKeyHoldsAcrossRestarts(t *testing.T) {
+	dir := t.TempDir()
+	h1 := daemonHarness(t, dir)
+	p1, c1 := identitySeq(t, h1)
+	if err := h1.p.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "checkpoints", IdentityKeyFile)
+	stored, err := ReadIdentityKey(path)
+	if err != nil {
+		t.Fatalf("the daemon kept no key: %v", err)
+	}
+	if st := h1.stats(); st["identity.key_stored"] != 1 || st["identity.key_errors"] != 0 {
+		t.Errorf("heartbeat key status: stored %d errors %d", st["identity.key_stored"], st["identity.key_errors"])
+	}
+	h2 := daemonHarness(t, dir) // the restarted daemon
+	p2, c2 := identitySeq(t, h2)
+	if p1 != p2 || c1 != c2 {
+		t.Errorf("restart moved identities: prompt %v -> %v, call %v -> %v", p1, p2, c1, c2)
+	}
+	// It is the stored key that holds them, not a constant: a configured
+	// key equal to it gives the same identities, another data directory
+	// (another key) different ones.
+	if p3, c3 := identityRun(t, stored); p3 != p1 || c3 != c1 {
+		t.Errorf("stored key as Options.IdentityKey: prompt %v vs %v, call %v vs %v", p3, p1, c3, c1)
+	}
+	if p4, c4 := identitySeq(t, daemonHarness(t, t.TempDir())); p4.dedupe == p1.dedupe || c4.id == c1.id {
+		t.Error("two data directories share an identity key")
+	}
+	// A configured key wins over the file.
+	if p5, _ := identitySeq(t, newHarness(t, func(c *config.Config, o *Options) {
+		c.Privacy.Profile = "standard"
+		c.DataDir = dir
+		o.IdentityKey = testKey(1)
+	})); p5 == p1 {
+		t.Error("Options.IdentityKey ignored in favour of the key file")
+	}
+}
+
+// A key file the daemon cannot trust is neither used nor replaced: the
+// pipeline runs on the per-process key and says so in the heartbeat.
+func TestDaemonIdentityKeyFileUntrusted(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "checkpoints", IdentityKeyFile)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	content := hex.EncodeToString(testKey(3)) + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	os.Chmod(path, 0o644)
+	h := daemonHarness(t, dir)
+	pr, _ := identitySeq(t, h)
+	st := h.stats()
+	if st["identity.key_errors"] != 1 || st["identity.key_stored"] != 0 {
+		t.Errorf("untrusted key file not reported: errors %d stored %d", st["identity.key_errors"], st["identity.key_stored"])
+	}
+	if b, _ := os.ReadFile(path); string(b) != content {
+		t.Error("an untrusted key file was replaced")
+	}
+	if p3, _ := identityRun(t, testKey(3)); p3 == pr {
+		t.Error("the world-readable key was used")
+	}
+	if pp, _ := identityRun(t, nil); pp != pr {
+		t.Error("fallback is not the per-process key")
+	}
+}
+
+// ---- the first-seen baseline file ----
+
+// The baseline file records which account contacted which egress host. A
+// reader of the file alone (a backup, a support copy) with a host list and
+// the host's account names must not recover that history: every stored key
+// is an HMAC under the identity key. The control recomputes the stored
+// keys with the identity key, so the dictionary below would find the host
+// if the digests were unkeyed.
+func TestBaselineDigestsAreKeyed(t *testing.T) {
+	key := testKey(9)
+	h := newHarness(t, func(c *config.Config, o *Options) {
+		c.Privacy.Profile = "standard"
+		o.IdentityKey = key
+	})
+	secretHost := "payroll-export.internal.example"
+	h.ingest(hook(event.TypeToolPre, "bl", web("t1", "https://"+secretHost+"/q?id=7")))
+	h.tick()
+	if err := h.p.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	b, err := os.ReadFile(filepath.Join(h.cfg.CheckDir(), BaselineFile))
+	if err != nil {
+		t.Fatalf("baseline not written: %v", err)
+	}
+	if strings.Contains(string(b), secretHost) {
+		t.Fatal("host stored in clear")
+	}
+	lines := strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
+	stored := map[string]bool{}
+	for _, l := range lines[1:] {
+		stored[l] = true
+	}
+	if len(stored) < 2 {
+		t.Fatalf("expected the first-seen and the novelty key, file:\n%s", b)
+	}
+	if strings.Contains(lines[0], hex.EncodeToString(key)) {
+		t.Fatal("the key is in the header")
+	}
+	unkeyed := func(s string) string { // the version 1 form
+		sum := sha256.Sum256([]byte(s))
+		return hex.EncodeToString(sum[:12])
+	}
+	withKey, _ := OpenBaseline("", 0, key)
+	dict := []string{"github.com", "pypi.org", "registry.npmjs.org", "api.openai.com", "pastebin.com", secretHost, "example.com"}
+	var recovered, control []string
+	for _, acct := range []string{"root", "dev", "1001", "eve", "1002"} {
+		for _, host := range dict {
+			forms := []string{
+				"spoor/first_seen\x00net.host\x00" + acct + "\x00" + host, // engine first-seen feature
+				event.DedupeKey("SPR-T-006", acct, host),                  // rules novelty block
+			}
+			for _, f := range forms {
+				if stored[unkeyed(f)] || stored[f] {
+					recovered = append(recovered, acct+" -> "+host)
+				}
+				if stored[withKey.digest(f)] {
+					control = append(control, acct+" -> "+host)
+				}
+			}
+		}
+	}
+	if len(recovered) > 0 {
+		t.Errorf("baseline (%d keys) gives up egress history to a dictionary: %v", len(stored), recovered)
+	}
+	if len(control) != 2 || control[0] != "dev -> "+secretHost {
+		t.Errorf("control: with the identity key the dictionary finds %v, want the host twice (first-seen and novelty keys)", control)
+	}
+}
+
+// A baseline in the old unkeyed format is discarded on start (counted) and
+// overwritten at the first tick, so the unkeyed digests do not stay on disk
+// after an upgrade; a baseline written under another key is treated alike.
+func TestBaselineLegacyFileOverwritten(t *testing.T) {
+	for _, tc := range []struct{ name, content string }{
+		{"v1-unkeyed", "spoor-baseline 1\n" + hex.EncodeToString(make([]byte, 12)) + "\n"},
+		{"other-key", "spoor-baseline 2 0123456789abcdef\n" + hex.EncodeToString(make([]byte, 12)) + "\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "checkpoints", BaselineFile)
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(tc.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			h := daemonHarness(t, dir)
+			if h.stats()["baseline.errors"] != 1 {
+				t.Errorf("stale baseline not reported: %v", h.stats()["baseline.errors"])
+			}
+			h.tick() // nothing new was seen: the file is replaced anyway
+			b, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(b), hex.EncodeToString(make([]byte, 12))) || !strings.HasPrefix(string(b), "spoor-baseline 2 ") {
+				t.Errorf("stale baseline still on disk after the first tick: %q", b)
+			}
+		})
 	}
 }

@@ -1,6 +1,7 @@
 package transcript
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -51,9 +52,18 @@ type TailerOptions struct {
 	MaxPollBytes int64
 	// DeferCommit makes Poll leave the checkpoint store untouched until
 	// Commit is called. Call Commit after the returned events are durably
-	// handed on: a crash in between then re-reads them (with the same
-	// event ids) instead of losing them.
+	// handed on: a crash in between then re-reads them instead of losing
+	// them, with the same event ids as long as the line key survives too
+	// (IdentityKey, or the key file beside StateFile; see Line keys).
 	DeferCommit bool
+
+	// IdentityKey keys the ids of records the log gives no id of its own
+	// (Codex records, Claude Code bookkeeping records): they are an HMAC
+	// of the line under a key derived from it. Pass a key the caller keeps
+	// across restarts (the daemon's identity key), at least 16 bytes.
+	// Empty: with a StateFile, a key kept in StateFile+KeyFileSuffix,
+	// created on first use; without one, a key drawn once per process.
+	IdentityKey []byte
 
 	now func() time.Time // test clock
 }
@@ -116,13 +126,15 @@ type Tailer struct {
 
 	mu       sync.Mutex
 	loaded   bool
+	key      []byte // line key (keyfile.go), resolved by the first Poll
 	files    map[string]*tracked
 	reported map[string]string // path -> standing problem already reported
 	dirty    bool
 	rr       int
 }
 
-// NewTailer returns a Tailer. Nothing is read until the first Poll.
+// NewTailer returns a Tailer. Nothing is read until the first Poll, which
+// also loads (or creates) the line key.
 func NewTailer(o TailerOptions) *Tailer {
 	if o.MaxLine <= 0 {
 		o.MaxLine = defaultMaxLine
@@ -136,7 +148,13 @@ func NewTailer(o TailerOptions) *Tailer {
 	if o.now == nil {
 		o.now = time.Now
 	}
+	o.IdentityKey = bytes.Clone(o.IdentityKey) // the caller's slice may change
 	return &Tailer{o: o, files: map[string]*tracked{}, reported: map[string]string{}}
+}
+
+// newState returns the parser state of a newly followed or restarted file.
+func (t *Tailer) newState(path string, user *event.User) *FileState {
+	return &FileState{Path: path, user: user, key: t.key}
 }
 
 // pass is the state of one Poll.
@@ -262,6 +280,10 @@ func (t *Tailer) State(path string) (FileState, bool) {
 
 func (t *Tailer) load(p *pass) {
 	t.loaded = true
+	var prob *Problem
+	if t.key, prob = t.resolveKey(); prob != nil {
+		p.probs = append(p.probs, *prob)
+	}
 	sf, err := readStore(t.o.StateFile)
 	if err != nil {
 		// Start empty rather than refuse to run; the gap is reported.
@@ -274,6 +296,7 @@ func (t *Tailer) load(p *pass) {
 			skipping: e.Skipping, more: e.More, drift: e.Drift, lazy: e.State == nil && e.Offset > 0,
 			lastSeen: e.LastSeen, lastRead: e.LastRead, st: loadState(e.State, path),
 		}
+		t.files[path].st.key = t.key
 	}
 }
 

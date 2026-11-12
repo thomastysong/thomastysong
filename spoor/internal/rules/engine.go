@@ -272,7 +272,10 @@ func (e *Engine) evaluate(ev *event.Event, fired map[string]bool) (res Result) {
 		skey = SessionKey(ev)
 		st = e.session(skey, now)
 		e.mergePending(st, ev)
-		e.updateSession(st, ev, now)
+		// The session scan (secret flow) may use half of the event's
+		// budget at most, so the rules always get the other half.
+		scanStop := start.Add(e.o.Deadline / 2)
+		e.updateSession(st, ev, now, func() bool { return e.clock().After(scanStop) })
 	}
 	fields := features.Fields(ev)
 	if len(e.o.HostTags) > 0 {
@@ -479,8 +482,8 @@ func (e *Engine) osName(ev *event.Event) string {
 }
 
 // updateSession advances the session with ev and writes the session
-// features into ev.Feat.
-func (e *Engine) updateSession(st *sessionState, ev *event.Event, now time.Time) {
+// features into ev.Feat. stop reports when the outbound scan must end.
+func (e *Engine) updateSession(st *sessionState, ev *event.Event, now time.Time, stop func() bool) {
 	f := ev.Feat
 	first := st.events == 0
 	st.events++
@@ -530,7 +533,7 @@ func (e *Engine) updateSession(st *sessionState, ev *event.Event, now time.Time)
 		}
 	}
 
-	if kinds, checked, truncated := st.secretFlow(ev); checked {
+	if kinds, checked, truncated := st.secretFlow(ev, stop); checked {
 		f["session.secret_flow"] = len(kinds) > 0
 		if len(kinds) > 0 {
 			f["session.secret_flow_kinds"] = kinds

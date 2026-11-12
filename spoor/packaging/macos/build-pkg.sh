@@ -6,10 +6,11 @@
 # "Developer ID Installer" identity; Gatekeeper and MDM deployment expect
 # both, plus notarization (xcrun notarytool), which this script does not do.
 #
-#   packaging/macos/build-pkg.sh dist/spoor_darwin_all/spoor 1.2.3 dist/spoor_1.2.3_darwin_universal.pkg
+#   packaging/macos/build-pkg.sh dist/spoor-darwin-universal_darwin_all/spoor 1.2.3 dist/spoor_1.2.3_darwin_universal.pkg
 #
 # Payload: /usr/local/bin/spoor (a universal binary: goreleaser's
-# universal_binaries, or `lipo -create`) and the launchd plist from
+# universal_binaries entry spoor-darwin-universal writes it to
+# dist/<id>_darwin_all/spoor; or `lipo -create`) and the launchd plist from
 # packaging/launchd. packaging/macos/postinstall does the rest.
 # Uninstall: deploy/fleet/scripts/uninstall-spoor.sh (macOS branch).
 set -eu

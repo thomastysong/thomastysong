@@ -107,21 +107,37 @@
 // stay the natural keys of tool and session records, as they are, because
 // they are also what joins spoor records to the agent's own telemetry. An
 // ID the source set is kept (hookcmd keys its own payload digest;
-// transcript ids come from the log's record ids).
+// transcript ids come from the log's record ids, or from a line digest
+// under the transcript tailer's own kept key).
 //
-// Options.IdentityKey is the key. The daemon keeps one at IdentityKeyPath:
+// The first-seen baseline (BaselineFile under the checkpoint directory)
+// stores digests of what the pipeline saw: which account contacted which
+// egress host or called which MCP server definition. It
+// outlives the records it was built from, so its keys are HMACs under the
+// same identity key, in their own domain; the header carries a keyed
+// fingerprint of the key, and a file in the old unkeyed format or under
+// another key is discarded and overwritten (baseline.go).
+//
+// Options.IdentityKey is the key. In daemon mode with a data directory and
+// no IdentityKey, New loads the key kept at IdentityKeyPath:
 // <data_dir>/checkpoints/identity.key, IdentityKeyLen (32) random bytes
 // written hex-encoded on one line, mode 0600 in the 0700 checkpoint
-// directory, created once by LoadOrCreateIdentityKey and read back on every
-// start, so identities, and the Dedupe values downstream deduplicates on,
-// hold across restarts. A file that cannot be trusted (a symlink, not a
-// regular file, readable by group or others, not hex) is an error: the
-// daemon should then run with an empty key and report it. With an empty
-// key (scan, detect and hook modes, tests) the pipeline uses a random key
-// drawn once per process: identities are deterministic within the run,
-// which is what deduplication, the hook/transcript pairing and the HoldFor
-// wait need, and differ between runs. Losing or replacing the key changes
-// identities from then on; it never merges records that were distinct.
+// directory, created on first start by LoadOrCreateIdentityKey and read
+// back on every later one, so identities, the Dedupe values downstream
+// deduplicates on, and the baseline hold across restarts (heartbeat
+// identity.key_stored = 1). A key file that cannot be trusted (a symlink,
+// not a regular file, readable by group or others, not hex) is never
+// replaced: the pipeline runs with the per-process key and counts it
+// (identity.key_errors), and identities then hold for this run only. In
+// scan, detect and hook modes, and without a data directory, the pipeline
+// uses a random key drawn once per process: identities are deterministic
+// within the run, which is what deduplication, the hook/transcript pairing
+// and the HoldFor wait need, and differ between runs. Losing or replacing
+// the key changes identities from then on and empties the baseline (every
+// host looks new once); it never merges records that were distinct. The key
+// sits beside the baseline and the other checkpoints, so keying protects
+// the shipped records and a copy of the state that travels without the key
+// (a backup, a support bundle), not against an administrator of the host.
 //
 // # Satisfied by wiring, not implemented here
 //

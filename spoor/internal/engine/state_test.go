@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -177,8 +179,9 @@ func TestReadKeyFile(t *testing.T) {
 }
 
 func TestBaselineLRUAndFile(t *testing.T) {
+	key := testKey(6)
 	path := filepath.Join(t.TempDir(), "cp", BaselineFile)
-	b, err := OpenBaseline(path, 3)
+	b, err := OpenBaseline(path, 3, key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,40 +198,57 @@ func TestBaselineLRUAndFile(t *testing.T) {
 		t.Fatalf("len %d", b.Len())
 	}
 	if b.Seen("Not Hex!") || !b.Seen("Not Hex!") || b.Len() != 3 {
-		t.Fatal("non-hex keys are hashed and remembered, still bounded")
+		t.Fatal("any key is digested and remembered, still bounded")
 	}
 	b.Seen("aa") // most recent again, so the reload check below holds
 	if err := b.Save(); err != nil {
 		t.Fatal(err)
 	}
-	re, err := OpenBaseline(path, 3)
+	data, _ := os.ReadFile(path)
+	if !regexp.MustCompile(`^spoor-baseline 2 [0-9a-f]{16}\n([0-9a-f]{24}\n){3}$`).Match(data) {
+		t.Errorf("file content %q", data)
+	}
+	if strings.Contains(string(data), "aa\n") {
+		t.Error("a hex key was stored as it was passed, not keyed")
+	}
+	re, err := OpenBaseline(path, 3, key)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !re.Seen("aa") || re.Seen("bb") {
 		t.Error("LRU order not preserved across save and load")
 	}
-	// Damaged, oversize and symlinked files are ignored, never fatal.
+	// Another key cannot use the file: it is discarded (reported) and
+	// replaced at the next save, never mixed in.
+	other, err := OpenBaseline(path, 3, testKey(7))
+	if err == nil || !strings.Contains(err.Error(), "another identity key") || other.Len() != 0 || other.Seen("aa") || !other.Dirty() {
+		t.Errorf("file under another key: err %v len %d dirty %v", err, other.Len(), other.Dirty())
+	}
+	// Damaged, foreign-format, oversize and symlinked files are ignored,
+	// never fatal.
+	stale := fmt.Sprintf("%024x", 0)
 	for name, content := range map[string]string{
 		"bad-header": "nope\naa\n",
-		"bad-key":    "spoor-baseline 1\nZZ top\n",
-		"oversize":   "spoor-baseline 1\n" + fmt.Sprintf("%0300d\n", 0),
+		"v1":         "spoor-baseline 1\n" + stale + "\n",
+		"bad-key":    "spoor-baseline 2 " + b.keyID + "\nZZ top\n",
+		"short-key":  "spoor-baseline 2 " + b.keyID + "\naa\n",
+		"oversize":   "spoor-baseline 2 " + b.keyID + "\n" + strings.Repeat(stale+"\n", 10),
 	} {
 		p := filepath.Join(t.TempDir(), name)
 		os.WriteFile(p, []byte(content), 0o600)
-		bl, err := OpenBaseline(p, 3)
+		bl, err := OpenBaseline(p, 3, key)
 		if err == nil || bl == nil || bl.Len() != 0 {
 			t.Errorf("%s: err %v len %d", name, err, bl.Len())
 		}
 	}
 	target := filepath.Join(t.TempDir(), "target")
-	os.WriteFile(target, []byte("spoor-baseline 1\naa\n"), 0o600)
+	os.WriteFile(target, data, 0o600)
 	link := filepath.Join(t.TempDir(), "link")
 	os.Symlink(target, link)
-	if bl, err := OpenBaseline(link, 3); err == nil || bl.Len() != 0 {
+	if bl, err := OpenBaseline(link, 3, key); err == nil || bl.Len() != 0 {
 		t.Error("baseline followed a symlink")
 	}
-	mem, _ := OpenBaseline("", 0)
+	mem, _ := OpenBaseline("", 0, nil)
 	if mem.Seen("x") || !mem.Seen("x") || mem.Save() != nil {
 		t.Error("in-memory baseline")
 	}

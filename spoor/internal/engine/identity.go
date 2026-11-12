@@ -48,7 +48,8 @@ const (
 )
 
 // processIdentityKey is the key of pipelines built without
-// Options.IdentityKey: random, drawn once per process. Identity is then
+// Options.IdentityKey outside daemon mode, and of a daemon whose key file
+// cannot be used: random, drawn once per process. Identity is then
 // deterministic for the life of the process (a hook record and its
 // transcript twin still pair, a replayed record still collapses) but not
 // across runs, and no reader can test a guess against it.
@@ -58,9 +59,9 @@ var processIdentityKey = sync.OnceValue(func() []byte {
 	return k
 })
 
-// identityKey returns the key a pipeline uses: a copy of the caller's key
+// identityKey returns the key a pipeline uses: a copy of the given key
 // (so later changes to the caller's slice cannot move identities), or the
-// per-process key when none is configured.
+// per-process key when there is none.
 func identityKey(k []byte) ([]byte, error) {
 	if len(k) == 0 {
 		return processIdentityKey(), nil
@@ -201,6 +202,16 @@ func IdentityKeyPath(cfg *config.Config) string {
 	return filepath.Join(cfg.CheckDir(), IdentityKeyFile)
 }
 
+// identityKeyPath is the key file New loads when Options.IdentityKey is
+// empty: the daemon's, the only mode whose identities must outlive the
+// process (the same condition as the persistent baseline).
+func identityKeyPath(cfg *config.Config, mode string) string {
+	if mode != ModeDaemon {
+		return ""
+	}
+	return IdentityKeyPath(cfg)
+}
+
 // LoadOrCreateIdentityKey returns the identity key stored at path,
 // creating it on first use: IdentityKeyLen random bytes, hex-encoded on one
 // line, mode 0600, in a directory created 0700. The file is created under
@@ -210,9 +221,10 @@ func IdentityKeyPath(cfg *config.Config) string {
 // An existing file is read without following symbolic links and must be a
 // regular file of at most 4 KiB, not accessible to group or others on
 // POSIX systems, holding at least MinIdentityKeyLen bytes of hex. Anything
-// else is an error rather than a silent replacement: a caller that cannot
-// read its key should run with an empty Options.IdentityKey (identities
-// then hold for this run only) and report it.
+// else is an error rather than a silent replacement (a replaced key would
+// change every identity from then on): New then runs with the per-process
+// key, so identities hold for this run only, and reports it in the
+// heartbeat (identity.key_errors).
 func LoadOrCreateIdentityKey(path string) ([]byte, error) {
 	if path == "" {
 		return nil, errors.New("engine: identity key: empty path")

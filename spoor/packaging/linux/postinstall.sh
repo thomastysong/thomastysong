@@ -4,6 +4,11 @@
 #        postinst abort-upgrade|abort-remove|abort-deconfigure ...
 #   rpm: %post $1 = 1 (install) or 2 (upgrade)
 #
+# The abort calls undo what prerm did (packaging/linux/preremove.sh):
+# abort-deconfigure starts the daemon prerm stopped (when it is enabled);
+# abort-remove enables and starts it again and puts back the osquery
+# extension registration prerm noted in $DATA/.osquery-extension.
+#
 # What it does, in order, and why:
 #  1. the spoor group (again: an rpm installed with --noscripts on %pre only,
 #     or a group deleted by hand, would keep the unit from starting);
@@ -42,11 +47,12 @@ LOAD=/etc/osquery/extensions.load
 warn() { echo "spoor: warning: $*" >&2; }
 
 case "${1:-}" in
-configure) if [ -n "${2:-}" ]; then upgrade=1; else upgrade=0; fi ;;
-1) upgrade=0 ;;
-2) upgrade=1 ;;
-abort-*) upgrade=1 ;;
-*) upgrade=0 ;;
+configure) if [ -n "${2:-}" ]; then mode=upgrade; else mode=install; fi ;;
+1) mode=install ;;
+2 | abort-upgrade) mode=upgrade ;;
+abort-remove) mode=abort-remove ;;
+abort-deconfigure) mode=abort-deconfigure ;;
+*) mode=install ;;
 esac
 
 # 1. Group.
@@ -103,6 +109,24 @@ restart_osquery() {
 	fi
 	echo "spoor: osquery ($svc) restarts in 10 s to load $EXT"
 }
+# A removal dpkg aborted: prerm took spoor's line out of osquery's file and
+# noted it; put it back (through a copy that keeps the file's owner and
+# mode, renamed over it), and the refresh below restores the copy.
+NOTE=$DATA/.osquery-extension
+if [ "$mode" = abort-remove ] && [ -f "$NOTE" ] && [ ! -L "$NOTE" ] && [ -f "$LOAD" ] && [ ! -L "$LOAD" ] && ! grep -qxF "$EXT" "$LOAD"; then
+	tmp=$LOAD.spoor-new
+	if cp -p "$LOAD" "$tmp" && {
+		cat "$LOAD"
+		[ -z "$(tail -c 1 "$LOAD")" ] || echo
+		echo "$EXT"
+	} >"$tmp" && mv -f "$tmp" "$LOAD"; then
+		echo "spoor: osquery extension registration restored in $LOAD"
+	else
+		rm -f "$tmp"
+		warn "could not restore $EXT in $LOAD; run deploy/fleet/scripts/register-extension.sh"
+	fi
+fi
+rm -f "$NOTE"
 if [ -f "$LOAD" ] && grep -qxF "$EXT" "$LOAD"; then
 	if ! cmp -s "$BIN" "$EXT" 2>/dev/null; then
 		mkdir -p "$EXT_DIR"
@@ -120,25 +144,35 @@ fi
 # 5. Service.
 if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
 	systemctl daemon-reload || warn "systemctl daemon-reload failed"
-	if [ "$upgrade" = 1 ]; then
+	case $mode in
+	upgrade)
 		systemctl try-restart spoor.service || warn "could not restart spoor.service"
-	else
+		;;
+	abort-deconfigure)
+		if systemctl is-enabled --quiet spoor.service 2>/dev/null; then
+			systemctl start spoor.service || warn "could not start spoor.service (journalctl -u spoor)"
+		fi
+		;;
+	*)
 		systemctl enable spoor.service >/dev/null 2>&1 || warn "could not enable spoor.service"
 		systemctl start spoor.service || warn "could not start spoor.service (journalctl -u spoor)"
-	fi
+		;;
+	esac
 else
 	echo "spoor: systemd is not running; start the daemon with: $BIN run --config $CONF"
 fi
 
 # 6. Hooks. `hooks status --json` prints one object per (agent, scope),
 # one key per line, with "agent" first; catalog ids are [a-z0-9-]. Its
-# detail names entries that equal what an earlier release wrote with the
-# default options "written by an earlier spoor release"
+# detail starts with "written by an earlier spoor release" (after
+# "<reason>; " when the file's permissions are also reported) for entries
+# that equal what an earlier release wrote with the default options
 # (internal/hookinstall, legacyPrefix; packaging_test.go holds the two
-# together): only those agents are rewritten (first output line). Agents
-# whose entries differ from install's default output in any other way
-# carry options the administrator chose, or an edit, and are only listed
-# (second line).
+# together); $4 is the detail up to its first escaped quote, so text
+# quoted inside it cannot match. Only those agents are rewritten (first
+# output line). Agents whose entries differ from install's default output
+# in any other way carry options the administrator chose, or an edit, and
+# are only listed (second line).
 sel=$("$BIN" hooks status --scope managed --json 2>/dev/null | awk -F'"' '
 	function flush() {
 		if (a != "" && old && !(a in seen)) {
@@ -154,7 +188,10 @@ sel=$("$BIN" hooks status --scope managed --json 2>/dev/null | awk -F'"' '
 	}
 	/^[ \t]*"agent": "/ { flush(); a = $4 }
 	/^[ \t]*"status": "/ { s = $4 }
-	/^[ \t]*"detail": "/ { if (index($0, "written by an earlier spoor release") > 0) old = 1 }
+	/^[ \t]*"detail": "/ {
+		d = $4
+		if (index(d, "written by an earlier spoor release") == 1 || index(d, "; written by an earlier spoor release") > 0) old = 1
+	}
 	END { flush(); print out; print left }') || sel=""
 hooked=$(printf '%s\n' "$sel" | sed -n 1p)
 left=$(printf '%s\n' "$sel" | sed -n 2p)

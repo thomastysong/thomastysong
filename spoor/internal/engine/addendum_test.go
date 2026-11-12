@@ -259,7 +259,7 @@ func TestBaselinePersistsAcrossRestarts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(b), "new.example") || !regexp.MustCompile(`^spoor-baseline 1\n([0-9a-f]+\n)+$`).Match(b) {
+	if strings.Contains(string(b), "new.example") || !regexp.MustCompile(`^spoor-baseline 2 [0-9a-f]{16}\n([0-9a-f]{24}\n)+$`).Match(b) {
 		t.Errorf("baseline file content %q", b)
 	}
 	if fi, _ := os.Stat(path); fi.Mode().Perm() != 0o600 {

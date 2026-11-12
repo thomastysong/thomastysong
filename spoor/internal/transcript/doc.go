@@ -46,8 +46,10 @@
 // each Poll, which is at-most-once if the caller dies before handing the
 // events on. With TailerOptions.DeferCommit the store is written only by
 // Commit, giving at-least-once: after a crash the same lines are read again
-// and produce the same event ids. Events of one file are in file order;
-// across files they are not merged by time.
+// and produce the same event ids, because the ids of records without a log
+// id are keyed with a line key that is kept as long as the checkpoints (see
+// What the events carry). Events of one file are in file order; across
+// files they are not merged by time.
 //
 // The checkpoint store keeps, per file, the offset, the file identity, a
 // fingerprint of the bytes before the offset and the parser state needed to
@@ -57,7 +59,10 @@
 // with its input or target. The fingerprint (8 bytes of SHA-256 over the
 // 256 bytes before the offset) and a pending call's input hash are unkeyed:
 // they must match across runs, they never leave the store (written 0600 in
-// a 0700 directory), and whoever can read the store can read the log.
+// a 0700 directory), and whoever can read the store can read the log. The
+// line key is not in the store: it is in its own file beside it
+// (StateFile + KeyFileSuffix, 0600), unless the caller passes
+// TailerOptions.IdentityKey.
 //
 // # What the events carry
 //
@@ -79,15 +84,22 @@
 // about it). A record is identified by the log's own record id (Claude Code
 // uuid, Copilot event id, Gemini message id), which is the same whenever
 // and wherever a log is read, or, in a format without one (Codex) and for
-// records that carry none, by an HMAC of the line under a key drawn once
-// per process. Those ids are stable only within one process: re-reading a
-// file after a crash, a replacement, a move or a Codex archive pass in the
-// same daemon run yields the same ids, a restarted daemon derives new ones.
+// records that carry none, by an HMAC of the line under the line key
+// (keyfile.go): a key derived from TailerOptions.IdentityKey, else one the
+// Tailer keeps beside its checkpoint store and creates on first use. A line
+// is read again only because a stored checkpoint says so (a crash between
+// Poll and Commit, a replacement, a move, a cancelled Codex archive pass),
+// and the key lives as long as the checkpoints, so the repeated events carry
+// the same ids in the same or a restarted process. ReadFile, a Tailer
+// without a StateFile, and a Tailer whose key file cannot be used (reported
+// as an unreadable Problem, never replaced) key with a random key drawn
+// once per process: their line-digest ids hold for that process only.
+// Whoever holds the key can test guesses about a line against its id, so
+// the key file is written 0600 and never leaves the host.
 // An event is the record, its type and its tool-call id. The engine derives
 // the identity of tool and prompt activity (Dedupe) from tool-call ids and
-// keyed prompt digests, not from these ids; only a record with neither (a
-// Codex turn end or settings change, say) that a restarted daemon reads
-// again (an uncommitted line after a crash) gets a new Dedupe.
+// keyed prompt digests, and of a record with neither (a Codex turn end or
+// settings change, say) from this id.
 //
 // # Unsupported
 //

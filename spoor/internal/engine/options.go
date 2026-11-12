@@ -53,6 +53,9 @@ const (
 	// BaselineKeys is the size of the first-seen baseline.
 	BaselineKeys = 20000
 	// BaselineFile is the baseline's file name under the checkpoint dir.
+	// The name is kept across format versions (the header carries the
+	// version), so the first save after an upgrade overwrites a file in
+	// an older format.
 	BaselineFile = "baseline.v1"
 )
 
@@ -122,12 +125,16 @@ type Options struct {
 	HomeOf func(uid, name string) string
 	// IdentityKey keys every identifier derived from content (the prompt
 	// digest that pairs a hook prompt with its transcript twin, the digest
-	// that names a record which came without an id), so Dedupe and ID
-	// never let a reader test a guess about a prompt or a redacted secret.
-	// The daemon passes the key it keeps at IdentityKeyPath
-	// (LoadOrCreateIdentityKey), so identities hold across restarts. Empty
-	// (scan, detect, hook modes, tests): a random key drawn once per
-	// process, so identities hold for this run only. At least
+	// that names a record which came without an id) and every key the
+	// first-seen baseline stores, so Dedupe, ID and the baseline file never
+	// let a reader test a guess about a prompt, a redacted secret or a
+	// host. Empty in daemon mode with a data directory: New loads the key
+	// kept at IdentityKeyPath, creating it on first start
+	// (LoadOrCreateIdentityKey), so identities and the baseline hold
+	// across restarts; a key file that cannot be used is reported
+	// (heartbeat identity.key_errors) and the per-process key is used.
+	// Empty otherwise (scan, detect, hook modes): a random key drawn once
+	// per process, so identities hold for this run only. At least
 	// MinIdentityKeyLen bytes when set (additive).
 	IdentityKey []byte
 }

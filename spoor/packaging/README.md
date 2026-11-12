@@ -45,17 +45,29 @@ Maintainer scripts (POSIX sh; deb and rpm call conventions both handled):
   schedules a detached osquery restart; systemd: daemon-reload, enable and
   start on first install, `try-restart` on upgrade (a service the
   administrator disabled stays disabled); then it rewrites spoor's managed
-  hook entries for every agent that already has them (status managed,
-  modified, shadowed or insecure_permissions in `spoor hooks status --scope
-  managed --json`): entries written by an earlier release report "modified"
-  until `spoor hooks install` runs again. Agents never hooked are left alone.
+  hook entries only where they are exactly what an earlier release wrote
+  with install's default options (`spoor hooks status --scope managed
+  --json` says "written by an earlier spoor release" in their detail; they
+  report "modified" until `spoor hooks install` runs again). The rewrite
+  uses the default options, so entries installed with `--guard
+  --fail-closed`, a `--timeout` or edited by hand are left as they are and
+  listed (`managed hooks of <agents> left as they are`): rewriting them
+  would turn a fail-closed guard into a fail-open one. Agents never hooked
+  are left alone. `abort-deconfigure` starts the daemon again when it is
+  enabled; `abort-remove` enables and starts it and puts back the osquery
+  extension line prerm noted.
 - **preremove** (removal only; nothing on upgrade): stops and disables the
-  service; `spoor hooks uninstall --scope managed` while the binary still
-  exists, so no agent keeps calling a missing binary (fail-closed guard
-  entries would block the agent); removes spoor's line from
-  `/etc/osquery/extensions.load` (other lines kept, file rewritten in
-  place) and the extension copy, and schedules an osquery restart.
-- **postremove**: daemon-reload. On deb purge also removes `/etc/spoor` and
+  service; removes spoor's line from `/etc/osquery/extensions.load` (other
+  lines kept; written to a copy with the file's owner and mode and renamed
+  over it, so a failure never truncates it), notes it in
+  `/var/lib/spoor/.osquery-extension` for `abort-remove`, removes the
+  extension copy and schedules an osquery restart; last, `spoor hooks
+  uninstall --scope managed` while the binary still exists, so no agent
+  keeps calling a missing binary (fail-closed guard entries would block the
+  agent). Every step only warns, so dpkg never has to undo a half-done
+  removal. On `deconfigure` (deb) it only stops the daemon: the files stay,
+  and hooks and the extension keep pointing at them.
+- **postremove**: daemon-reload; drops prerm's note. On deb purge also removes `/etc/spoor` and
   `/var/lib/spoor` (a `data_dir` configured elsewhere is reported, never
   deleted) and deletes the group only when it has no members and no file
   under the known directories belongs to it. rpm leaves the group.
@@ -76,13 +88,21 @@ branches did not run; they print where they would have acted):
   /etc/spoor/spoor.yaml`, `root:root 644 /usr/lib/systemd/system/spoor.service`,
   `root:root 755 /usr/bin/spoor`; `spoor version` 0.1.0;
 - `register-extension.sh` added `/usr/lib/spoor/spoor.ext` after an existing
-  line without a final newline; managed hooks installed for claude-code and
-  gemini-cli, then gemini-cli's entry rewritten in an earlier release's form
-  (status `modified`);
+  line without a final newline; managed hooks installed for claude-code with
+  `--guard --fail-closed --timeout 30` and for gemini-cli with the defaults,
+  then gemini-cli's command lines put back in an earlier release's form
+  (status `modified`, detail `written by an earlier spoor release ...`);
 - upgrade to 0.1.1: the extension copy refreshed (same SHA-256 as
-  `/usr/bin/spoor`), `managed hooks rewritten for claude-code,gemini-cli`,
-  both `managed` afterwards, codex still `missing` (not hooked by the
-  upgrade), the extension line kept;
+  `/usr/bin/spoor`), `managed hooks rewritten for gemini-cli` (`managed`
+  afterwards), `managed hooks of claude-code left as they are` with the
+  file's SHA-256 unchanged (4 `"onFailure": "block"` entries, 15
+  `"timeout": 30`), codex still `missing` (not hooked by the upgrade), the
+  extension line kept;
+- deb only, maintainer scripts called directly: `prerm deconfigure` left the
+  extension line, its copy and the hook file as they were; `prerm remove`
+  took the line out and noted it, `postinst abort-remove` restored the line
+  after the other one and the copy (same SHA-256 as `/usr/bin/spoor`) and
+  dropped the note;
 - remove: binary and `/usr/lib/spoor` gone, spoor's extension line removed
   and the other kept, the managed hook files removed (backups remain beside
   them), group, configuration and data kept;
@@ -108,4 +128,18 @@ most MDM pipelines. Full Disk Access for `/usr/local/bin/spoor` must come
 from an MDM PPPC profile. `windows/install-service.ps1` registers the
 service through `New-Service`/CIM because Windows PowerShell 5.1 does not
 escape the quotes embedded in `sc.exe binPath=` arguments (found by the Fleet
-script builder); `windows/spoor.wxs` is a sketch for an MSI.
+script builder); `windows/spoor.wxs` is a sketch for an MSI (well-formed XML,
+checked by `packaging_test.go`; never compiled).
+
+On Windows the configuration directory is the data directory
+(`C:\ProgramData\spoor`). Both installers give SYSTEM and Administrators
+full control of everything in it and give Users list and read on the
+directory itself only (not inherited) plus read on `spoor.yaml`:
+`spoor hook` runs as the developer, reads `spoor.yaml` (an unreadable file
+silently means built-in defaults: no central guard mode, privacy profile or
+exclusions) and checks the kill switch file, while `state.db` and what the
+daemon writes later inherit SYSTEM and Administrators only. A tool that
+replaces `spoor.yaml` with a new file instead of writing it in place drops
+the Users grant; run the script again. The hook selection on update and the
+osquery extension copy (refreshed on update, unregistered on `-Uninstall`)
+follow the Linux scripts and the Fleet scripts.

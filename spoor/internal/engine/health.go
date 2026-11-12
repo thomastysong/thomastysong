@@ -28,6 +28,14 @@ type counters struct {
 	otelUnmatched                                                uint64
 	covUnknownAgent, untrustedProcess, unknownVocab              uint64
 	firstSeenHosts, firstSeenMCP                                 uint64
+	identityKeyErrors                                            uint64
+}
+
+func b2u(b bool) uint64 {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // surfaceStat is what the pipeline itself observed of one collector.
@@ -119,6 +127,8 @@ func (p *Pipeline) totals() map[string]uint64 {
 		"state.applied":                c.stateApplied,
 		"state.errors":                 c.stateErrors,
 		"baseline.errors":              c.baselineErrors,
+		"identity.key_errors":          c.identityKeyErrors,
+		"identity.key_stored":          b2u(p.keyStored),
 		"baseline.keys":                uint64(p.bl.Len()),
 		"coverage.bypass_findings":     c.bypassFindings,
 		"coverage.bypass_signals":      c.bypassSignals,

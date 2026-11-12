@@ -3,14 +3,12 @@ package transcript
 import (
 	"bytes"
 	"crypto/hmac"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/thomastysong/spoor/internal/event"
@@ -59,6 +57,9 @@ type FileState struct {
 	// events, for formats that re-append the same record as it updates.
 	seen     map[string]struct{}
 	seenRing []string
+	// key is the line key of lineDigest (the Tailer's; nil: the
+	// per-process key). Never stored with the state.
+	key []byte
 }
 
 type callHint struct {
@@ -319,10 +320,12 @@ func (c *lineCtx) newEvent(typ string, ts time.Time) *event.Event {
 //     session id): random values the agent generates, so those ids are the
 //     same whenever and wherever the log is read;
 //   - otherwise (Codex records, Claude Code bookkeeping records) an HMAC of
-//     the line under a key drawn once per process (lineKey). Those ids are
-//     stable only within one process: re-reading a file after a crash, a
-//     replacement or an archive pass in the same daemon run yields the same
-//     ids, a later run yields new ones.
+//     the line under the line key (keyfile.go): the Tailer's, which it
+//     keeps beside its checkpoint store (or derives from
+//     TailerOptions.IdentityKey), so re-reading a line after a crash, a
+//     replacement or a cancelled archive pass yields the same ids in this
+//     process and in a restarted one; ReadFile and a Tailer without a
+//     StateFile use a key drawn once per process.
 //
 // The engine derives the identity of tool and prompt activity (Dedupe) from
 // tool-call ids and keyed prompt digests, not from these ids.
@@ -346,7 +349,7 @@ func (c *lineCtx) eventIDs() {
 		}
 		if rec == "" {
 			if lineRec == "" {
-				lineRec = "l:" + lineDigest(c.agent, c.line)
+				lineRec = "l:" + lineDigest(c.st.key, c.agent, c.line)
 			}
 			rec = lineRec
 		}
@@ -361,17 +364,14 @@ func (c *lineCtx) eventIDs() {
 	}
 }
 
-// lineKey keys lineDigest: random, drawn once per process, never stored.
-var lineKey = sync.OnceValue(func() []byte {
-	k := make([]byte, 32)
-	_, _ = rand.Read(k) // never fails (crypto/rand aborts the process instead)
-	return k
-})
-
 // lineDigest is the identity of a record the log gives no id: an HMAC of
-// the line, so it cannot be recomputed from a guess about its content.
-func lineDigest(agent string, line []byte) string {
-	m := hmac.New(sha256.New, lineKey())
+// the line under the line key (nil: the per-process key), so it cannot be
+// recomputed from a guess about its content.
+func lineDigest(key []byte, agent string, line []byte) string {
+	if len(key) == 0 {
+		key = processLineKey()
+	}
+	m := hmac.New(sha256.New, key)
 	m.Write([]byte("spoor/transcript/line/v2\x00"))
 	m.Write([]byte(agent))
 	m.Write([]byte{0})

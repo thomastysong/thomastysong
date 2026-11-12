@@ -31,9 +31,11 @@ import (
 // Rules that name the features are matched at run time; the rule linter
 // learns the names from the features registry.
 //
-// Keys are digests in the baseline file (it never holds a host name), and a
-// record contributes at most maxFirstSeenHosts hosts: a hostile record can
-// only make hosts look new again (more attention, never less).
+// The baseline stores each key as an HMAC under the identity key (see
+// Baseline): the file holds no host name, and no digest a reader can
+// recompute from a host list. A record contributes at most
+// maxFirstSeenHosts hosts: a hostile record can only make hosts look new
+// again (more attention, never less).
 
 // Feature and label names.
 const (

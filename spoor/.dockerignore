@@ -1,5 +1,6 @@
 # Build context of the Dockerfile: sources only. Test binaries, release
-# output and local state never go into the image build.
+# output, binaries built in the module root (`go build ./cmd/spoor` writes
+# ./spoor, or spoor.exe) and local state never go into the image build.
 .git
 .github
 dist
@@ -11,3 +12,6 @@ tmp
 **/*.db-wal
 **/*.db-shm
 **/zz_*_test.go
+/spoor
+**/*.exe
+**/*.tar

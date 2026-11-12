@@ -35,6 +35,13 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
+      # Git for Windows checks out with core.autocrlf=true. The shell scripts
+      # and manifests must stay LF (packaging/.gitattributes and
+      # deploy/kubernetes/.gitattributes say so for those trees; this covers
+      # the rest of the checkout until the repository root has its own).
+      - name: keep LF line endings
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:

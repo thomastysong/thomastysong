@@ -143,18 +143,26 @@
 // https://<hex>.evil.example/, dig, nslookup, ping): every label, labels
 // over 63 bytes also in 63-byte pieces, runs of up to 16 consecutive pieces
 // (512 bytes) joined, raw and decoded as hex, base64, base64url or base32,
-// and runs of whole labels with their dots, raw (a value with dots of its
-// own, a JWT). The label pass runs after the token pass, shortest name
-// first, within the same candidate budget. A raw label counts only for
-// values of 16 bytes or more that are credentials by format or by name; a
-// value kept only for its entropy (a project ref, a bucket name) is often a
+// and runs of up to 16 whole labels with their dots, raw (a value with dots
+// of its own, a JWT). A name with non-ASCII bytes is also scanned as IDNA
+// processing hands it to the resolver (NFKC, and the ideographic,
+// full-width and half-width full stops as '.'). The label pass runs after
+// the token pass, shortest name first. A raw label counts only for values
+// of 16 bytes or more that are credentials by format or by name; a value
+// kept only for its entropy (a project ref, a bucket name) is often a
 // legitimate subdomain, and a short one an ordinary label, so those count
-// in a label only encoded.
+// in a label only encoded. A run of labels that itself reads as a host name
+// (ending in a top-level domain, or an IP address) is never matched raw: a
+// host-valued setting under a secret-like name (SESSION_COOKIE_DOMAIN,
+// AUTH0_DOMAIN) would otherwise match every subdomain of it.
 // The outbound scan is bounded but not blind to padding: strings are
 // scanned shortest first, a string over 64 KiB on its head and tail, only
-// distinct candidates of a remembered value's length are fingerprinted, and
-// whenever a bound is hit session.secret_flow_truncated is set so a rule
-// can treat the request as opaque. ExportSession and ImportSession move
+// distinct candidates of a remembered value's length are fingerprinted,
+// every step (useless label runs included) is charged to a per-event work
+// budget of about 25 ms, and the scan ends at half the per-event deadline
+// so the rules always run; whenever a bound is hit
+// session.secret_flow_truncated is set so a rule can treat the request as
+// opaque. ExportSession and ImportSession move
 // this state through a one-shot hook process; imported state is validated
 // as hostile input and capped at 64 KiB. Ids the state keeps (tool-use ids,
 // subagent ids, event ids) are stored verbatim only when they are valid
@@ -178,7 +186,12 @@
 //   - The value must be a whole label or a run of whole labels: one
 //     embedded with other characters inside a label (x1-<hex>.evil), split
 //     over several commands or queries, or built at run time ($(xxd -p f))
-//     is not matched; values of more than 4 KiB are not fingerprinted.
+//     is not matched; values of more than 4 KiB are not fingerprinted. A
+//     dotted value that reads as a host name (a password such as
+//     correct.horse.battery.staple) counts in a host name only encoded.
+//     Many distinct padding names shorter than the carrying name can spend
+//     the work or candidate budget first; the request is then marked
+//     truncated, not clean.
 //   - Session state of a daemonless hook lives in a file the monitored user
 //     can write; code running as that user can clear its own flags.
 //   - Content hidden behind runtime assembly (eval of built strings,

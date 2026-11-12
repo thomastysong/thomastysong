@@ -15,9 +15,18 @@
 #     pod adds to a non-root container land in its bounding set but are not
 #     effective (red team E1, variant I: CapEff=0). With the file
 #     capabilities, a uid-65532 sensor reads other users' /proc/<pid>/environ
-#     and 0700 homes and still cannot write root-owned files in other
-#     containers, which a uid-0 sensor with the same two capabilities can
-#     (red team E2, W3);
+#     and 0700 homes (and any file and process memory on the node: that is
+#     what the two capabilities grant). File permissions still stop it from
+#     writing root-owned files in other containers, which a uid-0 sensor with
+#     the same two capabilities can (red team E2, W3): CAP_DAC_READ_SEARCH
+#     bypasses read and search checks only. CAP_SYS_PTRACE with the host pid
+#     namespace would still let it attach to any root process and rewrite it
+#     (ptrace, process_vm_writev, pidfd_getfd), which the runtime's default
+#     seccomp profile allows to a holder of the capability: run it with
+#     deploy/kubernetes/seccomp/node-sensor.json, the default profile without
+#     those calls (the DaemonSet does; `docker run --security-opt
+#     seccomp=...` elsewhere). Without it a compromised sensor is equivalent
+#     to root on the node;
 #   - because the effective bit is set, the kernel refuses to execute the
 #     binary (EPERM) unless both capabilities are in the container's bounding
 #     set: the image starts only with `--cap-add SYS_PTRACE --cap-add

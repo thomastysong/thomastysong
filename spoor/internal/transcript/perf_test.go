@@ -55,21 +55,27 @@ func writeBigClaude(tb testing.TB, path string, size int64) (calls int) {
 }
 
 // TestTail50MBUnderTwoSeconds is the performance sanity check: a 50 MB
-// session log is tailed from the start in under two seconds.
+// session log is tailed from the start in under two seconds. Under the race
+// detector (several times slower, and not what ships) it checks the same
+// results on an 8 MB log, once, without the time bound.
 func TestTail50MBUnderTwoSeconds(t *testing.T) {
 	if testing.Short() {
 		t.Skip("writes a 50 MB file")
 	}
+	size, attempts := int64(50<<20), 3
+	if raceEnabled {
+		size, attempts = 8<<20, 1
+	}
 	e := newEnv(t)
 	path := e.claude("big")
-	calls := writeBigClaude(t, path, 50<<20)
+	calls := writeBigClaude(t, path, size)
 	fi, _ := os.Stat(path)
 	// The machine running the tests is shared, so the bound is applied to
 	// the best of three runs rather than to one unlucky sample.
 	var evs []*event.Event
 	var tl *Tailer
 	best := time.Duration(1 << 62)
-	for attempt := 0; attempt < 3 && best > time.Second; attempt++ {
+	for attempt := 0; attempt < attempts && best > time.Second; attempt++ {
 		e.opts.StateFile = filepath.Join(t.TempDir(), "state.json")
 		tl = e.tailer()
 		evs = evs[:0]
@@ -118,7 +124,9 @@ func TestTail50MBUnderTwoSeconds(t *testing.T) {
 	if cp := tl.Checkpoints()[path]; cp.Offset != fi.Size() {
 		t.Errorf("checkpoint %d of %d", cp.Offset, fi.Size())
 	}
-	if elapsed > 2*time.Second {
+	if raceEnabled {
+		t.Logf("race detector: time bound not checked (%v for %d bytes)", elapsed, fi.Size())
+	} else if elapsed > 2*time.Second {
 		t.Errorf("tailing 50 MB took %v, want under 2s", elapsed)
 	}
 }

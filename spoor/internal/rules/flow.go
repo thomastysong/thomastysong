@@ -6,6 +6,7 @@ import (
 	"encoding/base32"
 	"encoding/base64"
 	"encoding/hex"
+	"net/netip"
 	"net/url"
 	"path"
 	"regexp"
@@ -13,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 
 	"github.com/thomastysong/spoor/internal/classify"
 	"github.com/thomastysong/spoor/internal/event"
@@ -72,13 +75,21 @@ const (
 	maxFlowCands = 1 << 15  // distinct candidates fingerprinted or decoded per event
 	maxFlowTexts = 1024     // MCP argument strings per event
 	// maxFlowWork is the work budget of one event, in steps (see
-	// flowScan.step); a step costs a few nanoseconds, so the budget
-	// bounds a padded event to tens of milliseconds while the largest
-	// benign payloads measured use a small fraction of it.
-	maxFlowWork = 4 << 20
+	// flowScan.step). Measured: a step costs 8 to 17 ns on padding built
+	// to be slow (about 25 ms for the whole budget of one-byte labels),
+	// and the largest benign 1 MiB payloads tried (minified JavaScript,
+	// JSON documents, CJK prose) use 0.1M to 1.5M steps.
+	maxFlowWork = 3 << 20
 	// flowClockEvery is how many steps pass between two readings of the
 	// scan's clock.
 	flowClockEvery = 1 << 12
+)
+
+// Fixed step costs of the work budget beyond the per-byte ones.
+const (
+	costNewCand     = 8  // a distinct candidate stored in the seen map
+	costFingerprint = 48 // an HMAC of a candidate
+	costDecode      = 8  // a set of decoding attempts
 )
 
 // envLine is compiled on first use, not at package initialisation: every
@@ -308,11 +319,11 @@ func (s *sessionState) secretFlow(ev *event.Event, stop func() bool) (kinds []st
 		return nil, false, false
 	}
 	want := make(map[string]secretFP, len(s.secrets))
-	sc := &flowScan{budget: maxFlowCands, seen: map[string]uint8{}, lens: make([]bool, maxSecretValue+1), stop: stop}
+	sc := &flowScan{budget: maxFlowCands, seen: map[string]uint8{}, stop: stop}
 	for _, x := range s.secrets {
 		want[x.fp] = x
-		if x.n > 0 && x.n < len(sc.lens) {
-			sc.lens[x.n] = true
+		if x.n > 0 && x.n <= maxSecretValue {
+			sc.setLen(x.n)
 		} else {
 			sc.anyLen = true // state from before lengths were recorded
 		}
@@ -435,8 +446,8 @@ func fields(s string, sep *[256]bool, f func(string)) {
 // is charged to it (see step), useless ones included.
 type flowScan struct {
 	budget    int
-	seen      map[string]uint8 // candidate -> what was done with it (seen* bits)
-	lens      []bool           // lens[n]: a remembered value is n bytes long
+	seen      map[string]uint8              // candidate -> what was done with it (seen* bits)
+	lens      [maxSecretValue/64 + 1]uint64 // bit n: a remembered value is n bytes long
 	anyLen    bool
 	match     func(c string, weakToo bool)
 	exhausted bool
@@ -477,8 +488,10 @@ func (sc *flowScan) step(n int) bool {
 
 // isLen reports whether a candidate of n bytes could be a remembered value.
 func (sc *flowScan) isLen(n int) bool {
-	return sc.anyLen || n >= 0 && n < len(sc.lens) && sc.lens[n]
+	return sc.anyLen || n >= 0 && n <= maxSecretValue && sc.lens[n>>6]&(1<<(n&63)) != 0
 }
+
+func (sc *flowScan) setLen(n int) { sc.lens[n>>6] |= 1 << (n & 63) }
 
 // What consider did with a candidate.
 const (
@@ -511,6 +524,10 @@ func flowCandidates(text string, sc *flowScan) {
 		}
 	}
 	for _, v := range versions {
+		// Splitting at three granularities reads each byte several times.
+		if !sc.step(len(v) >> 2) {
+			return
+		}
 		fields(v, sepCoarse, func(tok string) {
 			if sc.exhausted {
 				return
@@ -579,7 +596,7 @@ func (sc *flowScan) addName(n string) {
 func foldName(s string) string {
 	return strings.Map(func(r rune) rune {
 		switch r {
-		case '。', '．', '｡':
+		case '\u3002', '\uFF0E', '\uFF61':
 			return '.'
 		case utf8.RuneError:
 			return -1
@@ -625,18 +642,22 @@ func (sc *flowScan) want(n int, mode candMode) uint8 {
 
 func (sc *flowScan) consider(c string, mode candMode) {
 	want := sc.want(len(c), mode)
-	if want != 0 && mode == candDotted && hostShaped(c) {
-		// A run of labels that reads as a host name is a parent domain
-		// of the name it came from: a host-valued setting
-		// (SESSION_COOKIE_DOMAIN=app.example.com) matches every one of
-		// its subdomains, while a dotted credential (a JWT) never ends in
-		// a top-level domain.
-		want = 0
-	}
 	if want == 0 {
 		return // neither a possible value nor decodable
 	}
+	// Charges are weighted so that a unit of work costs about the same
+	// whatever it is spent on (measured): a lookup hashes c, a new
+	// candidate is copied into the map, a fingerprint is an HMAC and a
+	// decoding allocates.
 	if !sc.step(1 + len(c)>>4) {
+		return
+	}
+	if mode == candDotted && hostShaped(c) {
+		// A run of labels that reads as a host name is a parent domain
+		// of the name it came from: a host-valued setting
+		// (SESSION_COOKIE_DOMAIN=app.example.com) would match every one
+		// of its subdomains, while a dotted credential (a JWT) never
+		// ends in a top-level domain.
 		return
 	}
 	have, ok := sc.seen[c]
@@ -649,13 +670,19 @@ func (sc *flowScan) consider(c string, mode candMode) {
 			sc.exhausted = true
 			return
 		}
+		if !sc.step(costNewCand) {
+			return
+		}
 		sc.budget--
 	}
 	sc.seen[c] = have | todo
 	if todo&(seenAll|seenStrong) != 0 {
+		if !sc.step(costFingerprint + len(c)>>2) {
+			return
+		}
 		sc.match(c, todo&seenAll != 0)
 	}
-	if todo&(seenDecoded|seenBase32) == 0 {
+	if todo&(seenDecoded|seenBase32) == 0 || !sc.step(costDecode+len(c)>>2) {
 		return
 	}
 	for _, d := range decodings(c, todo&seenDecoded != 0, todo&seenBase32 != 0) {
@@ -680,7 +707,7 @@ const (
 // the work budget whether or not it becomes a candidate, so a name of
 // thousands of one-byte labels costs a bounded, charged amount of time.
 func (sc *flowScan) labelCandidates(name string) {
-	if !sc.step(1 + len(name)>>4) {
+	if !sc.step(1 + len(name)>>2) { // splitting and classifying the labels
 		return
 	}
 	labels := sc.labels[:0] // [start, end) of each label, empty ones included
@@ -821,6 +848,94 @@ func decodings(c string, b64hex, dns bool) []string {
 		}
 	}
 	return out
+}
+
+// hostShaped reports whether s reads as a host name, bare or as the host
+// of a URL (scheme, userinfo, port and path are set aside; a leading dot,
+// as in a cookie domain, and a trailing one are ignored): an IP address,
+// or two or more labels of 1 to 63 letters, digits, '-' and '_' whose last
+// is a plausible top-level domain, 2 to 24 letters or an xn-- A-label.
+// Dotted credentials fail the last test: a JWT ends in a signature of 43
+// or more mixed characters.
+func hostShaped(s string) bool {
+	if i := strings.Index(s, "://"); i > 0 && isScheme(s[:i]) {
+		s = s[i+3:]
+	}
+	if i := strings.IndexAny(s, "/?#"); i >= 0 {
+		s = s[:i]
+	}
+	if i := strings.LastIndexByte(s, '@'); i >= 0 {
+		s = s[i+1:]
+	}
+	if i := strings.LastIndexByte(s, ':'); i >= 0 && i+1 < len(s) && digits(s[i+1:]) {
+		s = s[:i]
+	}
+	s = strings.TrimSuffix(strings.TrimPrefix(s, "."), ".")
+	if s == "" || len(s) > 253 {
+		return false
+	}
+	if _, err := netip.ParseAddr(s); err == nil {
+		return true
+	}
+	n, last := 0, ""
+	for s != "" {
+		l := s
+		if i := strings.IndexByte(s, '.'); i >= 0 {
+			l, s = s[:i], s[i+1:]
+			if s == "" {
+				return false // an empty label
+			}
+		} else {
+			s = ""
+		}
+		if l == "" || len(l) > maxDNSLabel {
+			return false
+		}
+		for i := 0; i < len(l); i++ {
+			c := l[i]
+			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+				return false
+			}
+		}
+		n++
+		last = l
+	}
+	if n < 2 {
+		return false
+	}
+	if len(last) > 4 && strings.EqualFold(last[:4], "xn--") {
+		return true
+	}
+	if len(last) < 2 || len(last) > 24 {
+		return false
+	}
+	for i := 0; i < len(last); i++ {
+		if c := last[i] | 0x20; c < 'a' || c > 'z' {
+			return false
+		}
+	}
+	return true
+}
+
+// isScheme reports whether s is a URL scheme (RFC 3986: a letter, then
+// letters, digits, '+', '-' and '.').
+func isScheme(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || i > 0 && (c >= '0' && c <= '9' || c == '+' || c == '-' || c == '.')) {
+			return false
+		}
+	}
+	return s != ""
+}
+
+func digits(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return s != ""
 }
 
 func hexDigits(s string) bool {

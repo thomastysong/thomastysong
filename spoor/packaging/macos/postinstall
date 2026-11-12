@@ -106,7 +106,10 @@ sel=$("$BIN" hooks status --scope managed --json 2>/dev/null | awk -F'"' '
 	}
 	/^[ \t]*"agent": "/ { flush(); a = $4 }
 	/^[ \t]*"status": "/ { s = $4 }
-	/^[ \t]*"detail": "/ { if (index($0, "written by an earlier spoor release") > 0) old = 1 }
+	/^[ \t]*"detail": "/ {
+		d = $4
+		if (index(d, "written by an earlier spoor release") == 1 || index(d, "; written by an earlier spoor release") > 0) old = 1
+	}
 	END { flush(); print out; print left }') || sel=""
 hooked=$(printf '%s\n' "$sel" | sed -n 1p)
 left=$(printf '%s\n' "$sel" | sed -n 2p)

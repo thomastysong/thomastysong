@@ -3,6 +3,7 @@ package packaging
 import (
 	"bytes"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"io"
 	"os"
@@ -29,13 +30,21 @@ func root(t *testing.T) string {
 	return filepath.Dir(wd)
 }
 
+// read returns a file with CRLF line endings turned into LF, so that the
+// checks below mean the same on a Windows checkout that converted them;
+// TestLineEndings checks the bytes on disk.
 func read(t *testing.T, rel string) string {
+	t.Helper()
+	return strings.ReplaceAll(string(readRaw(t, rel)), "\r\n", "\n")
+}
+
+func readRaw(t *testing.T, rel string) []byte {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join(root(t), filepath.FromSlash(rel)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return string(b)
+	return b
 }
 
 func yamlDocs(t *testing.T, rel string) []map[string]any {
@@ -202,6 +211,26 @@ var shellScripts = []string{
 	"deploy/kubernetes/in-image/devcontainer-feature/install.sh",
 }
 
+// TestLineEndings: shell scripts are LF on disk on every OS (a CRLF
+// post-install script does not run), which the .gitattributes files of the
+// trees that hold them enforce on a Windows checkout.
+func TestLineEndings(t *testing.T) {
+	for _, s := range shellScripts {
+		if bytes.Contains(readRaw(t, s), []byte("\r")) {
+			t.Errorf("%s has CR line endings", s)
+		}
+	}
+	for _, f := range []string{"packaging/.gitattributes", "deploy/kubernetes/.gitattributes"} {
+		if !regexp.MustCompile(`(?m)^\* text=auto eol=lf$`).MatchString(read(t, f)) {
+			t.Errorf("%s does not keep LF line endings", f)
+		}
+	}
+	ci := read(t, ".github/workflows/ci.yml")
+	if i, j := strings.Index(ci, "git config --global core.autocrlf false"), strings.Index(ci, "actions/checkout"); i < 0 || i > j {
+		t.Error("ci.yml: the Windows job must turn core.autocrlf off before the checkout")
+	}
+}
+
 // TestShellScripts: every script parses under the POSIX shells present
 // here and is executable.
 func TestShellScripts(t *testing.T) {
@@ -325,25 +354,58 @@ func TestScriptsMatchServiceDefinitions(t *testing.T) {
 }
 
 // hookAwk returns the awk program a post-install script uses to pick the
-// agents whose managed hooks it rewrites.
+// agents whose managed entries it rewrites.
 func hookAwk(t *testing.T, script string) string {
 	t.Helper()
-	m := regexp.MustCompile(`(?s)awk -F'"' '(.*?)'\) \|\| hooked=""`).FindStringSubmatch(script)
+	m := regexp.MustCompile(`(?s)awk -F'"' '(.*?)'\) \|\| sel=""`).FindStringSubmatch(script)
 	if m == nil {
 		t.Fatal("hook selection awk program not found")
 	}
 	return m[1]
 }
 
-// TestHookSelection: only agents that already have spoor's managed entries
-// get them rewritten; the Linux and macOS scripts select alike.
+// hookStep returns step 6 of a post-install script: the selection and what
+// it does with it, from the status call to the report of what was left.
+func hookStep(t *testing.T, script string) string {
+	t.Helper()
+	m := regexp.MustCompile(`(?s)sel=\$\("\$BIN" hooks status .*?\nif \[ -n "\$left" \]; then\n.*?\nfi\n`).FindString(script)
+	if m == "" {
+		t.Fatal("hook step not found")
+	}
+	return m
+}
+
+// legacyMarker is how `spoor hooks status` names entries that are exactly
+// what an earlier release wrote with install's default options
+// (internal/hookinstall legacyPrefix). The post-install scripts rewrite
+// those and nothing else.
+func legacyMarker(t *testing.T) string {
+	t.Helper()
+	m := regexp.MustCompile(`(?m)^const legacyPrefix = "([^"\\]+)"$`).FindStringSubmatch(read(t, "internal/hookinstall/status.go"))
+	if m == nil {
+		t.Fatal("legacyPrefix not found in internal/hookinstall/status.go")
+	}
+	return m[1]
+}
+
+// TestHookSelection: on upgrade only entries an earlier release wrote with
+// install's default options are rewritten; entries that differ in any other
+// way (an administrator's --guard --fail-closed or --timeout, an edit) are
+// listed and left alone, because the rewrite uses the default options. The
+// Linux and macOS scripts select alike.
 func TestHookSelection(t *testing.T) {
 	if _, err := exec.LookPath("awk"); err != nil {
 		t.Skip("no awk")
 	}
-	linux := hookAwk(t, read(t, "packaging/linux/postinstall.sh"))
-	if mac := hookAwk(t, read(t, "packaging/macos/postinstall")); mac != linux {
+	linuxScript := read(t, "packaging/linux/postinstall.sh")
+	linux := hookAwk(t, linuxScript)
+	mac := read(t, "packaging/macos/postinstall")
+	if hookAwk(t, mac) != linux || hookStep(t, mac) != hookStep(t, linuxScript) {
 		t.Error("macOS and Linux postinstall select hooked agents differently")
+	}
+	marker := legacyMarker(t)
+	if !strings.Contains(linux, `index(d, "`+marker+`") == 1`) || !strings.Contains(linux, `index(d, "; `+marker+`") > 0`) {
+		t.Errorf("the scripts look for another marker than hookinstall's legacyPrefix %q", marker)
 	}
 	// The shape `spoor hooks status --scope managed --json` prints (JSON
 	// array, two-space indent, one key per line).
@@ -355,13 +417,18 @@ func TestHookSelection(t *testing.T) {
 		Detail string `json:"detail,omitempty"`
 	}
 	rows := []row{
-		{"claude-code", "managed", "/etc/claude-code/managed-settings.d/50-spoor.json", "managed", `checked: "quoted" detail`},
+		// --guard --fail-closed --timeout 30, compared with the defaults.
+		{"claude-code", "managed", "/etc/claude-code/managed-settings.d/50-spoor.json", "modified", `ConfigChange differs, Elicitation differs; checked: "disableAllHooks"`},
 		{"codex", "managed", "/etc/codex/requirements.toml", "missing", "no hook file"},
 		{"copilot-cli", "managed", "/etc/github-copilot/policy.d/spoor.json", "foreign_only", ""},
-		{"gemini-cli", "managed", "/etc/gemini-cli/settings.json", "modified", "AfterAgent differs"},
-		{"cursor", "managed", "/etc/cursor/hooks.json", "insecure_permissions", ""},
+		{"gemini-cli", "managed", "/etc/gemini-cli/settings.json", "modified", marker + " whose hook commands fail when the spoor binary is missing; install again to update"},
+		{"cursor", "managed", "/etc/cursor/hooks.json", "insecure_permissions", "the directory is writable by group 1000; " + marker + "; the commands the agent runs on this OS are already what install writes"},
 		{"claude-code", "user", "/root/.claude/settings.json", "shadowed", ""},
 		{"kiro-cli", "managed", "/etc/kiro/x.json", "unsupported", ""},
+		// Already what install writes: nothing to do.
+		{"opencode", "managed", "/etc/opencode/x.json", "managed", "checked: nothing"},
+		// A hostile detail cannot inject an agent or a status.
+		{"droid", "managed", "/etc/factory/x.json\n    \"agent\": \"evil\",", "modified", "x\n  \"status\": \"modified\",\n  \"detail\": \"" + marker + "\""},
 	}
 	b, _ := json.MarshalIndent(rows, "", "  ")
 	cmd := exec.Command("awk", "-F", `"`, linux)
@@ -370,13 +437,194 @@ func TestHookSelection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := strings.TrimSpace(string(out)), "claude-code,gemini-cli,cursor"; got != want {
-		t.Errorf("selected %q, want %q", got, want)
+	if got, want := string(out), "gemini-cli,cursor\nclaude-code,droid\n"; got != want {
+		t.Errorf("selected %q, want %q (first line rewritten, second left)", got, want)
 	}
 	cmd = exec.Command("awk", "-F", `"`, linux)
 	cmd.Stdin = strings.NewReader("[]\n")
 	if out, _ := cmd.Output(); strings.TrimSpace(string(out)) != "" {
 		t.Errorf("empty status selected %q", out)
+	}
+}
+
+// TestUpgradeKeepsHookOptions runs step 6 of the post-install scripts, as
+// written, with the real binary on a file-system prefix where an
+// administrator registered Claude Code's managed hooks in guard mode with
+// --fail-closed and a 30 s timeout, an earlier release left Gemini CLI's
+// entries, and Cursor's are current. A package upgrade must not turn the
+// fail-closed guard into a fail-open one or reset the timeout (review
+// finding PKG-1), and must still update the earlier release's entries.
+func TestUpgradeKeepsHookOptions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell")
+	}
+	if testing.Short() {
+		t.Skip("builds spoor")
+	}
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh")
+	}
+	if _, err := exec.LookPath("awk"); err != nil {
+		t.Skip("no awk")
+	}
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "spoor")
+	build := exec.Command("go", "build", "-o", bin, "./cmd/spoor")
+	build.Dir = root(t)
+	build.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+	prefix := filepath.Join(dir, "host")
+	if err := os.MkdirAll(prefix, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) []byte {
+		t.Helper()
+		out, err := exec.Command(bin, args...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("spoor %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+		return out
+	}
+	install := func(extra ...string) {
+		t.Helper()
+		run(append([]string{"hooks", "install", "--scope", "managed", "--root", prefix, "--binary", "/usr/bin/spoor"}, extra...)...)
+	}
+	install("--agents", "claude-code", "--guard", "--fail-closed", "--timeout", "30")
+	install("--agents", "gemini-cli,cursor")
+	file := func(rel string) string { return filepath.Join(prefix, filepath.FromSlash(rel)) }
+	claude, gemini, cursor := file("etc/claude-code/managed-settings.d/50-spoor.json"), file("etc/gemini-cli/settings.json"), file("etc/cursor/hooks.json")
+	// The command lines of the releases before the missing-binary check.
+	g, err := os.ReadFile(gemini)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cur := `[ -x '/usr/bin/spoor' ] || exit 0; exec '/usr/bin/spoor' hook --agent gemini-cli`
+	if !bytes.Contains(g, []byte(cur)) {
+		t.Fatalf("setup: no current gemini-cli command line in\n%s", g)
+	}
+	if err := os.WriteFile(gemini, bytes.ReplaceAll(g, []byte(cur), []byte(`'/usr/bin/spoor' hook --agent gemini-cli`)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := map[string][]byte{}
+	for _, f := range []string{claude, cursor} {
+		if before[f], err = os.ReadFile(f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !bytes.Contains(before[claude], []byte(`"onFailure": "block"`)) || !bytes.Contains(before[claude], []byte(`"timeout": 30`)) {
+		t.Fatalf("setup: no fail-closed entry with a 30 s timeout:\n%s", before[claude])
+	}
+
+	// $BIN for the step: spoor on the prefix, installing the packaged path.
+	wrapper := filepath.Join(dir, "spoor-on-prefix")
+	ws := "#!/bin/sh\nsub=$1 verb=$2\nshift 2\n" +
+		"if [ \"$verb\" = install ]; then set -- --binary /usr/bin/spoor \"$@\"; fi\n" +
+		"exec '" + bin + "' \"$sub\" \"$verb\" --root '" + prefix + "' \"$@\"\n"
+	if err := os.WriteFile(wrapper, []byte(ws), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{"packaging/linux/postinstall.sh", "packaging/macos/postinstall"} {
+		script := "set -eu\nBIN='" + wrapper + "'\nwarn() { echo \"spoor: warning: $*\" >&2; }\n" + hookStep(t, read(t, rel))
+		out, err := exec.Command(sh, "-c", script).CombinedOutput()
+		t.Logf("%s step 6:\n%s", rel, out)
+		if err != nil {
+			t.Fatalf("%s: %v", rel, err)
+		}
+		if rel == "packaging/linux/postinstall.sh" && !strings.Contains(string(out), "managed hooks rewritten for gemini-cli\n") {
+			t.Errorf("the earlier release's gemini-cli entries were not rewritten")
+		}
+		if !strings.Contains(string(out), "managed hooks of claude-code left as they are") {
+			t.Errorf("the administrator's claude-code entries are not reported as left alone")
+		}
+		for f, b := range before {
+			after, err := os.ReadFile(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(after, b) {
+				t.Errorf("%s changed:\n%s", f, after)
+			}
+		}
+	}
+	var st []struct{ Agent, Status, Detail string }
+	if err := json.Unmarshal(run("hooks", "status", "--scope", "managed", "--root", prefix, "--agents", "gemini-cli", "--json"), &st); err != nil || len(st) != 1 {
+		t.Fatalf("status: %v %v", err, st)
+	}
+	if st[0].Status != "managed" {
+		t.Errorf("gemini-cli after the upgrade: %s (%s)", st[0].Status, st[0].Detail)
+	}
+}
+
+// TestWindowsInstallScript: install-service.ps1 selects hooks the way the
+// POSIX scripts do, lets hooks read the configuration without opening the
+// rest of the data directory, and handles the osquery extension copy the way
+// the Fleet scripts register it.
+func TestWindowsInstallScript(t *testing.T) {
+	ps := read(t, "packaging/windows/install-service.ps1")
+	if !strings.Contains(ps, "$legacy = '"+legacyMarker(t)+"'") || !strings.Contains(ps, "([string]$_.detail).Contains($legacy)") {
+		t.Error("install-service.ps1 does not select by hookinstall's legacyPrefix")
+	}
+	if strings.Contains(ps, "'modified', 'shadowed'") {
+		t.Error("install-service.ps1 still rewrites every modified entry with default options")
+	}
+	// Users: list and read on the data directory itself (no inheritance
+	// flags: state.db and the daemon's files must not inherit it) and read on
+	// spoor.yaml (review finding PKG-3).
+	if !strings.Contains(ps, `icacls.exe @($Data, '/grant:r', '*S-1-5-32-545:RX')`) ||
+		!strings.Contains(ps, `icacls.exe @($Config, '/grant:r', '*S-1-5-32-545:R')`) {
+		t.Error("install-service.ps1: hooks cannot read spoor.yaml")
+	}
+	if regexp.MustCompile(`\$Data[^\n]*545:\((OI|CI)\)`).MatchString(ps) {
+		t.Error("install-service.ps1 grants Users an inherited ACE on the data directory")
+	}
+	fleet := read(t, "deploy/fleet/scripts/install-spoor.ps1")
+	for _, re := range []string{`\$Ext\s*= Join-Path \$Dir 'spoor\.ext\.exe'`, `\$Load\s*= Join-Path \$env:ProgramFiles 'osquery\\extensions\.load'`} {
+		r := regexp.MustCompile(re)
+		if !r.MatchString(ps) || !r.MatchString(fleet) {
+			t.Errorf("osquery extension path %s differs from deploy/fleet/scripts/install-spoor.ps1", re)
+		}
+	}
+	if !strings.Contains(ps, "Copy-Item -Force -Path $Exe -Destination $Ext") || !strings.Contains(ps, "Where-Object { $_ -ne $Ext }") {
+		t.Error("install-service.ps1 neither refreshes nor unregisters the osquery extension copy")
+	}
+
+	// The WiX sketch: well-formed XML (no "--" in comments), the same ACL.
+	dec := xml.NewDecoder(strings.NewReader(read(t, "packaging/windows/spoor.wxs")))
+	var usersOnData, grant bool
+	var inData bool
+	for {
+		tok, err := dec.Token()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("spoor.wxs: %v", err)
+		}
+		el, ok := tok.(xml.StartElement)
+		if !ok {
+			continue
+		}
+		attr := map[string]string{}
+		for _, a := range el.Attr {
+			attr[a.Name.Local] = a.Value
+		}
+		switch el.Name.Local {
+		case "Component":
+			inData = attr["Directory"] == "DATAFOLDER"
+		case "PermissionEx":
+			if inData && attr["User"] == "Users" {
+				usersOnData = attr["Inheritable"] == "no" && attr["GenericWrite"] == "" && attr["GenericAll"] == ""
+			}
+		case "CustomAction":
+			grant = grant || (attr["Id"] == "GrantConfigRead" && strings.Contains(attr["ExeCommand"], "spoor.yaml&quot; /grant:r *S-1-5-32-545:R") ||
+				attr["Id"] == "GrantConfigRead" && strings.Contains(attr["ExeCommand"], `spoor.yaml" /grant:r *S-1-5-32-545:R`))
+		}
+	}
+	if !usersOnData || !grant {
+		t.Errorf("spoor.wxs: Users read on the data folder only %v, read grant on spoor.yaml %v", usersOnData, grant)
 	}
 }
 
@@ -528,6 +776,101 @@ func TestDaemonSet(t *testing.T) {
 	}
 	if _, err := config.Load(f2, "/var/lib/spoor"); err != nil {
 		t.Errorf("in-image configuration: %v", err)
+	}
+}
+
+// seccompProfile is the OCI runtime-spec form of a seccomp profile, the
+// only fields a Localhost profile may use: moby's includes/excludes/archMap
+// are not part of it, and a runtime that decodes only these fields would
+// drop the conditions they carry.
+type seccompProfile struct {
+	DefaultAction   string   `json:"defaultAction"`
+	DefaultErrnoRet *uint    `json:"defaultErrnoRet"`
+	Architectures   []string `json:"architectures"`
+	Syscalls        []struct {
+		Names    []string `json:"names"`
+		Action   string   `json:"action"`
+		ErrnoRet *uint    `json:"errnoRet"`
+		Args     []struct {
+			Index    uint   `json:"index"`
+			Value    uint64 `json:"value"`
+			ValueTwo uint64 `json:"valueTwo"`
+			Op       string `json:"op"`
+		} `json:"args"`
+	} `json:"syscalls"`
+}
+
+// TestSeccompProfile: the DaemonSet runs under seccomp/node-sensor.json,
+// which takes away every call through which CAP_SYS_PTRACE with hostPID
+// would let a compromised sensor control or write into other processes
+// (review finding PKG-2), and keeps what the sensor needs.
+func TestSeccompProfile(t *testing.T) {
+	sp := get(daemonSet(t), "spec", "template", "spec", "securityContext", "seccompProfile")
+	if get(sp, "type") != "Localhost" || get(sp, "localhostProfile") != "spoor/node-sensor.json" {
+		t.Fatalf("DaemonSet seccompProfile %v, want Localhost spoor/node-sensor.json", sp)
+	}
+	if c := daemonSetContainer(t); get(c, "securityContext", "seccompProfile") != nil {
+		t.Error("the container overrides the pod's seccomp profile")
+	}
+	dec := json.NewDecoder(bytes.NewReader(readRaw(t, "deploy/kubernetes/seccomp/node-sensor.json")))
+	dec.DisallowUnknownFields()
+	var p seccompProfile
+	if err := dec.Decode(&p); err != nil {
+		t.Fatalf("node-sensor.json is not a plain OCI seccomp profile: %v", err)
+	}
+	if p.DefaultAction != "SCMP_ACT_ERRNO" || p.DefaultErrnoRet == nil || *p.DefaultErrnoRet != 1 {
+		t.Errorf("default action %s %v, want SCMP_ACT_ERRNO with EPERM", p.DefaultAction, p.DefaultErrnoRet)
+	}
+	for _, a := range []string{"SCMP_ARCH_X86_64", "SCMP_ARCH_AARCH64"} {
+		if !contains(p.Architectures, a) {
+			t.Errorf("architectures %v lack %s", p.Architectures, a)
+		}
+	}
+	allowed := map[string]bool{}
+	for _, r := range p.Syscalls {
+		switch r.Action {
+		case "SCMP_ACT_ALLOW":
+			for _, n := range r.Names {
+				allowed[n] = true
+			}
+		case "SCMP_ACT_ERRNO":
+		default:
+			t.Errorf("rule %v: action %s", r.Names, r.Action)
+		}
+	}
+	// Control of other processes, then what the runtime default denies to a
+	// container without CAP_SYS_ADMIN and friends.
+	for _, n := range []string{"ptrace", "process_vm_readv", "process_vm_writev", "pidfd_getfd", "kcmp", "process_madvise",
+		"open_by_handle_at", "mount", "umount2", "unshare", "setns", "bpf", "perf_event_open", "init_module", "finit_module",
+		"kexec_load", "keyctl", "add_key", "request_key", "userfaultfd", "chroot", "reboot", "swapon", "pivot_root", "acct"} {
+		if allowed[n] {
+			t.Errorf("node-sensor.json allows %s", n)
+		}
+	}
+	// What a Go binary reading /proc needs (the e2e test runs the sensor
+	// under the profile).
+	for _, n := range []string{"openat", "openat2", "read", "readlinkat", "getdents64", "newfstatat", "statx", "futex",
+		"epoll_pwait", "rt_sigaction", "mmap", "capget", "prctl", "pidfd_open", "clone"} {
+		if !allowed[n] {
+			t.Errorf("node-sensor.json does not allow %s", n)
+		}
+	}
+	// clone only without namespace flags; clone3 fails with ENOSYS so the
+	// runtime falls back to clone.
+	for _, r := range p.Syscalls {
+		if len(r.Names) != 1 {
+			continue
+		}
+		switch r.Names[0] {
+		case "clone":
+			if len(r.Args) != 1 || r.Args[0].Op != "SCMP_CMP_MASKED_EQ" || r.Args[0].Value != 0x7E020000 {
+				t.Errorf("clone rule %+v", r.Args)
+			}
+		case "clone3":
+			if r.Action != "SCMP_ACT_ERRNO" || r.ErrnoRet == nil || *r.ErrnoRet != 38 {
+				t.Errorf("clone3 rule %s %v", r.Action, r.ErrnoRet)
+			}
+		}
 	}
 }
 

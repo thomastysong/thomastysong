@@ -1,0 +1,6 @@
+# Shell scripts must keep LF line endings on every checkout: a CRLF
+# post-install script does not run (`\r` becomes part of each command), and
+# a Windows checkout converts them unless told otherwise (core.autocrlf).
+# The other text files are kept LF too, so the checks in
+# packaging/packaging_test.go read the same bytes on every OS.
+* text=auto eol=lf

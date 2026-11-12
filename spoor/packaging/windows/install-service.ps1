@@ -6,8 +6,14 @@
 # embedded in a native argument, so sc.exe would receive `C:\Program` as the
 # program (found by the Fleet script builder; deploy/fleet/README.md). Every
 # native call checks its exit code. After an update the managed hook entries
-# of agents that already have them are rewritten (entries written by an
-# earlier release report "modified" until `spoor hooks install` runs again).
+# that are exactly what an earlier release wrote with install's default
+# options are rewritten (they report "modified" until `spoor hooks install`
+# runs again); entries installed with other options (--guard --fail-closed,
+# --timeout) or edited are left as they are and listed, because a rewrite
+# with default options would turn a fail-closed guard into a fail-open one.
+# When spoor is registered as an osquery extension (deploy/fleet/scripts),
+# the copy osquery runs is refreshed on update and unregistered on
+# -Uninstall, as the Fleet scripts do.
 #
 #   powershell -ExecutionPolicy Bypass -File install-service.ps1 -Binary .\spoor.exe -Sha256 <hex>
 #   powershell -ExecutionPolicy Bypass -File install-service.ps1 -Uninstall
@@ -22,6 +28,10 @@ $Dir     = Join-Path $env:ProgramFiles 'spoor'
 $Exe     = Join-Path $Dir 'spoor.exe'
 $Data    = Join-Path $env:ProgramData 'spoor'
 $Config  = Join-Path $Data 'spoor.yaml'
+# The osquery extension copy and osquery's autoload file, as
+# deploy/fleet/scripts/install-spoor.ps1 and register-extension.ps1 use them.
+$Ext     = Join-Path $Dir 'spoor.ext.exe'
+$Load    = Join-Path $env:ProgramFiles 'osquery\extensions.load'
 
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
   throw 'Run this script from an elevated PowerShell.'
@@ -32,6 +42,21 @@ function Invoke-Native([string]$Tool, [string[]]$ArgList) {
   $ErrorActionPreference = 'Continue'
   $out = & $Tool @ArgList 2>&1 | Out-String
   if ($LASTEXITCODE -ne 0) { throw "$Tool $($ArgList -join ' ') failed with exit code $LASTEXITCODE. $out" }
+}
+
+# osquery holds a running extension until it restarts: restart it detached
+# and delayed, so a script run by orbit (Fleet) reports first. $After runs
+# once osquery has let go of the old file.
+function Restart-OsqueryLater([string]$After) {
+  $osq = if (Get-Service -Name 'Fleet osquery' -ErrorAction SilentlyContinue) { 'Fleet osquery' } else { 'osqueryd' }
+  $cmd = "Start-Sleep -Seconds 10; Restart-Service -Name '$osq' -Force; $After"
+  Start-Process -FilePath powershell.exe -WindowStyle Hidden -ArgumentList @('-NoProfile', '-Command', $cmd)
+  Write-Output "osquery ($osq) restarts in 10 s"
+}
+
+function Get-LoadLines {
+  if (Test-Path $Load) { return @(Get-Content -Path $Load | Where-Object { $_ -ne '' }) }
+  return @()
 }
 
 $svc = Get-Service -Name $Name -ErrorAction SilentlyContinue
@@ -45,6 +70,14 @@ if ($Uninstall) {
     Stop-Service -Name $Name -Force -ErrorAction SilentlyContinue
     Invoke-Native sc.exe @('delete', $Name)
   }
+  # Unregister the osquery extension; its copy goes once osquery let go of it.
+  $lines = Get-LoadLines
+  if ($lines -contains $Ext) {
+    Set-Content -Path $Load -Value @($lines | Where-Object { $_ -ne $Ext }) -Encoding ASCII
+    Restart-OsqueryLater "Start-Sleep -Seconds 5; Remove-Item -Force -ErrorAction SilentlyContinue -Path '$Ext', '$Ext.old'"
+  } else {
+    Remove-Item -Force -ErrorAction SilentlyContinue -Path $Ext, "$Ext.old"
+  }
   Write-Output 'spoor service removed; data left in place under ProgramData\spoor.'
   exit 0
 }
@@ -53,13 +86,26 @@ if (-not $Binary -or -not $Sha256) { throw '-Binary and -Sha256 are required.' }
 $actual = (Get-FileHash -Algorithm SHA256 -Path $Binary).Hash.ToLowerInvariant()
 if ($actual -ne $Sha256.ToLowerInvariant()) { throw "SHA-256 mismatch: got $actual" }
 
-# Directories: SYSTEM and Administrators full control, nobody else (no inheritance).
+# Directories: SYSTEM and Administrators full control on everything below
+# (no ACEs inherited from Program Files or ProgramData, whose default lets
+# Users create files).
 foreach ($d in @($Dir, $Data)) {
   New-Item -ItemType Directory -Force -Path $d | Out-Null
   Invoke-Native icacls.exe @($d, '/inheritance:r', '/grant:r', '*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F')
 }
-# Program directory is readable and executable by users (they run `spoor hook`).
+# Program directory: Users read and execute (they run `spoor hook`).
 Invoke-Native icacls.exe @($Dir, '/grant:r', '*S-1-5-32-545:(OI)(CI)RX')
+# Data directory: it is also the configuration directory, and `spoor hook`
+# runs as the developer and reads spoor.yaml there (an unreadable file means
+# built-in defaults: no central guard mode, privacy profile or exclusions)
+# and checks the kill switch file. Users get read and list on the directory
+# itself only, not inherited: state.db and what the daemon writes later
+# inherit SYSTEM and Administrators alone, and the daemon gives outbox,
+# spool and bundle protected ACLs of their own (internal/daemon). spoor.yaml
+# gets its own read grant below. A tool that replaces spoor.yaml with a new
+# file (rather than writing it in place) drops that grant: run this script
+# again, or icacls spoor.yaml /grant *S-1-5-32-545:R.
+Invoke-Native icacls.exe @($Data, '/grant:r', '*S-1-5-32-545:RX')
 
 if ($svc) { Stop-Service -Name $Name -Force -ErrorAction SilentlyContinue }
 Copy-Item -Force -Path $Binary -Destination $Exe
@@ -67,6 +113,22 @@ Copy-Item -Force -Path $Binary -Destination $Exe
 if (-not (Test-Path $Config)) {
   & $Exe export config --out $Config | Out-Null
   if ($LASTEXITCODE -ne 0) { Write-Warning "could not write $Config; the service runs with built-in defaults" }
+}
+# Hooks run as the developer and read the configuration (also repairs a file
+# written by a release whose installer left Users without access).
+if (Test-Path $Config) { Invoke-Native icacls.exe @($Config, '/grant:r', '*S-1-5-32-545:R') }
+
+# osquery extension copy: refreshed when spoor is registered, or osquery
+# keeps running the previous release. A running extension's file cannot be
+# overwritten but can be renamed; the old copy goes once osquery restarts.
+if ((Get-LoadLines) -contains $Ext) {
+  $same = (Test-Path $Ext) -and ((Get-FileHash -Algorithm SHA256 $Exe).Hash -eq (Get-FileHash -Algorithm SHA256 $Ext).Hash)
+  if (-not $same) {
+    Remove-Item -Force -ErrorAction SilentlyContinue -Path "$Ext.old"
+    if (Test-Path $Ext) { Move-Item -Force -Path $Ext -Destination "$Ext.old" }
+    Copy-Item -Force -Path $Exe -Destination $Ext
+    Restart-OsqueryLater "Start-Sleep -Seconds 5; Remove-Item -Force -ErrorAction SilentlyContinue -Path '$Ext.old'"
+  }
 }
 
 # The command line goes to the service manager as one string, exactly.
@@ -85,13 +147,25 @@ Invoke-Native sc.exe @('config', $Name, 'start=', 'delayed-auto')
 Invoke-Native sc.exe @('failure', $Name, 'reset=', '86400', 'actions=', 'restart/5000/restart/5000/restart/5000')
 Start-Service -Name $Name
 
-# Rewrite spoor's managed hook entries for agents that already have them.
+# Managed hooks: rewrite only the agents whose entries are exactly what an
+# earlier release wrote with install's default options; `hooks status` says
+# so in their detail (internal/hookinstall, legacyPrefix; the Linux and macOS
+# post-install scripts select the same way). Any other "modified" entry
+# carries options the administrator chose (--guard --fail-closed,
+# --timeout) or an edit, which a rewrite with default options would undo.
+$legacy = 'written by an earlier spoor release'
 $states = & $Exe hooks status --scope managed --json | Out-String
 if ($LASTEXITCODE -eq 0 -and $states) {
-  $hooked = @(($states | ConvertFrom-Json) | Where-Object { $_.status -in @('managed', 'modified', 'shadowed', 'insecure_permissions') } | ForEach-Object { $_.agent } | Select-Object -Unique)
+  $rows = ($states | ConvertFrom-Json)
+  $hooked = @($rows | Where-Object { ([string]$_.detail).Contains($legacy) } | ForEach-Object { $_.agent } | Select-Object -Unique)
+  $left = @($rows | Where-Object { $_.status -eq 'modified' -and -not ([string]$_.detail).Contains($legacy) } | ForEach-Object { $_.agent } | Select-Object -Unique)
   if ($hooked.Count -gt 0) {
     & $Exe hooks install --scope managed --agents ($hooked -join ',') | Out-Null
     if ($LASTEXITCODE -ne 0) { Write-Warning "could not rewrite the managed hooks of $($hooked -join ',')" }
+    else { Write-Output "managed hooks rewritten for $($hooked -join ',')" }
+  }
+  if ($left.Count -gt 0) {
+    Write-Output "managed hooks of $($left -join ',') left as they are: they differ from install's default options (--guard, --fail-closed, --timeout ...) or were edited; if an earlier release wrote them, run spoor.exe hooks install --scope managed --agents $($left -join ',') with the options they were installed with"
   }
 }
 Write-Output "spoor service installed: $Exe"

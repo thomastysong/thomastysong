@@ -717,8 +717,36 @@ func hInsmod(a *analyzer, c *simple, in flow, out *flow) {
 	}
 }
 
+// helpOrVersion reports a help or version invocation of spoor's own CLI:
+// -h, -help or --help anywhere before "--", or help, version, -v,
+// -version or --version as the first word (cmd/spoor prints usage and
+// exits on them). Other tools' CLIs do not share the convention:
+// osqueryctl reads only its first word, so "osqueryctl stop --help" stops
+// osqueryd.
+func helpOrVersion(args []arg) bool {
+	for i, r := range args {
+		s := strings.ToLower(r.s)
+		if s == "--" {
+			break
+		}
+		switch s {
+		case "-h", "-help", "--help":
+			return true
+		case "help", "version", "-v", "-version", "--version":
+			if i == 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // hOsqueryctl covers the control CLIs of the security tools themselves.
 func hOsqueryctl(a *analyzer, c *simple, in flow, out *flow) {
+	if c.name == "spoor" && helpOrVersion(c.rest()) {
+		// "spoor hooks uninstall --help" prints usage and changes nothing.
+		return
+	}
 	all := " " + strings.ToLower(joinArgs(c.rest())) + " "
 	switch c.name {
 	case "mdatp":
@@ -737,7 +765,10 @@ func hOsqueryctl(a *analyzer, c *simple, in flow, out *flow) {
 			a.evasion("stop_security_tool")
 		}
 	case "osqueryctl":
-		if strings.Contains(all, " stop ") || strings.Contains(all, " uninstall ") {
+		// osqueryctl dispatches on its first word only ("case $1 in"), so
+		// "osqueryctl stop --help" stops osqueryd and "osqueryctl --help
+		// stop" prints usage.
+		if rest := c.rest(); len(rest) > 0 && (rest[0].s == "stop" || rest[0].s == "uninstall") {
 			a.evasion("stop_security_tool")
 		}
 	case "santactl":

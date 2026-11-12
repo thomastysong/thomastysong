@@ -100,6 +100,10 @@ func featureDefList() []featDef {
 		{"shell.reads", TypeStrings, nil, "paths read"},
 		{"shell.writes", TypeStrings, nil, "paths written (redirects, cp/mv/tee destinations ...)"},
 		{"shell.deletes", TypeStrings, nil, "paths deleted"},
+		{"shell.changes", TypeStrings, nil, "paths changed other than by a content write or delete: created empty (touch, mkdir, md, install -d), permissions, ownership or attributes changed, a move source, a mount point"},
+		{"shell.aliases", TypeStrings, nil, "existing paths a new link or bind mount makes reachable under another name (ln target, mount --bind source, mklink and New-Item link targets)"},
+		{"shell.change_classes", TypeStrings, pathVocab, "classify.PathClasses over shell.changes"},
+		{"shell.proc_root", TypeStrings, shellVocab("ProcRoot"), "kinds of path operand (read, write, delete, change, alias, execute) named through a process's root directory (/proc/<pid>/root, /proc/self/root)"},
 		{"shell.read_classes", TypeStrings, pathVocab, "classify.PathClasses over shell.reads"},
 		{"shell.write_classes", TypeStrings, pathVocab, "classify.PathClasses over shell.writes"},
 		{"shell.delete_classes", TypeStrings, pathVocab, "classify.PathClasses over shell.deletes"},
@@ -137,6 +141,8 @@ func featureDefList() []featDef {
 
 		// Paths of file tools.
 		{"path.classes", TypeStrings, pathVocab, "classify.PathClasses over target.path and target.paths"},
+		{"path.targets", TypeStrings, nil, "target.path and target.paths in canonical form (joined with the session directory, . and .. resolved, duplicate separators collapsed, /proc/<pid>/root stripped)"},
+		{"path.proc_root", TypeBool, nil, "a target path went through a process's root directory (/proc/<pid>/root, /proc/self/root)"},
 		{"path.sensitive_read", TypeBool, nil, "a read/list tool touches a credential-class path"},
 		{"path.sensitive_write", TypeBool, nil, "a write/edit tool touches a persistence- or control-class path"},
 		{"path.outside_cwd", TypeBool, nil, "a target path resolves outside the session working directory"},

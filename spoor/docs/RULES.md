@@ -91,6 +91,8 @@ any_install: {manager: npm, exec: true, packages|any_re: "^@evil/"}
 
 Rules see the record's own fields (`type`, `tool.kind`, `target.path`, `session.cwd`, `asset.telemetry.hooks` ...) and the features computed for it: `shell.*` facts from the parsed command (`shell.download_and_execute`, `shell.destructive`, `shell.hosts`, `shell.cred_access` ...), `path.*` and `net.*` classes, `mcp.*`, `write.*` (content being written), `content.*`, and the session state `session.*` (`session.flags`, `session.secret_flow`, `session.runs_written_file`). The list, with types and closed vocabularies, is the features registry in `internal/features/registry.go`; `spoor rules lint` rejects a field it does not know.
 
+Path features hold one canonical spelling of each path (`internal/pathcanon`): `shell.reads`, `shell.writes`, `shell.deletes`, `shell.changes` (touch, mkdir, md, install -d, chmod and other changes that are not content writes, move sources, mount points), `shell.aliases` (what a new link or bind mount points at), `shell.executes_paths` and `path.targets` (the file tool's `target.path` and `target.paths`) are joined with a directory a `cd` on the same line set, have `.` and `..` resolved, duplicate separators collapsed and an unquoted one-character bracket glob (`[s]`) replaced by its character, and lose a `/proc/<id>/root` prefix (a pid, `self`, `$PID`, `$(...)`, `*`), which `shell.proc_root` and `path.proc_root` record. Windows paths also lose the trailing dots Win32 drops, and `\\localhost\C$\` becomes `C:\`. A rule that anchors a path regex matches these features, not `target.path` or the arguments in `shell.cmds`, which keep the operand as written. File-tool targets are joined with the session's working directory; shell paths are not, but the `shell.*_classes` features classify them with it. To match a location however it is spelled, including globs and paths relative to the session directory, use a path class: `sensor_self` is the sensor's own install locations, which SPR-EVADE-002 matches beside its anchored list. Symlinks are not followed, except a link or bind mount made earlier on the same command line, through which an operand is recorded both as written and as the path it reaches.
+
 The rule for the shipped packs, enforced by lint: shell rules match parsed facts, never the command text. `|re`, `|contains` and the other text modifiers on `target.command` are a lint error (`raw_command_match`); when a fact is missing, the feature is extended instead.
 
 ### Sequences
@@ -485,7 +487,7 @@ go run ./cmd/spoor rules list --no-host-rules --json | jq -r -f catalogue.jq
 | SPR-PERS-003 | activity | finding | medium | none | Scheduled job, service or login item registered | T1053.003, T1053.005, T1543.001, T1543.002, T1547.001 |  | ASI05 |
 | SPR-PERS-004 | activity | signal | low | none | Git hook installed or removed |  |  | ASI05 |
 | SPR-PERS-005 | activity | finding | high | none | Python startup hook written |  |  | ASI05 |
-| SPR-PERS-006 | activity | finding | high | none | Sudoers or setuid change | T1548.003, T1548.001 |  | ASI03 |
+| SPR-PERS-006 | activity | finding | high | none | Sudoers, setuid or setgid change | T1548.003, T1548.001 |  | ASI03 |
 | SPR-PERS-007 | activity | finding | medium | none | Package manager pointed at a different registry | T1195.001 |  | ASI04 |
 
 ### `posture` 2026.11.0 (21 rules)

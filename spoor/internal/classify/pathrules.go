@@ -305,6 +305,28 @@ var pathRules = []ruleGroup{
 		"/etc/audit/**", "/var/log/audit/**", "/var/ossec/**", "/opt/Elastic/**", "/Library/Elastic/**",
 		"/usr/local/jamf/**", "/Library/Application Support/JAMF/**", "/opt/sysmon/**", "/etc/falco/**",
 	}},
+	// This sensor's own install locations only (platform.DefaultDirs and
+	// UserDirs, the packages' binary and service paths), rooted, so that a
+	// glob or a path relative to the session directory is matched with the
+	// same anchors as the SPR-EVADE-002 path list. Case-insensitive like
+	// that rule.
+	{class: pcSensorSelf, ci: true, named: true, pats: []string{
+		"/etc/spoor/**", "/var/lib/spoor/**", "/var/log/spoor/**", "/run/spoor/**", "/var/run/spoor/**",
+		"/private/var/run/spoor/**", "/opt/spoor/**",
+		"/usr/bin/spoor/**", "/usr/sbin/spoor/**", "/usr/lib/spoor/**", "/usr/libexec/spoor/**",
+		"/usr/local/bin/spoor/**", "/usr/local/sbin/spoor/**", "/usr/local/lib/spoor/**", "/usr/local/libexec/spoor/**",
+		"/bin/spoor/**", "/sbin/spoor/**", "/lib/spoor/**", "/libexec/spoor/**",
+		"/usr/lib/systemd/system/spoor.service/**", "/lib/systemd/system/spoor.service/**", "/etc/systemd/system/spoor.service/**",
+		"/usr/lib/systemd/system/spoor.service.d/**", "/lib/systemd/system/spoor.service.d/**", "/etc/systemd/system/spoor.service.d/**",
+		"/Library/Application Support/spoor/**", "/Library/Logs/spoor/**",
+		"/Library/LaunchDaemons/com.github.thomastysong.spoor.plist",
+		"/root/.local/state/spoor/**", "/var/root/.local/state/spoor/**", "/home/*/.local/state/spoor/**", "/Users/*/.local/state/spoor/**",
+		"/root/Library/Application Support/spoor/**", "/var/root/Library/Application Support/spoor/**",
+		"/home/*/Library/Application Support/spoor/**", "/Users/*/Library/Application Support/spoor/**",
+	}},
+	{class: pcSensorSelf, os: osWindows, named: true, pats: []string{
+		"/program files/spoor/**", "/programdata/spoor/**", "/users/*/appdata/local/spoor/**",
+	}},
 	{class: pcSensorFiles, os: osWindows, pats: []string{
 		"/programdata/spoor/**", "/program files/spoor/**", "appdata/local/spoor/**",
 		"/program files/osquery/**", "/program files/orbit/**", "/programdata/osquery/**",

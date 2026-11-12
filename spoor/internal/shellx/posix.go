@@ -48,6 +48,9 @@ func (a *analyzer) posix(src string, origin string, depth int, in flow) flow {
 		a.f.ParseOK = false
 		return a.posixFallback(src, origin, depth, in)
 	}
+	prev := a.dial
+	a.dial = Posix
+	defer func() { a.dial = prev }()
 	w := &walker{a: a, src: src, origin: origin, depth: depth}
 	return w.stmts(file.Stmts, in, false)
 }
@@ -147,7 +150,9 @@ func (w *walker) stmt(s *syntax.Stmt, in flow) flow {
 		}
 	case *syntax.Subshell:
 		if sub, ok := w.child(OriginSubshell); ok {
+			saved := a.saveCwd()
 			out = sub.stmts(x.Stmts, in, false)
+			a.restoreCwd(saved)
 		}
 	case *syntax.Block:
 		out = w.stmts(x.Stmts, in, false)
@@ -175,7 +180,10 @@ func (w *walker) stmt(s *syntax.Stmt, in flow) flow {
 			out.t |= fl.t
 		}
 	case *syntax.FuncDecl:
+		// The body is walked where it is defined, not where it runs.
+		saved := a.saveCwd()
 		w.stmt(x.Body, noFlow())
+		a.restoreCwd(saved)
 	case *syntax.TimeClause:
 		out = w.stmt(x.Stmt, in)
 	case *syntax.CoprocClause:
@@ -221,7 +229,10 @@ func (w *walker) pipeline(s *syntax.Stmt, in flow) flow {
 	var reps []int
 	for i := len(stages) - 1; i >= 0; i-- {
 		before := len(a.f.Commands)
+		// Each stage runs in a subshell: a cd there does not last.
+		saved := a.saveCwd()
 		out := w.stmtKeep(stages[i], fl)
+		a.restoreCwd(saved)
 		rep := out.rep
 		if rep < 0 && len(a.f.Commands) > before {
 			rep = before
@@ -302,12 +313,18 @@ func (w *walker) andOr(s *syntax.Stmt, in flow) flow {
 func (w *walker) loopVars(l syntax.Loop) {
 	switch x := l.(type) {
 	case *syntax.WordIter:
-		if x.Name != nil {
-			// The loop variable takes several values; treat it as unknown.
-			w.a.setVar(x.Name.Value, value{})
-		}
+		// The loop variable takes several values: unknown, but literal
+		// when every item is.
+		lit := len(x.Items) > 0
 		for _, it := range x.Items {
-			w.fields(it)
+			for _, f := range w.fields(it) {
+				if f.dyn || f.t != 0 {
+					lit = false
+				}
+			}
+		}
+		if x.Name != nil {
+			w.a.setVar(x.Name.Value, value{lit: lit})
 		}
 	}
 }

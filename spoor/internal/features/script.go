@@ -501,7 +501,7 @@ func (c *computer) analyzeParts(text string, d shellx.Dialect) (fx *shellx.Facts
 			fx = nil
 		}
 	}()
-	return shellx.Analyze(text, d)
+	return shellx.AnalyzeWith(text, d, shellx.Options{OS: c.ctx.OS})
 }
 
 // foreignInterp is the interpreter each non-shell language is analysed

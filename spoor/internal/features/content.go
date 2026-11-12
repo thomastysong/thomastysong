@@ -181,17 +181,26 @@ func (c *computer) untrustedSource() string {
 	case event.ToolBrowser:
 		return "browser"
 	case event.ToolFileRead, event.ToolFileList:
+		sid := c.sessionID()
+		own := false
 		if t := c.e.Target; t != nil {
-			if underUntrusted(t.Path) {
-				return "file"
-			}
-			for _, p := range t.Paths {
+			for _, p := range append([]string{t.Path}, t.Paths...) {
+				if p == "" {
+					continue
+				}
+				if rest, ok := ownTempRest(p, sid); ok {
+					own = true
+					if underUntrusted(rest) {
+						return "file"
+					}
+					continue
+				}
 				if underUntrusted(p) {
 					return "file"
 				}
 			}
 		}
-		if cl, _ := c.f["path.classes"].([]string); contains(cl, "temp") || contains(cl, "downloads") {
+		if cl, _ := c.f["path.classes"].([]string); contains(cl, "downloads") || contains(cl, "temp") && !own {
 			return "file"
 		}
 	case event.ToolShell:
@@ -202,7 +211,11 @@ func (c *computer) untrustedSource() string {
 			return "shell"
 		}
 		if reads, _ := c.f["shell.reads"].([]string); len(reads) > 0 {
+			sid := c.sessionID()
 			for _, p := range reads {
+				if rest, ok := ownTempRest(p, sid); ok {
+					p = rest
+				}
 				if underUntrusted(p) {
 					return "shell"
 				}
@@ -213,6 +226,41 @@ func (c *computer) untrustedSource() string {
 		}
 	}
 	return ""
+}
+
+func (c *computer) sessionID() string {
+	if c.e.Session == nil {
+		return ""
+	}
+	return c.e.Session.ID
+}
+
+// ownTempRest reports a path inside the session's own temporary directory
+// and returns the part of it below that directory. That directory is a
+// component equal to the session id below a temporary directory (Claude
+// Code's scratchpad is /tmp/claude-<uid>/<project>/<session id>/scratchpad).
+// The id is long and random, so only the session made the directory, and
+// what is in it is the agent's own work; a dependency tree or a download
+// inside it is still third-party, which the caller checks on the rest.
+// Without this, an agent that works in its scratchpad (cd $S && sed ...)
+// marks most of its own reads untrusted.
+func ownTempRest(p, sid string) (string, bool) {
+	if len(sid) < 16 || !strings.Contains(p, sid) {
+		return "", false
+	}
+	segs := strings.FieldsFunc(p, func(r rune) bool { return r == '/' || r == '\\' })
+	temp := false
+	for i, seg := range segs {
+		switch l := strings.ToLower(seg); {
+		case l == "tmp" || l == "temp":
+			temp = true
+		case seg == sid && temp:
+			return strings.Join(segs[i+1:], "/"), true
+		case i == 0 && (l == "$tmpdir" || l == "${tmpdir}" || l == "%temp%" || l == "$env:temp"):
+			temp = true
+		}
+	}
+	return "", false
 }
 
 func underUntrusted(p string) bool {

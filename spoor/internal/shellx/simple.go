@@ -71,6 +71,9 @@ func (a *analyzer) runSimple(c *simple, in flow) flow {
 	}
 	head := c.args[0]
 	c.name = commandName(head)
+	prevDial, prevCur := a.dial, a.cur
+	a.dial, a.cur = c.dialect, c
+	defer func() { a.dial, a.cur = prevDial, prevCur }()
 	c.idx = a.addCommand(c)
 	if c.idx < 0 {
 		return noFlow()
@@ -213,6 +216,10 @@ func (a *analyzer) sub(src string, d Dialect, origin string, depth int, in flow)
 	if strings.TrimSpace(src) == "" {
 		return noFlow()
 	}
+	// Code run by another process (sh -c, a substitution, a decoded
+	// payload) starts in this directory and cannot change it.
+	saved := a.saveCwd()
+	defer a.restoreCwd(saved)
 	switch d {
 	case PowerShell:
 		return a.powershell(src, origin, depth, in)

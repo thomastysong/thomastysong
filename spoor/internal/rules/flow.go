@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"net/netip"
 	"net/url"
-	"path"
 	"regexp"
 	"sort"
 	"strings"
@@ -19,6 +18,7 @@ import (
 
 	"github.com/thomastysong/spoor/internal/classify"
 	"github.com/thomastysong/spoor/internal/event"
+	"github.com/thomastysong/spoor/internal/pathcanon"
 )
 
 // Data flow of credential VALUES within a session (threat research S1,
@@ -1041,7 +1041,12 @@ func pathDigest(p, cwd, home, goos string) string {
 		}
 		p = strings.ReplaceAll(cwd, `\`, "/") + "/" + p
 	}
-	p = path.Clean(p)
+	// The canonical form (pathcanon) also strips /proc/<pid>/root, so a
+	// script written through /proc/self/root and run by its plain path (or
+	// the other way round) is the same file. Separators stay "/" so that
+	// digests in session state from earlier versions still compare.
+	p, _ = pathcanon.Clean(p, pathcanon.Options{})
+	p = strings.ReplaceAll(p, `\`, "/")
 	if win || goos == "darwin" {
 		p = strings.ToLower(p)
 	}

@@ -3,6 +3,8 @@ package shellx
 import (
 	"strings"
 	"unicode/utf8"
+
+	"github.com/thomastysong/spoor/internal/pathcanon"
 )
 
 // Internal budgets. The exported limits live in facts.go.
@@ -67,6 +69,10 @@ type value struct {
 	s      string
 	static bool
 	t      taint
+	// lit: every value the variable can take is literal text of this
+	// command line (a for loop over literal words), so printing it prints
+	// nothing the command line does not already show.
+	lit bool
 }
 
 // flow describes the stream a pipeline stage receives or produces.
@@ -87,13 +93,15 @@ const (
 	mWrite
 	mAppend
 	mDelete
-	mMove // source of a move: read and removed
-	mAttr // permissions / ownership / attributes changed
-	mLink // link created at this path
+	mMove  // source of a move: read and removed
+	mAttr  // permissions / ownership / attributes changed, or created empty
+	mLink  // link created at this path
+	mAlias // an existing path made reachable under another name (link or bind-mount source)
 )
 
 type pathUse struct {
 	path string
+	norm string // normPath(path), the classification form
 	mode useMode
 	text string // content being written, when statically known (bounded)
 }
@@ -148,7 +156,38 @@ type analyzer struct {
 	// pendingKill holds security-tool names looked up with pidof/pgrep.
 	pendingKill []string
 	shadowSeen  bool // a WMI query for Win32_ShadowCopy was seen
+
+	// dial is the dialect of the command being analysed; it decides
+	// whether a backslash separates path components (pathcanon).
+	dial Dialect
+	// cwd is the working directory set by cd, pushd or Set-Location
+	// earlier on this command line, canonical; "" when unknown (never
+	// changed, or changed to a directory the analysis cannot resolve).
+	// It may be relative to the session directory ("sub", "..").
+	cwd     string
+	cwdLost bool     // a cd went somewhere the analysis cannot resolve
+	dirStk  []string // pushd stack
+	// mkdirs are the canonical directories created on this command line,
+	// so a setgid mode on one of them is not read as a setgid file.
+	mkdirs []string
+	// posixHost: the host is known not to be Windows, so a POSIX shell's
+	// operands are POSIX paths ("a:" is a name).
+	posixHost bool
+	// cur is the simple command whose handler is running; its words tell
+	// canon whether an operand's glob characters are active and whether
+	// "$" and "%" in it are literal.
+	cur *simple
+	// links maps the canonical name of a link or bind mount created on
+	// this command line to the canonical path it reaches.
+	links []linkAlias
+	// linkSelf: the running command acts on a link itself (chown -h,
+	// touch -h), so an operand that names a link does not reach its
+	// target.
+	linkSelf bool
 }
+
+// linkAlias is a link or bind mount created on this command line.
+type linkAlias struct{ name, to string }
 
 func newAnalyzer(f *Facts) *analyzer {
 	return &analyzer{f: f, work: maxWork}
@@ -234,6 +273,137 @@ func pseudoPath(p string) bool {
 
 func (a *analyzer) use(path string, m useMode) { a.useText(path, m, "") }
 
+// canon returns the canonical form of a path operand (pathcanon): joined
+// with the working directory a cd on this command line set, "." and ".."
+// resolved, duplicate separators collapsed, /proc/<pid>/root stripped.
+// The operand as written stays in the command line and in Commands.
+func (a *analyzer) canon(p string) (string, pathcanon.Flags) {
+	if len(p) > 4096 {
+		p = clip(p, 4096)
+	}
+	o := a.canonOpts()
+	o.Glob, o.Literal = a.wordFlags(p)
+	return pathcanon.Clean(p, o)
+}
+
+func (a *analyzer) canonOpts() pathcanon.Options {
+	o := pathcanon.Options{Windows: a.dial == PowerShell || a.dial == Cmd}
+	o.Posix = a.posixHost && a.dial == Posix
+	if !a.cwdLost {
+		o.CWD = a.cwd
+	}
+	return o
+}
+
+// wordFlags reports, for an operand of the running command, whether its
+// glob characters are active and whether it is literal text (no
+// unresolved expansion). An operand that is not one of the command's
+// words (a substring a handler cut out, "of=/x") takes the flags of the
+// word that holds it. PowerShell's -Path expands wildcards itself, so its
+// operands are globs whatever their quoting; cmd.exe has no bracket
+// wildcard.
+func (a *analyzer) wordFlags(p string) (glob, literal bool) {
+	c := a.cur
+	if c == nil {
+		return a.dial == PowerShell, false
+	}
+	match := func(w *arg) bool { return w.s == p }
+	for pass := 0; pass < 2; pass++ {
+		for i := range c.args {
+			if w := &c.args[i]; match(w) {
+				return w.glob || c.dialect == PowerShell, !w.dyn
+			}
+		}
+		for _, w := range []*arg{&c.outFile, &c.inFile} {
+			if w.s != "" && match(w) {
+				return w.glob, !w.dyn
+			}
+		}
+		match = func(w *arg) bool { return p != "" && strings.Contains(w.s, p) }
+	}
+	return c.dialect == PowerShell, false
+}
+
+// link records that the canonical path name now reaches the canonical
+// path to, for the operands after it on this command line.
+func (a *analyzer) link(name, to string) {
+	if name == "" || to == "" || name == to || len(a.links) >= maxList {
+		return
+	}
+	a.links = append(a.links, linkAlias{name: name, to: to})
+}
+
+// reached returns the path a canonical operand used in mode m reaches
+// through the links and bind mounts created earlier on this command line,
+// or p itself. A path below a link always goes through it; the link itself
+// is followed by reads, writes and attribute changes, but rm, mv and ln
+// act on the link.
+func (a *analyzer) reached(p string, m useMode) string {
+	if len(a.links) == 0 {
+		return p
+	}
+	win := a.dial != Posix
+	for range 8 {
+		hit := false
+		for i := len(a.links) - 1; i >= 0; i-- {
+			l := a.links[i]
+			rest, ok := under(p, l.name)
+			if !ok || rest == "" && (m == mDelete || m == mMove || m == mLink || m == mAlias || a.linkSelf) {
+				continue
+			}
+			if rest == "" {
+				p = l.to
+			} else {
+				p, _ = pathcanon.Clean(l.to+rest, pathcanon.Options{Windows: win, Posix: !win && a.posixHost, Literal: true})
+			}
+			hit = true
+			break
+		}
+		if !hit {
+			break
+		}
+	}
+	return p
+}
+
+// noFollow sets linkSelf for the running command when on is true and
+// returns the function that restores it.
+func (a *analyzer) noFollow(on bool) func() {
+	prev := a.linkSelf
+	a.linkSelf = on
+	return func() { a.linkSelf = prev }
+}
+
+// under reports whether p is dir or below it, and the rest of p after dir
+// (with its leading separator).
+func under(p, dir string) (string, bool) {
+	if !strings.HasPrefix(p, dir) {
+		return "", false
+	}
+	rest := p[len(dir):]
+	if rest == "" || rest[0] == '/' || rest[0] == '\\' {
+		return rest, true
+	}
+	return "", false
+}
+
+// procRoot records that a path operand used in mode m went through a
+// process's root directory.
+func (a *analyzer) procRoot(m useMode) {
+	switch m {
+	case mRead:
+		addUniq(&a.f.ProcRoot, "read")
+	case mWrite, mAppend, mLink:
+		addUniq(&a.f.ProcRoot, "write")
+	case mDelete:
+		addUniq(&a.f.ProcRoot, "delete")
+	case mMove, mAttr:
+		addUniq(&a.f.ProcRoot, "change")
+	case mAlias:
+		addUniq(&a.f.ProcRoot, "alias")
+	}
+}
+
 func (a *analyzer) useText(path string, m useMode, text string) {
 	path = strings.TrimSpace(path)
 	if pseudoPath(path) {
@@ -243,22 +413,52 @@ func (a *analyzer) useText(path string, m useMode, text string) {
 		a.host(h)
 		return
 	}
-	if len(path) > 4096 {
-		path = path[:4096]
+	path, fl := a.canon(path)
+	a.useCanonical(path, fl, m, text)
+	if r := a.reached(path, m); r != path {
+		// "ln -s /etc/x /tmp/s && touch /tmp/s/y": /tmp/s/y is named,
+		// /etc/x/y is changed.
+		a.useCanonical(r, 0, m, text)
 	}
-	if len(text) > 4096 {
-		text = text[:4096]
+}
+
+// useCanonical records a path already in canonical form.
+func (a *analyzer) useCanonical(path string, fl pathcanon.Flags, m useMode, text ...string) {
+	if pseudoPath(path) {
+		return
+	}
+	if h, ok := devTCPHost(path); ok {
+		a.host(h)
+		return
+	}
+	if fl&pathcanon.ProcRoot != 0 {
+		a.procRoot(m)
+	}
+	t := ""
+	if len(text) > 0 {
+		t = text[0]
+	}
+	if len(t) > 4096 {
+		t = t[:4096]
 	}
 	if len(a.uses) < 4*maxList {
-		a.uses = append(a.uses, pathUse{path: path, mode: m, text: text})
+		a.uses = append(a.uses, pathUse{path: path, norm: normPath(path), mode: m, text: t})
 	}
 	switch m {
-	case mRead, mMove:
+	case mRead:
 		addUniq(&a.f.Reads, path)
+	case mMove:
+		// The source of a move is read and leaves its place.
+		addUniq(&a.f.Reads, path)
+		addUniq(&a.f.Changes, path)
 	case mWrite, mAppend, mLink:
 		addUniq(&a.f.Writes, path)
 	case mDelete:
 		addUniq(&a.f.Deletes, path)
+	case mAttr:
+		addUniq(&a.f.Changes, path)
+	case mAlias:
+		addUniq(&a.f.Aliases, path)
 	}
 }
 
@@ -320,7 +520,11 @@ func (a *analyzer) droppedTaint(path string) (taint, bool) {
 // ranFile links the execution of path to how the file got there.
 func (a *analyzer) ranFile(path string) {
 	if p := strings.TrimSpace(path); p != "" && !pseudoPath(p) && !strings.HasPrefix(p, "<(") {
-		addUniq(&a.f.ExecutesPaths, clip(p, 4096))
+		c, fl := a.canon(p)
+		if fl&pathcanon.ProcRoot != 0 {
+			addUniq(&a.f.ProcRoot, "execute")
+		}
+		addUniq(&a.f.ExecutesPaths, c)
 	}
 	if a.unpacked && relativePath(path) {
 		// curl -LO x.tgz && tar xzf x.tgz && ./install.sh

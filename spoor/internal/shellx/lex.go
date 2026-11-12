@@ -42,6 +42,9 @@ type lexPipe struct {
 // runPipes analyses lexed statements. It mirrors walker.stmts and
 // walker.pipeline.
 func (a *analyzer) runPipes(pipes []lexPipe, origin string, depth int, d Dialect, in flow) flow {
+	prev := a.dial
+	a.dial = d
+	defer func() { a.dial = prev }()
 	out := noFlow()
 	for pi, p := range pipes {
 		fl := in

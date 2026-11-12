@@ -47,6 +47,24 @@ rules:
       - name: stopping an app container
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "docker stop web-1" } }
         expect: no_match
+      - name: sensor hooks uninstalled
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "spoor hooks uninstall --agent claude-code" } }
+        expect: match
+      - name: usage of the uninstall subcommand
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "spoor hooks uninstall --help" } }
+        expect: no_match
+      - name: osqueryctl reads only its first word, so a trailing --help still stops osqueryd
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "sudo osqueryctl stop --help" } }
+        expect: match
+      - name: osqueryctl stop with -h
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "osqueryctl stop -h" } }
+        expect: match
+      - name: osqueryctl usage
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "osqueryctl --help" } }
+        expect: no_match
+      - name: orbit stop with a trailing --help
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "orbit stop --help" } }
+        expect: match
 
   - id: SPR-EVADE-002
     title: Sensor files deleted or modified
@@ -60,12 +78,33 @@ rules:
       ~/Library/Application Support/spoor, %LOCALAPPDATA%\spoor), the
       binary, the service unit and the launchd plist. Creating the file
       "disabled" in the configuration directory is the documented kill
-      switch. Whoever can change the sensor decides what it reports. The
-      path list is explicit and anchored because the sensor_files path class
-      and the analyser's sensor_tamper fact also match any path that merely
+      switch. Whoever can change the sensor decides what it reports. A link
+      or bind mount that reaches the sensor's configuration, state, spool,
+      socket or service files counts (shell.aliases), because a later write
+      through the new name changes them without naming them; a link to the
+      binary or the logs does not. A write through a link made earlier on
+      the same command line is also recorded under the path it reaches.
+      The path list is
+      explicit and anchored because the sensor_files path class and the
+      analyser's sensor_tamper fact also match any path that merely
       contains these names, which in the benign replay meant this project's
       own source tree, packaging staging roots and test fixtures (8 false
-      alerts before tuning).
+      alerts before tuning). The anchors hold because every path the rule
+      reads is in canonical form (shell.writes, shell.deletes,
+      shell.changes, path.targets: "." and ".." resolved, duplicate
+      separators collapsed, /proc/<id>/root stripped, joined with a
+      directory a cd on the same line set, a one-character bracket glob
+      replaced by its character, Windows drive paths with backslashes and
+      the trailing dots Win32 drops removed). /bin, /sbin and /lib are
+      listed beside their /usr counterparts because they are the same
+      directories on merged-/usr systems, and the canonical form does not
+      follow symlinks. Two spellings need more than one canonical string:
+      a glob ("/etc/spo?r/disabled", "/e*/spoor/x") and a shell path
+      relative to the session directory ("touch disabled" in /etc/spoor).
+      The sensor_self path class covers both: it holds the same locations,
+      rooted, and classify matches globs against them and joins relative
+      paths with the session directory. A bare wildcard in the sensor's own
+      name ("/usr/local/bin/*", "/var/log/*") is not enough for that class.
     kind: activity
     class: alert
     severity: critical
@@ -78,28 +117,35 @@ rules:
       - "research/threats.md section 3 R37"
     falsepositives:
       - "Installing, upgrading or uninstalling the sensor from an agent session"
+      - "A link or read-only bind mount of the sensor's configuration made to inspect it"
     when:
       type: [tool.pre, process.exec]
     match:
       any:
-        - shell.deletes|any_re: '(?i)^(/etc/spoor|/var/lib/spoor|(/private)?/var/run/spoor|/run/spoor|/var/log/spoor|/opt/spoor|/usr/(local/)?(s?bin|lib|libexec)/spoor|(/usr/lib|/lib|/etc)/systemd/system/spoor\.service(\.d)?|/Library/(Application Support|Logs)/spoor|/Library/LaunchDaemons/com\.github\.thomastysong\.spoor\.plist|[a-z]:[\\/](program files|programdata)[\\/]spoor|(%(programdata|programfiles|localappdata)%|\$env:(programdata|programfiles|localappdata))[\\/]spoor|(~|\$\{?home\}?|/root|/var/root|/home/[^/]+|/Users/[^/]+)/(\.local/state|Library/Application Support)/spoor|(~|\$\{?home\}?|%userprofile%|\$env:userprofile|[a-z]:[\\/]users[\\/][^\\/]+)[\\/]appdata[\\/]local[\\/]spoor)([/\\]|$)'
-        - shell.writes|any_re: '(?i)^(/etc/spoor|/var/lib/spoor|(/private)?/var/run/spoor|/run/spoor|/var/log/spoor|/opt/spoor|/usr/(local/)?(s?bin|lib|libexec)/spoor|(/usr/lib|/lib|/etc)/systemd/system/spoor\.service(\.d)?|/Library/(Application Support|Logs)/spoor|/Library/LaunchDaemons/com\.github\.thomastysong\.spoor\.plist|[a-z]:[\\/](program files|programdata)[\\/]spoor|(%(programdata|programfiles|localappdata)%|\$env:(programdata|programfiles|localappdata))[\\/]spoor|(~|\$\{?home\}?|/root|/var/root|/home/[^/]+|/Users/[^/]+)/(\.local/state|Library/Application Support)/spoor|(~|\$\{?home\}?|%userprofile%|\$env:userprofile|[a-z]:[\\/]users[\\/][^\\/]+)[\\/]appdata[\\/]local[\\/]spoor)([/\\]|$)'
+        - shell.deletes|any_re: '(?i)^(/etc/spoor|/var/lib/spoor|(/private)?/var/run/spoor|/run/spoor|/var/log/spoor|/opt/spoor|/(usr/(local/)?)?(s?bin|lib|libexec)/spoor|(/usr/lib|/lib|/etc)/systemd/system/spoor\.service(\.d)?|/Library/(Application Support|Logs)/spoor|/Library/LaunchDaemons/com\.github\.thomastysong\.spoor\.plist|[a-z]:\\(program files|programdata)\\spoor|(%(programdata|programfiles|localappdata)%|\$env:(programdata|programfiles|localappdata))[\\/]spoor|(~|\$\{?home\}?|/root|/var/root|/home/[^/]+|/Users/[^/]+)/(\.local/state|Library/Application Support)/spoor|(~|\$\{?home\}?|%userprofile%|\$env:userprofile|[a-z]:\\users\\[^\\]+)[\\/]appdata[\\/]local[\\/]spoor)([/\\]|$)'
+        - shell.writes|any_re: '(?i)^(/etc/spoor|/var/lib/spoor|(/private)?/var/run/spoor|/run/spoor|/var/log/spoor|/opt/spoor|/(usr/(local/)?)?(s?bin|lib|libexec)/spoor|(/usr/lib|/lib|/etc)/systemd/system/spoor\.service(\.d)?|/Library/(Application Support|Logs)/spoor|/Library/LaunchDaemons/com\.github\.thomastysong\.spoor\.plist|[a-z]:\\(program files|programdata)\\spoor|(%(programdata|programfiles|localappdata)%|\$env:(programdata|programfiles|localappdata))[\\/]spoor|(~|\$\{?home\}?|/root|/var/root|/home/[^/]+|/Users/[^/]+)/(\.local/state|Library/Application Support)/spoor|(~|\$\{?home\}?|%userprofile%|\$env:userprofile|[a-z]:\\users\\[^\\]+)[\\/]appdata[\\/]local[\\/]spoor)([/\\]|$)'
+        # touch, mkdir, chmod, chown, chattr, setfacl, icacls, New-Item,
+        # Set-Acl, the source of a move or rename, a mount point, and the
+        # existing path a new link or bind mount points at.
+        - shell.changes|any_re: '(?i)^(/etc/spoor|/var/lib/spoor|(/private)?/var/run/spoor|/run/spoor|/var/log/spoor|/opt/spoor|/(usr/(local/)?)?(s?bin|lib|libexec)/spoor|(/usr/lib|/lib|/etc)/systemd/system/spoor\.service(\.d)?|/Library/(Application Support|Logs)/spoor|/Library/LaunchDaemons/com\.github\.thomastysong\.spoor\.plist|[a-z]:\\(program files|programdata)\\spoor|(%(programdata|programfiles|localappdata)%|\$env:(programdata|programfiles|localappdata))[\\/]spoor|(~|\$\{?home\}?|/root|/var/root|/home/[^/]+|/Users/[^/]+)/(\.local/state|Library/Application Support)/spoor|(~|\$\{?home\}?|%userprofile%|\$env:userprofile|[a-z]:\\users\\[^\\]+)[\\/]appdata[\\/]local[\\/]spoor)([/\\]|$)'
+        # A link or bind mount that reaches the sensor's configuration,
+        # state, spool, socket or service definitions: a later write
+        # through the new name, in this tool call or the next, changes
+        # them without naming them. The binary and the logs are left out:
+        # linking them elsewhere (the CLI onto the PATH, a log into a
+        # scratch directory) is how they are used.
+        - shell.aliases|any_re: '(?i)^(/etc/spoor|/var/lib/spoor|(/private)?/var/run/spoor|/run/spoor|/opt/spoor|(/usr/lib|/lib|/etc)/systemd/system/spoor\.service(\.d)?|/Library/Application Support/spoor|/Library/LaunchDaemons/com\.github\.thomastysong\.spoor\.plist|[a-z]:\\programdata\\spoor|(%(programdata|localappdata)%|\$env:(programdata|localappdata))[\\/]spoor|(~|\$\{?home\}?|/root|/var/root|/home/[^/]+|/Users/[^/]+)/(\.local/state|Library/Application Support)/spoor|(~|\$\{?home\}?|%userprofile%|\$env:userprofile|[a-z]:\\users\\[^\\]+)[\\/]appdata[\\/]local[\\/]spoor)([/\\]|$)'
+        # The same locations as a path class: globs that can reach them and
+        # shell paths relative to the session directory.
+        - shell.delete_classes|contains: sensor_self
+        - shell.write_classes|contains: sensor_self
+        - shell.change_classes|contains: sensor_self
         - all:
             - tool.kind|in: [file_write, file_edit]
-            - target.path|re: '(?i)^(/etc/spoor|/var/lib/spoor|(/private)?/var/run/spoor|/run/spoor|/var/log/spoor|/opt/spoor|/usr/(local/)?(s?bin|lib|libexec)/spoor|(/usr/lib|/lib|/etc)/systemd/system/spoor\.service(\.d)?|/Library/(Application Support|Logs)/spoor|/Library/LaunchDaemons/com\.github\.thomastysong\.spoor\.plist|[a-z]:[\\/](program files|programdata)[\\/]spoor|(%(programdata|programfiles|localappdata)%|\$env:(programdata|programfiles|localappdata))[\\/]spoor|(~|\$\{?home\}?|/root|/var/root|/home/[^/]+|/Users/[^/]+)/(\.local/state|Library/Application Support)/spoor|(~|\$\{?home\}?|%userprofile%|\$env:userprofile|[a-z]:[\\/]users[\\/][^\\/]+)[\\/]appdata[\\/]local[\\/]spoor)([/\\]|$)'
-        # touch, mkdir, chmod, chown, chattr, mv (its source), icacls,
-        # New-Item ...: the change is to the command's own operand, which
-        # the analyser records as sensor_tamper but not as a write or a
-        # delete. The operand is matched on that command, not anywhere in
-        # the line: sensor_tamper also fires for any path that merely
-        # contains these names, and a location quoted in a bash -c script
-        # or read by cp is not a change to it.
-        - any_command:
-            name|in: [touch, mkdir, md, chmod, chown, chgrp, chattr, chflags, setfacl, icacls, cacls, takeown, mv, move, ren, rename, truncate, shred, new-item, ni, set-acl, move-item, mi, rename-item, rni, set-content, add-content, clear-content, out-file]
-            args|any_re: '(?i)^(/etc/spoor|/var/lib/spoor|(/private)?/var/run/spoor|/run/spoor|/var/log/spoor|/opt/spoor|/usr/(local/)?(s?bin|lib|libexec)/spoor|(/usr/lib|/lib|/etc)/systemd/system/spoor\.service(\.d)?|/Library/(Application Support|Logs)/spoor|/Library/LaunchDaemons/com\.github\.thomastysong\.spoor\.plist|[a-z]:[\\/](program files|programdata)[\\/]spoor|(%(programdata|programfiles|localappdata)%|\$env:(programdata|programfiles|localappdata))[\\/]spoor|(~|\$\{?home\}?|/root|/var/root|/home/[^/]+|/Users/[^/]+)/(\.local/state|Library/Application Support)/spoor|(~|\$\{?home\}?|%userprofile%|\$env:userprofile|[a-z]:[\\/]users[\\/][^\\/]+)[\\/]appdata[\\/]local[\\/]spoor)([/\\]|$)'
+            - path.targets|any_re: '(?i)^(/etc/spoor|/var/lib/spoor|(/private)?/var/run/spoor|/run/spoor|/var/log/spoor|/opt/spoor|/(usr/(local/)?)?(s?bin|lib|libexec)/spoor|(/usr/lib|/lib|/etc)/systemd/system/spoor\.service(\.d)?|/Library/(Application Support|Logs)/spoor|/Library/LaunchDaemons/com\.github\.thomastysong\.spoor\.plist|[a-z]:\\(program files|programdata)\\spoor|(%(programdata|programfiles|localappdata)%|\$env:(programdata|programfiles|localappdata))[\\/]spoor|(~|\$\{?home\}?|/root|/var/root|/home/[^/]+|/Users/[^/]+)/(\.local/state|Library/Application Support)/spoor|(~|\$\{?home\}?|%userprofile%|\$env:userprofile|[a-z]:\\users\\[^\\]+)[\\/]appdata[\\/]local[\\/]spoor)([/\\]|$)'
     response: ask
-    dedup: [shell.deletes, target.path]
-    evidence: [target.command, target.path, shell.deletes, shell.writes]
+    dedup: [shell.deletes, shell.writes, shell.changes, shell.aliases, path.targets]
+    evidence: [target.command, target.path, path.targets, shell.deletes, shell.writes, shell.changes, shell.aliases, shell.proc_root, path.proc_root]
     remedy: Restore the sensor from its package and find out why the agent touched it.
     tests:
       - name: state directory removed
@@ -159,6 +205,141 @@ rules:
       - name: user spool directory removed
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf ~/.local/state/spoor" } }
         expect: match
+      - name: kill switch with a doubled separator
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "touch /etc//spoor/disabled" } }
+        expect: match
+      - name: data directory redirected with a doubled separator
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "echo 'data_dir: /dev/null' > /etc//spoor/spoor.yaml" } }
+        expect: match
+      - name: configuration edited in place with a doubled separator
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "sed -i 's/guard/off/' /etc//spoor/spoor.yaml" } }
+        expect: match
+      - name: binary replaced with a doubled separator
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cp /bin/true /usr//bin/spoor" } }
+        expect: match
+      - name: binary removed with a doubled separator
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -f /usr//bin/spoor" } }
+        expect: match
+      - name: state database truncated with a doubled separator
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "truncate -s0 /var//lib/spoor/state.db" } }
+        expect: match
+      - name: kill switch through dot segments
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "touch /etc/./x/../spoor/disabled" } }
+        expect: match
+      - name: kill switch through the process root
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "touch /proc/self/root/etc/spoor/disabled" } }
+        expect: match
+      - name: configuration removed through another process's root
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf /proc/1/root/etc/spoor" } }
+        expect: match
+      - name: kill switch created relative to a cd
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cd /etc/spoor && touch disabled" } }
+        expect: match
+      - name: configuration directory removed relative to a cd
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cd /etc && rm -rf spoor" } }
+        expect: match
+      - name: Write tool on the kill switch with a doubled separator
+        event: { type: tool.pre, tool: { kind: file_write, name: Write }, target: { path: /etc//spoor/disabled } }
+        expect: match
+      - name: Write tool on the configuration through the process root
+        event: { type: tool.pre, tool: { kind: file_write, name: Write }, target: { path: /proc/self/root/etc/spoor/spoor.yaml } }
+        expect: match
+      - name: symlink to the configuration directory
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "ln -s /etc/spoor /tmp/s" } }
+        expect: match
+      - name: kill switch through a symlink made on the same line
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "ln -s /etc/spoor /tmp/s && echo x > /tmp/s/disabled" } }
+        expect: match
+      - name: kill switch through a bind mount made on the same line
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "mount --bind /etc/spoor /mnt/x && touch /mnt/x/disabled" } }
+        expect: match
+      - name: sensor CLI linked onto the PATH
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "ln -sf /usr/bin/spoor ~/.local/bin/spoor" } }
+        expect: no_match
+      - name: configuration linked into the project
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "ln -s /etc/spoor/spoor.yaml ./spoor.yaml" } }
+        expect: match
+      - name: log linked into a scratch directory
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "ln -sf /var/log/spoor/spoor.log /tmp/spoor.log" } }
+        expect: no_match
+      - name: bind mount of the configuration directory elsewhere
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "mount --bind /etc/spoor /mnt/ro-view" } }
+        expect: match
+      - name: configuration replaced by a link
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "ln -sf /tmp/evil.yaml /etc/spoor/spoor.yaml" } }
+        expect: match
+      - name: bind mount over the configuration directory
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "mount --bind /tmp/empty /etc/spoor" } }
+        expect: match
+      - name: binary on a merged-usr alias
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cp /bin/true /bin/spoor" } }
+        expect: match
+      - name: Windows kill switch with dot segments
+        event: { type: tool.pre, host: { os: windows }, tool: { kind: shell, name: PowerShell }, target: { command: "New-Item -ItemType File -Path C:\\ProgramData\\.\\spoor\\disabled" } }
+        expect: match
+      - name: Windows kill switch in an extended-length path
+        event: { type: tool.pre, host: { os: windows }, tool: { kind: file_write, name: Write }, target: { path: "\\\\?\\C:\\ProgramData\\spoor\\disabled" } }
+        expect: match
+      - name: reading the sensor config with a doubled separator
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cat /etc//spoor/spoor.yaml" } }
+        expect: no_match
+      - name: staging root reached by a cd
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cd /tmp/pkgroot && mkdir -p etc/spoor && touch etc/spoor/disabled" } }
+        expect: no_match
+      - name: cd inside a subshell does not last
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "(cd /etc/spoor && ls); touch disabled" } }
+        expect: no_match
+      - name: an ordinary symlink
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "ln -sf /usr/bin/python3 ~/.local/bin/python" } }
+        expect: no_match
+      - name: kill switch through a one-character bracket glob
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "touch /etc/[s]poor/disabled" } }
+        expect: match
+      - name: kill switch through a question-mark glob
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "touch /etc/spo?r/disabled" } }
+        expect: match
+      - name: kill switch through a star glob in a parent directory
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "touch /e*/spoor/disabled" } }
+        expect: match
+      - name: every program in a bin directory made executable
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "chmod +x /usr/local/bin/*" } }
+        expect: no_match
+      - name: old logs removed
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -f /var/log/*.gz /var/log/*/*.1" } }
+        expect: no_match
+      - name: kill switch relative to the session directory
+        event: { type: tool.pre, session: { cwd: /etc/spoor }, tool: { kind: shell, name: Bash }, target: { command: "touch disabled" } }
+        expect: match
+      - name: state removed after a relative cd from the session directory
+        event: { type: tool.pre, session: { cwd: /var/lib }, tool: { kind: shell, name: Bash }, target: { command: "cd spoor && rm -f state.db" } }
+        expect: match
+      - name: kill switch through dot segments from a project directory
+        event: { type: tool.pre, session: { cwd: /home/u/proj }, tool: { kind: shell, name: Bash }, target: { command: "touch ../../../etc/spoor/disabled" } }
+        expect: match
+      - name: a file named disabled in a project
+        event: { type: tool.pre, session: { cwd: /home/u/proj }, tool: { kind: shell, name: Bash }, target: { command: "touch disabled && rm -f state.db" } }
+        expect: no_match
+      - name: kill switch through a process root behind a variable
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "touch /proc/$$/root/etc/spoor/disabled" } }
+        expect: match
+      - name: kill switch created with install -d
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "install -d /etc/spoor/disabled" } }
+        expect: match
+      - name: Windows kill switch created with md
+        event: { type: tool.pre, host: { os: windows }, tool: { kind: shell, name: PowerShell }, target: { command: "md C:\\ProgramData\\spoor\\disabled" } }
+        expect: match
+      - name: Windows kill switch created with cmd's mkdir
+        event: { type: tool.pre, host: { os: windows }, tool: { kind: shell, name: cmd }, target: { command: "mkdir C:\\ProgramData\\spoor\\disabled" } }
+        expect: match
+      - name: Windows kill switch with a trailing dot Win32 drops
+        event: { type: tool.pre, host: { os: windows }, tool: { kind: shell, name: PowerShell }, target: { command: "New-Item C:\\ProgramData\\spoor.\\disabled" } }
+        expect: match
+      - name: Windows configuration removed through the local admin share
+        event: { type: tool.pre, host: { os: windows }, tool: { kind: shell, name: PowerShell }, target: { command: "Remove-Item -Recurse \\\\localhost\\C$\\ProgramData\\spoor" } }
+        expect: match
+      - name: Windows configuration removed by a root path without a drive
+        event: { type: tool.pre, host: { os: windows }, session: { cwd: "C:\\Users\\u\\repo" }, tool: { kind: shell, name: PowerShell }, target: { command: "Remove-Item -Recurse \\ProgramData\\spoor" } }
+        expect: match
 
   - id: SPR-EVADE-003
     title: Managed agent policy written or removed
@@ -209,6 +390,21 @@ rules:
       - name: user settings edited
         event: { type: tool.pre, tool: { kind: file_edit, name: Edit }, target: { path: /home/tester/.claude/settings.json } }
         expect: no_match
+      - name: managed settings overwritten with a doubled separator
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "echo '{}' > /etc//claude-code/managed-settings.json" } }
+        expect: match
+      - name: managed settings overwritten through another process's root
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "echo '{}' > /proc/1/root/etc/claude-code/managed-settings.json" } }
+        expect: match
+      - name: managed settings deleted relative to a cd
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cd /etc/claude-code && rm managed-settings.json" } }
+        expect: match
+      - name: Write tool on managed settings through dot segments
+        event: { type: tool.pre, tool: { kind: file_write, name: Write }, target: { path: /etc/x/../claude-code/./managed-settings.json } }
+        expect: match
+      - name: Write tool on managed settings through the process root
+        event: { type: tool.pre, tool: { kind: file_write, name: Write }, target: { path: /proc/self/root/etc/claude-code/managed-settings.json } }
+        expect: match
 
   - id: SPR-EVADE-004
     title: Agent hook configuration edited from the shell
@@ -252,6 +448,12 @@ rules:
       - name: editing project source with sed
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "sed -i 's/foo/bar/' internal/config/config.go" } }
         expect: no_match
+      - name: hook settings linked into a dotfiles directory
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "ln -s ~/.claude/settings.json ~/dotfiles/claude-settings.json" } }
+        expect: no_match
+      - name: hook settings edited through a link made on the same line
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "ln -s ~/.claude/settings.json /tmp/c.json && echo '{}' > /tmp/c.json" } }
+        expect: match
 
   - id: SPR-EVADE-005
     title: Operating-system security control disabled

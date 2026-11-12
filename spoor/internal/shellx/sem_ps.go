@@ -19,6 +19,10 @@ func buildPsAliases() {
 		"sasv": "start-service", "ipmo": "import-module", "rni": "rename-item", "rcjb": "receive-job",
 		"foreach": "foreach-object", "%": "foreach-object", "where": "where-object", "?": "where-object",
 		"sv": "set-variable", "write": "write-output", "tee": "tee-object",
+		"sl": "set-location",
+		// mkdir and its alias md are a function around New-Item
+		// -ItemType Directory.
+		"md": "new-item", "mkdir": "new-item",
 		// Colliding names, followed only in the PowerShell dialect.
 		"curl": "invoke-webrequest", "wget": "invoke-webrequest", "rm": "remove-item", "rmdir": "remove-item",
 		"del": "remove-item", "erase": "remove-item", "rd": "remove-item", "cat": "get-content", "type": "get-content",
@@ -196,6 +200,8 @@ func registerPS() {
 		}
 	}
 	ps(psWebRequest, "invoke-webrequest", "invoke-restmethod")
+	ps(hCd, "set-location", "push-location", "pop-location")
+	ps(hWinRename, "rename-item", "set-acl")
 	ps(psInvokeExpression, "invoke-expression")
 	ps(psStartProcess, "start-process")
 	ps(psBits, "start-bitstransfer")
@@ -431,9 +437,34 @@ func psSetContent(a *analyzer, c *simple, in flow, out *flow) {
 		a.write(f.s)
 		a.destructive("truncate_file")
 	case "new-item":
-		if p.has("force", 2) || text != "" {
+		if n, ok := p.get("name", 1); ok && n.s != "" {
+			f.s = strings.TrimRight(f.s, `\/`) + `\` + n.s
+		}
+		kind := ""
+		if t, ok := p.get("itemtype", 1); ok {
+			kind = strings.ToLower(t.s)
+		} else if t, ok := p.get("type", 2); ok {
+			kind = strings.ToLower(t.s)
+		}
+		if c.name == "mkdir" || c.name == "md" {
+			kind = "directory"
+		}
+		switch {
+		case kind == "symboliclink" || kind == "junction" || kind == "hardlink":
+			// The link is placed at -Path; -Target (an alias of -Value)
+			// is what it reaches.
+			a.use(f.s, mLink)
+			if t, ok := p.get("target", 2); ok && !t.dyn {
+				a.linkTo(f.s, t.s)
+			} else if t, ok := p.get("value", 1); ok && !t.dyn {
+				a.linkTo(f.s, t.s)
+			}
+		case strings.HasPrefix(kind, "dir") && text == "":
+			a.attr(f.s)
+			a.madeDir(f.s)
+		case p.has("force", 2) || text != "":
 			a.useText(f.s, mWrite, text)
-		} else {
+		default:
 			a.attr(f.s)
 		}
 	default:

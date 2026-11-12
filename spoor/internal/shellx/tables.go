@@ -48,6 +48,7 @@ func buildTables() {
 	registerInterp()    // interp.go
 	registerDev()       // sem_dev.go
 	registerFile()      // sem_file.go
+	registerCwd()       // sem_cwd.go
 	registerNet()       // sem_net.go
 	registerPS()        // sem_ps.go
 	registerSys()       // sem_sys.go

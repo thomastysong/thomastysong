@@ -40,8 +40,17 @@
 // analyzer or a shell list hit a cap: rules should treat it as a signal in
 // itself), shell.commands ([]string of names), shell.argv (every literal
 // argument), shell.cmds ({name, path, args, origin, dynamic} per command), shell.urls, shell.hosts, shell.host_classes, shell.reads,
-// shell.writes, shell.deletes, shell.read_classes, shell.write_classes,
-// shell.delete_classes (classify.PathClasses with the session cwd),
+// shell.writes, shell.deletes, shell.changes (paths changed other than by
+// a content write or delete: touch, mkdir, md and install -d operands,
+// chmod, chown, chattr, setfacl, setcap, icacls and Set-Acl targets, a
+// non-zero truncate, the source of a move or rename, a mount point),
+// shell.aliases (the existing path a new link or bind mount makes
+// reachable under another name: ln's target, mount --bind's source,
+// mklink's and New-Item's link target), shell.read_classes,
+// shell.write_classes, shell.delete_classes, shell.change_classes
+// (classify.PathClasses with the session cwd), shell.proc_root (read,
+// write, delete, change, alias, execute: kinds of path operand named
+// through a process's root directory, /proc/<id>/root or /proc/self/root),
 // shell.interpreters, shell.inline_langs, shell.downloads,
 // shell.pipe_to_interpreter, shell.download_and_execute, shell.eval,
 // shell.sudo, shell.background, shell.heredoc, shell.dynamic (any command
@@ -59,9 +68,28 @@
 // specs), shell.env_assign, shell.decoded, shell.has_secret and
 // shell.secret_kinds (classify.FindSecrets over the command line).
 //
+// Every path list (shell.reads, shell.writes, shell.deletes,
+// shell.changes, shell.aliases, shell.executes_paths, path.targets) holds
+// canonical paths (internal/pathcanon): joined with the directory a cd,
+// pushd or Set-Location earlier on the same command line set (file-tool
+// paths with the session directory; shell paths stay relative to it, and
+// the *_classes features classify them with it), "." and ".." resolved,
+// duplicate separators collapsed, the trailing separator dropped, an
+// unquoted one-character bracket glob ("[s]") replaced by its character,
+// /proc/<id>/root (any id: a pid, self, $PID, $(...)) stripped (recorded in
+// shell.proc_root and path.proc_root), \\?\ and \\.\ prefixes folded,
+// Windows drive paths written with backslashes and an upper-case drive
+// letter, and a home anchor followed by ".." resolved against the known
+// home. Case is kept. So an anchored regex over these lists sees one
+// spelling of a location. The operand as written stays in target.command,
+// in shell.cmds and shell.argv, and in target.path and target.paths.
+//
 // # Paths (file_read, file_write, file_edit, file_list tools)
 //
-// path.classes (union over target.path and target.paths), path.sensitive_read
+// path.classes (union over target.path and target.paths, classified in
+// canonical form), path.targets (target.path and target.paths in canonical
+// form, relative ones joined with the session directory), path.proc_root
+// (a target went through a process's root directory), path.sensitive_read
 // (a read or list tool and a credential class), path.sensitive_write (a
 // write or edit tool and a persistence or control class), path.outside_cwd,
 // path.control_file (agent_*, mcp_config, vcs_*, startup_item), path.ext
@@ -185,8 +213,12 @@
 //
 // Everything here is lexical: no file is opened, no name resolved, nothing
 // executed. Symlinks are not resolved, so a harmless-looking path can still
-// point at a sensitive file; 8.3 short names are matched by their generated
-// prefix only. Content features see what the source captured: tool output
+// point at a sensitive file; a link or bind mount created on the same
+// command line is followed (an operand through it is recorded both as
+// named and as the path it reaches; shell.aliases holds what it points
+// at), one created by an earlier tool call is not. A cd to a directory the analysis cannot
+// resolve ("cd $X") leaves later relative paths as written. 8.3 short
+// names are matched by their generated prefix only. Content features see what the source captured: tool output
 // truncated by the agent is scanned as truncated.
 //
 // # Start-up cost

@@ -140,6 +140,12 @@ rules:
       - name: sibling directory of the project removed
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf ../project-old" } }
         expect: no_match
+      - name: rm refuses an operand that ends in ..
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf /tmp/.. /tmp/x/../.. ~/x/.. /home/u/proj/build/../.." } }
+        expect: no_match
+      - name: everything below the root through dot segments
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf /tmp/../*" } }
+        expect: match
 
   - id: SPR-DESTR-002
     title: Disk wiped, filesystem created or shadow copies deleted

@@ -2,28 +2,29 @@ package shellx
 
 import (
 	"strings"
+
+	"github.com/thomastysong/spoor/internal/pathcanon"
 )
 
-// normPath returns the comparison form of a path: forward slashes, lower
-// case, duplicate separators collapsed, a leading "./" removed and every
-// spelling of the home directory folded to "~". Lower-casing is deliberate:
-// macOS and Windows file systems are case-insensitive, and on Linux the cost
-// is a slightly broader match on names that are never legitimately mixed
-// case.
+// normPath returns the classification form of a path: its canonical form
+// (pathcanon: "." and ".." resolved, duplicate separators collapsed,
+// /proc/<pid>/root stripped, Windows prefixes folded), then forward
+// slashes, lower case, and every spelling of the home directory folded to
+// "~". Lower-casing is deliberate: macOS and Windows file systems are
+// case-insensitive, and on Linux the cost is a slightly broader match on
+// names that are never legitimately mixed case. The emitted path lists
+// keep the canonical form with its case.
 func normPath(p string) string {
 	p = strings.TrimSpace(p)
 	if len(p) > 4096 {
 		p = p[:4096]
 	}
 	p = strings.Trim(p, "\"'")
+	// A backslash separates here whatever the dialect: the form is only
+	// compared, never shown.
+	p, _ = pathcanon.Clean(strings.ReplaceAll(p, "\\", "/"), pathcanon.Options{})
 	p = strings.ReplaceAll(p, "\\", "/")
 	p = strings.ToLower(p)
-	for strings.Contains(p, "//") {
-		p = strings.ReplaceAll(p, "//", "/")
-	}
-	for strings.HasPrefix(p, "./") {
-		p = p[2:]
-	}
 	for _, h := range homeSpellings {
 		if strings.HasPrefix(p, h) && (len(p) == len(h) || p[len(h)] == '/') {
 			return "~" + p[len(h):]
@@ -146,8 +147,32 @@ func isDevicePath(norm string) bool {
 }
 
 func pathHasSeg(norm, seg string) bool {
-	return strings.Contains(norm, "/"+seg+"/") || strings.HasSuffix(norm, "/"+seg) ||
-		strings.HasPrefix(norm, seg+"/") || norm == seg
+	if seg == "" {
+		return false
+	}
+	for i := 0; i+len(seg) <= len(norm); {
+		j := strings.Index(norm[i:], seg)
+		if j < 0 {
+			return false
+		}
+		j += i
+		if (j == 0 || norm[j-1] == '/') && (j+len(seg) == len(norm) || norm[j+len(seg)] == '/') {
+			return true
+		}
+		i = j + 1
+	}
+	return false
+}
+
+// endsWithSeg reports norm == s or norm ending in "/" + s, without building
+// that string.
+func endsWithSeg(norm, s string) bool {
+	return strings.HasSuffix(norm, s) && (len(norm) == len(s) || norm[len(norm)-len(s)-1] == '/')
+}
+
+// underDir reports norm == dir or norm below dir.
+func underDir(norm, dir string) bool {
+	return strings.HasPrefix(norm, dir) && (len(norm) == len(dir) || norm[len(dir)] == '/')
 }
 
 var sshPrivateNames = []string{"id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "id_ecdsa_sk", "id_ed25519_sk", "id_xmss", "identity"}
@@ -204,8 +229,10 @@ func isSecretEnv(base string) bool {
 }
 
 // readClass maps a path that is read to a CredAccess value, or "".
-func readClass(p string) string {
-	n := normPath(p)
+func readClass(p string) string { return readClassNorm(normPath(p)) }
+
+// readClassNorm is readClass of a path already in normPath form.
+func readClassNorm(n string) string {
 	if n == "" {
 		return ""
 	}
@@ -257,19 +284,19 @@ func readClass(p string) string {
 	if strings.HasPrefix(n, "~/") {
 		rel := n[2:]
 		for _, s := range secretHomeFiles {
-			if rel == s || strings.HasPrefix(rel, s+"/") {
+			if underDir(rel, s) {
 				return "secret_file_read"
 			}
 		}
 	}
 	for _, s := range secretHomeFiles {
 		// Also catch "$SOMEDIR/.aws/credentials" and relative spellings.
-		if strings.HasSuffix(n, "/"+s) || n == s {
+		if endsWithSeg(n, s) {
 			return "secret_file_read"
 		}
 	}
 	for _, s := range secretAbsFiles {
-		if n == s || strings.HasPrefix(n, s+"/") {
+		if underDir(n, s) {
 			return "secret_file_read"
 		}
 	}
@@ -363,7 +390,7 @@ func isSensorPath(norm string) bool {
 func isHistoryFile(norm string) bool {
 	base := baseName(norm)
 	for _, h := range historyFiles {
-		if base == h || strings.HasSuffix(norm, "/"+h) {
+		if base == h || endsWithSeg(norm, h) {
 			return true
 		}
 	}

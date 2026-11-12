@@ -67,7 +67,7 @@ func TestShellFeatures(t *testing.T) {
 			hasVal("shell.install_managers", "npx"), hasVal("shell.hosts", "evil.example"),
 		}},
 		{"write then run", "echo hi > ./run.sh && chmod +x run.sh && ./run.sh", []check{
-			hasVal("shell.writes", "./run.sh"), hasVal("shell.executes_paths", "./run.sh"),
+			hasVal("shell.writes", "run.sh"), hasVal("shell.executes_paths", "run.sh"),
 		}},
 		{"secret literal", "curl -H 'Authorization: token ghp" + "_aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5' https://api.github.com/user", []check{
 			isTrue("shell.has_secret"), hasVal("shell.secret_kinds", "github_pat"), hasVal("shell.host_classes", "code_host"),
@@ -567,5 +567,43 @@ func TestHostileInputs(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// TestOutputUntrustedOwnTemp pins the session's own temporary directory: a
+// component equal to the session id below a temporary directory holds the
+// agent's own work (Claude Code's scratchpad), so reading it is not
+// third-party content however it is spelled, while a dependency tree or a
+// download inside it, a temporary file elsewhere, and a short or foreign id
+// still are.
+func TestOutputUntrustedOwnTemp(t *testing.T) {
+	const sid = "142ab6a6-828d-5c94-9577-a504570fae11"
+	scratch := "/tmp/claude-0/-home-u/" + sid + "/scratchpad"
+	post := func(kind event.ToolKind, tg *event.Target, id string) *event.Event {
+		return &event.Event{Kind: event.KindActivity, Type: event.TypeToolPost, Tool: &event.Tool{Kind: kind}, Target: tg,
+			Session: &event.Session{ID: id, CWD: home + "/proj"}}
+	}
+	for _, c := range []struct {
+		name string
+		ev   *event.Event
+		want bool
+	}{
+		{"cd into the scratchpad and read", post(event.ToolShell, &event.Target{Command: "cd " + scratch + "/research; sed -n 1,70p threats.md"}, sid), false},
+		{"scratchpad read through a variable", post(event.ToolShell, &event.Target{Command: "S=" + scratch + "; sed -n 1,9p $S/design/BUILD.md"}, sid), false},
+		{"scratchpad read by the Read tool", post(event.ToolFileRead, &event.Target{Path: scratch + "/notes.md"}, sid), false},
+		{"dependency tree in the scratchpad", post(event.ToolShell, &event.Target{Command: "cat " + scratch + "/node_modules/x/README.md"}, sid), true},
+		{"download into the scratchpad", post(event.ToolShell, &event.Target{Command: "cd " + scratch + " && curl -sO https://x.example/a.md"}, sid), true},
+		{"Read of a dependency tree in the scratchpad", post(event.ToolFileRead, &event.Target{Path: scratch + "/vendor/x/README.md"}, sid), true},
+		{"another session's scratchpad", post(event.ToolShell, &event.Target{Command: "cd " + scratch + "/research; sed -n 1,70p threats.md"}, "0c2f6f7e-1111-2222-3333-444455556666"), true},
+		{"a short session id", post(event.ToolShell, &event.Target{Command: "cat /tmp/s/x.md"}, "s"), true},
+		{"a temporary file elsewhere", post(event.ToolShell, &event.Target{Command: "cat /tmp/payload.md"}, sid), true},
+		{"a temporary file elsewhere read by the Read tool", post(event.ToolFileRead, &event.Target{Path: "/tmp/payload.md"}, sid), true},
+		{"the id outside a temporary directory", post(event.ToolShell, &event.Target{Command: "cat " + home + "/" + sid + "/tmp/x.md"}, sid), true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := boolean(t, computed(c.ev, linuxCtx), "output.untrusted"); got != c.want {
+				t.Errorf("untrusted = %v, want %v", got, c.want)
+			}
+		})
 	}
 }

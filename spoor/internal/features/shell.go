@@ -48,7 +48,7 @@ func (c *computer) analyze(cmd string) (f *shellx.Facts) {
 			f = nil
 		}
 	}()
-	return shellx.Analyze(cmd, c.dialectHint())
+	return shellx.AnalyzeWith(cmd, c.dialectHint(), shellx.Options{OS: c.ctx.OS})
 }
 
 // tailRescan is how much of the end of a command line is analysed on its
@@ -187,10 +187,13 @@ func (c *computer) shellFacts(fx *shellx.Facts, text string, partial bool) {
 		{"shell.reads", "shell.read_classes", fx.Reads},
 		{"shell.writes", "shell.write_classes", fx.Writes},
 		{"shell.deletes", "shell.delete_classes", fx.Deletes},
+		{"shell.changes", "shell.change_classes", fx.Changes},
 	} {
-		kept := list(fam.key, fam.paths)
+		kept := list(fam.key, c.homeClimbs(fam.paths))
 		c.setDerived(fam.classes, pathClasses(kept, pc), c.cut[fam.key])
 	}
+	list("shell.aliases", c.homeClimbs(fx.Aliases))
+	list("shell.proc_root", fx.ProcRoot)
 
 	list("shell.interpreters", fx.Interpreters)
 	var langs uniqList
@@ -201,7 +204,7 @@ func (c *computer) shellFacts(fx *shellx.Facts, text string, partial bool) {
 
 	list("shell.obfuscation", fx.Obfuscation)
 	list("shell.opaque", fx.Opaque)
-	list("shell.executes_paths", fx.ExecutesPaths)
+	list("shell.executes_paths", c.homeClimbs(fx.ExecutesPaths))
 	list("shell.destructive", fx.Destructive)
 	list("shell.persistence", fx.Persistence)
 	list("shell.defense_evasion", fx.DefenseEvasion)

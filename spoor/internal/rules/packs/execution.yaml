@@ -362,7 +362,9 @@ rules:
             path|re: "/proc/[^/]+/root/"
         - any_command:
             name|re: "ld-(linux|musl)[^/]*\\.so"
-        - shell.executes_paths|any_re: "/proc/[^/]+/root/"
+        # shell.executes_paths is canonical (the /proc/<pid>/root prefix
+        # stripped); the analyser records the prefix here.
+        - shell.proc_root: execute
     dedup: [shell.commands]
     evidence: [target.command, shell.commands]
     remedy: Find out which command was refused before this one; do not let the agent route around a deny rule.
@@ -372,6 +374,18 @@ rules:
         expect: match
       - name: dynamic loader
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "/lib64/ld-linux-x86-64.so.2 /usr/bin/curl x" } }
+        expect: match
+      - name: script run through another process's root
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "sh /proc/1/root/tmp/x.sh" } }
+        expect: match
+      - name: script run through a process root named by a variable
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "sh /proc/$PID/root/tmp/x.sh" } }
+        expect: match
+      - name: script run through every process root
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "bash /proc/*/root/tmp/x.sh" } }
+        expect: match
+      - name: script run through a process root found with pgrep
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "python3 /proc/$(pgrep -n app)/root/opt/x.py" } }
         expect: match
       - name: reading a process's mounts
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cat /proc/self/mounts && ls /proc/1/root" } }

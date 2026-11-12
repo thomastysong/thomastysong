@@ -67,9 +67,31 @@ type Facts struct {
 	Pipelines [][]int   // indexes into Commands, one slice per pipeline with 2+ stages
 	URLs      []string
 	Hosts     []string // from URLs, scp/ssh targets, nc/curl host args, /dev/tcp/host/port
-	Reads     []string // paths read
-	Writes    []string // paths written
-	Deletes   []string // paths deleted
+	// Path lists hold canonical paths (internal/pathcanon): joined with the
+	// directory a cd earlier on the line set, "." and ".." resolved,
+	// duplicate separators collapsed, /proc/<pid>/root stripped (recorded
+	// in ProcRoot), Windows prefixes folded. Case is kept. The operand as
+	// written is in Commands and in the command line.
+	Reads   []string // paths read
+	Writes  []string // paths written
+	Deletes []string // paths deleted
+	// Changes are paths changed other than by writing content or deleting:
+	// created empty (touch, mkdir, md, install -d, New-Item), permissions,
+	// ownership, attributes or capabilities changed (chmod, chown, chattr,
+	// setfacl, setcap, icacls, Set-Acl ...), truncated to a non-zero size,
+	// the source of a move, and a mount point.
+	Changes []string
+	// Aliases are existing paths a new link or bind mount makes reachable
+	// under another name: ln's target, the source of mount --bind, the
+	// target of mklink and New-Item -ItemType SymbolicLink. Reaching a path
+	// changes nothing, so they are not Changes; an operand later on the
+	// same line that goes through the new name is recorded under the path
+	// it reaches ("ln -s /etc/x /tmp/s && touch /tmp/s/y" changes /etc/x/y).
+	Aliases []string
+	// ProcRoot names the kinds of path operand that went through a process's
+	// root directory (/proc/<pid>/root, /proc/self/root): read, write,
+	// delete, change, alias, execute.
+	ProcRoot  []string
 	EnvAssign []string // names of variables assigned on the command line
 
 	Interpreters []string // interpreters that receive code from a pipe, -c/-e, heredoc or process substitution
@@ -167,8 +189,9 @@ func buildVocabulary() {
 			"find_secrets", "cloud_identity", "nmap",
 		},
 		"Privilege": {
-			"sudo", "su", "setuid_chmod", "sudoers_edit", "docker_privileged", "docker_socket_mount", "cap_add",
+			"sudo", "su", "setuid_chmod", "setgid_chmod", "sudoers_edit", "docker_privileged", "docker_socket_mount", "cap_add",
 		},
+		"ProcRoot": {"read", "write", "delete", "change", "alias", "execute"},
 		"GitOps": {
 			"push", "push_force", "remote_add", "config_credential", "clone", "commit_no_verify",
 		},

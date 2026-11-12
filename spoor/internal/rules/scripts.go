@@ -8,6 +8,7 @@ import (
 
 	"github.com/thomastysong/spoor/internal/event"
 	"github.com/thomastysong/spoor/internal/features"
+	"github.com/thomastysong/spoor/internal/pathcanon"
 )
 
 // Write-then-run. A command written into a script with a file tool and
@@ -217,19 +218,41 @@ func inlineLang(name string) string {
 
 // runsPath reports whether a parsed command runs p: p is the command word
 // itself (./x.sh, /tmp/x, also behind sudo or timeout), or the script
-// argument of an interpreter or of source / "." (scriptArg).
+// argument of an interpreter or of source / "." (scriptArg). p is
+// canonical (pathcanon) and may have been joined with a directory a cd
+// earlier on the line set, while the command words are as written, so a
+// word matches when its canonical form is p or, for a relative word, the
+// end of p.
 func runsPath(p string, cmds []map[string]any) bool {
 	for _, c := range cmds {
-		if path, _ := c["path"].(string); path == p {
+		if path, _ := c["path"].(string); sameRun(path, p) {
 			return true
 		}
 		name, _ := c["name"].(string)
 		args, _ := c["args"].([]string)
-		if i := scriptArg(name, args); i >= 0 && args[i] == p {
+		if i := scriptArg(name, args); i >= 0 && sameRun(args[i], p) {
 			return true
 		}
 	}
 	return false
+}
+
+func sameRun(word, p string) bool {
+	if word == "" {
+		return false
+	}
+	if word == p {
+		return true
+	}
+	o := pathcanon.Options{Windows: strings.Contains(p, `\`)}
+	w, _ := pathcanon.Clean(word, o)
+	if w == p {
+		return true
+	}
+	if w == "" || w == "." || strings.HasPrefix(w, "..") || !pathcanon.IsRelative(w, o) {
+		return false
+	}
+	return strings.HasSuffix(p, "/"+w) || strings.HasSuffix(p, `\`+w)
 }
 
 // launchKind is where an interpreter command takes its program from.

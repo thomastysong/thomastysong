@@ -5,6 +5,7 @@ import (
 
 	"github.com/thomastysong/spoor/internal/classify"
 	"github.com/thomastysong/spoor/internal/event"
+	"github.com/thomastysong/spoor/internal/pathcanon"
 )
 
 // controlClass reports the path classes of files that make an agent, an
@@ -51,7 +52,10 @@ func (c *computer) paths() {
 	// last maxList; path.classes is then marked incomplete.
 	paths, cut := headTailCut(all.list, maxList)
 	pc := c.pathCtx()
-	classes := pathClasses(paths, pc)
+	targets, procRoot := c.canonTargets(paths)
+	c.setDerived("path.targets", targets, cut)
+	c.f["path.proc_root"] = procRoot
+	classes := pathClasses(targets, pc)
 	c.setDerived("path.classes", classes, cut)
 	read := k == event.ToolFileRead || k == event.ToolFileList
 	c.f["path.sensitive_read"] = read && classify.IsSensitiveRead(classes)
@@ -69,6 +73,63 @@ func (c *computer) paths() {
 		}
 	}
 	c.f["path.normalization_evasion"] = evasion
+}
+
+// canonTargets returns the canonical form (pathcanon) of file-tool target
+// paths and whether one went through a process's root directory. A file
+// tool resolves a relative path against the session's working directory,
+// so it is joined with it here; target.path keeps the path as the tool
+// call carried it.
+func (c *computer) canonTargets(paths []string) ([]string, bool) {
+	o := pathcanon.Options{Windows: c.ctx.OS == "windows", Home: c.ctx.Home}
+	if pathcanon.IsWindows(c.ctx.CWD, o) || strings.HasPrefix(c.ctx.CWD, "/") {
+		o.CWD = c.ctx.CWD
+	}
+	var out uniqList
+	proc := false
+	for _, p := range paths {
+		cp, fl := pathcanon.Clean(strings.TrimSpace(p), o)
+		proc = proc || fl&pathcanon.ProcRoot != 0
+		out.add(cp)
+	}
+	return out.list, proc
+}
+
+// homeClimbs resolves the paths of a shell list that climb out of the home
+// directory ("~/../../etc/x") against the known home; the analyzer does
+// not know it. Other entries are returned as they are.
+func (c *computer) homeClimbs(paths []string) []string {
+	if c.ctx.Home == "" {
+		return paths
+	}
+	var out []string
+	for i, p := range paths {
+		if !strings.Contains(p, "..") || !homeAnchored(p) {
+			if out != nil {
+				out = append(out, p)
+			}
+			continue
+		}
+		cp, _ := pathcanon.Clean(p, pathcanon.Options{Home: c.ctx.Home, Windows: strings.Contains(p, `\`)})
+		if out == nil {
+			out = append(make([]string, 0, len(paths)), paths[:i]...)
+		}
+		out = append(out, cp)
+	}
+	if out == nil {
+		return paths
+	}
+	return out
+}
+
+func homeAnchored(p string) bool {
+	l := strings.ToLower(p)
+	for _, h := range []string{"~", "$home", "${home}", "%userprofile%", "$env:userprofile"} {
+		if strings.HasPrefix(l, h+"/") || strings.HasPrefix(l, h+`\`) {
+			return true
+		}
+	}
+	return false
 }
 
 func contains(list []string, v string) bool {

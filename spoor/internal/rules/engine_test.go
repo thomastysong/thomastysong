@@ -573,9 +573,16 @@ func TestWriteThenRun(t *testing.T) {
 	if r := e.Eval(ev(event.TypeToolPre, shell("bash ./other.sh"))); len(r.Detections) != 0 {
 		t.Fatal("different file matched")
 	}
-	r := e.Eval(ev(event.TypeToolPre, shell("cd /tmp && bash scripts/run.sh")))
-	if len(r.Detections) != 1 || r.Detections[0].Detection.Evidence["session.written_exec_path"] != "scripts/run.sh" {
+	// The analyzer follows the cd: this runs /tmp/scripts/run.sh.
+	if r := e.Eval(ev(event.TypeToolPre, shell("cd /tmp && bash scripts/run.sh"))); len(r.Detections) != 0 {
+		t.Fatal("a file of the same relative name elsewhere matched")
+	}
+	r := e.Eval(ev(event.TypeToolPre, shell("cd /home/u && bash proj/scripts/run.sh")))
+	if len(r.Detections) != 1 || r.Detections[0].Detection.Evidence["session.written_exec_path"] != "~/proj/scripts/run.sh" {
 		t.Fatalf("write-then-run via relative path: %v", ids(r.Detections))
+	}
+	if r := e.Eval(ev(event.TypeToolPre, shell("bash scripts/run.sh"))); len(r.Detections) != 1 {
+		t.Fatalf("write-then-run relative to the session directory: %v", ids(r.Detections))
 	}
 	// Shell redirect writes count too, and ~ expands.
 	e.Eval(ev(event.TypeToolPre, shell("echo id > ~/x.sh")))

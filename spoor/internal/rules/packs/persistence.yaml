@@ -224,10 +224,15 @@ rules:
         expect: no_match
 
   - id: SPR-PERS-006
-    title: Sudoers or setuid change
+    title: Sudoers, setuid or setgid change
     description: >-
-      The sudoers configuration is edited or a file is made setuid. Either
-      gives a later process elevated rights without a password.
+      The sudoers configuration is edited or a file is made setuid or
+      setgid. Either gives a later process elevated rights without a
+      password. setgid on a directory only makes new files inherit its
+      group, so the analyser does not report it for a directory the same
+      command line created (mkdir, install -d) or a target written with a
+      trailing slash; chmod 2750 on spoor's own outbox directory was the
+      only source of this rule's hits in the release benign replay.
     kind: activity
     class: finding
     severity: high
@@ -239,10 +244,11 @@ rules:
       - "research/threats.md section 3 R39"
     falsepositives:
       - "Provisioning a disposable container image"
+      - "A shared group directory made setgid that this command line did not create"
     when:
       type: [tool.pre, process.exec]
     match:
-      shell.privilege|contains_any: [sudoers_edit, setuid_chmod]
+      shell.privilege|contains_any: [sudoers_edit, setuid_chmod, setgid_chmod]
     dedup: [shell.privilege]
     evidence: [target.command, shell.privilege]
     remedy: Revert the change unless an administrator asked for it.
@@ -258,6 +264,21 @@ rules:
         expect: no_match
       - name: chmod +x a script
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "chmod +x scripts/build.sh" } }
+        expect: no_match
+      - name: setuid by a five-digit octal mode
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "chmod 04755 /tmp/bash" } }
+        expect: match
+      - name: setgid program
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "chmod g+s /tmp/bash" } }
+        expect: match
+      - name: setgid on a directory the line created
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "mkdir -p pt/data/outbox && chmod 2750 pt/data/outbox" } }
+        expect: no_match
+      - name: setgid on a directory written with a trailing slash
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "chmod g+s shared/" } }
+        expect: no_match
+      - name: sticky bit
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "chmod 1777 /tmp/scratch" } }
         expect: no_match
 
   - id: SPR-PERS-007

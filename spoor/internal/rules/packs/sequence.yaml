@@ -114,27 +114,27 @@ rules:
             # A glob's classes are those of every file it could match
             # (grep x deploy/*.yaml is "kube_config", *.json is
             # "cloud_credentials"), so a globbed read counts only when it
-            # is anchored at a home directory and narrow: globs in the last
-            # segment without a leading * (any name inside ~/.aws, ~/.ssh
-            # and the like), or only in the user name
-            # (/home/*/.aws/credentials). cat ~/.aws/cred* counts.
+            # is anchored at a home directory and narrow, as in
+            # SPR-CRED-002: directly in the home directory or below a
+            # hidden directory there, or only in the user name. cat
+            # ~/.aws/cred* counts; ~/proj/package*.json does not.
             - any:
                 - not:
                     shell.reads|any_contains: ["*", "?", "[", "{"]
-                - shell.reads|any_re: '(?i)^((~|\$\{?HOME\}?|%USERPROFILE%|\$env:USERPROFILE|/root|/var/root|/(home|Users)/[^/*?\[{]+|[a-z]:[\\/]Users[\\/][^\\/*?\[{]+|(\.\.[/\\])*\.\.)([/\\][^/\\*?\[{]+)*([/\\]([?\[{][^/\\]*|[^/\\*?\[{][^/\\*?\[{]*[*?\[{][^/\\]*)|[/\\]\.(aws|ssh|gnupg|kube|docker|azure|password-store|config[/\\](gcloud|gh))[/\\]\*[^/\\]*)|/(home|Users)/[^/]*[*?\[{][^/]*(/[^/*?\[{]+)+|[a-z]:[\\/]Users[\\/][^\\/]*[*?\[{][^\\/]*([\\/][^\\/*?\[{]+)+)$'
+                - shell.reads|any_re: '(?i)^((~|\$\{?HOME\}?|%USERPROFILE%|\$env:USERPROFILE|/root|/var/root|/(home|Users)/[^/*?\[{]+|[a-z]:[\\/]Users[\\/][^\\/*?\[{]+|(\.\.[/\\])*\.\.)([/\\]\.[^/\\*?\[{]+([/\\][^/\\*?\[{]+)*)?([/\\]([?\[{][^/\\]*|[^/\\*?\[{][^/\\*?\[{]*[*?\[{][^/\\]*)|[/\\]\.(aws|ssh|gnupg|kube|docker|azure|password-store|config[/\\](gcloud|gh))[/\\]\*[^/\\]*)|/(home|Users)/[^/]*[*?\[{][^/]*(/[^/*?\[{]+)+|[a-z]:[\\/]Users[\\/][^\\/]*[*?\[{][^\\/]*([\\/][^\\/*?\[{]+)+)$'
         - all:
             - shell.read_classes|contains_all: [token_file, outside_cwd]
             # A glob's classes are those of every file it could match
             # (grep x deploy/*.yaml is "kube_config", *.json is
             # "cloud_credentials"), so a globbed read counts only when it
-            # is anchored at a home directory and narrow: globs in the last
-            # segment without a leading * (any name inside ~/.aws, ~/.ssh
-            # and the like), or only in the user name
-            # (/home/*/.aws/credentials). cat ~/.aws/cred* counts.
+            # is anchored at a home directory and narrow, as in
+            # SPR-CRED-002: directly in the home directory or below a
+            # hidden directory there, or only in the user name. cat
+            # ~/.aws/cred* counts; ~/proj/package*.json does not.
             - any:
                 - not:
                     shell.reads|any_contains: ["*", "?", "[", "{"]
-                - shell.reads|any_re: '(?i)^((~|\$\{?HOME\}?|%USERPROFILE%|\$env:USERPROFILE|/root|/var/root|/(home|Users)/[^/*?\[{]+|[a-z]:[\\/]Users[\\/][^\\/*?\[{]+|(\.\.[/\\])*\.\.)([/\\][^/\\*?\[{]+)*([/\\]([?\[{][^/\\]*|[^/\\*?\[{][^/\\*?\[{]*[*?\[{][^/\\]*)|[/\\]\.(aws|ssh|gnupg|kube|docker|azure|password-store|config[/\\](gcloud|gh))[/\\]\*[^/\\]*)|/(home|Users)/[^/]*[*?\[{][^/]*(/[^/*?\[{]+)+|[a-z]:[\\/]Users[\\/][^\\/]*[*?\[{][^\\/]*([\\/][^\\/*?\[{]+)+)$'
+                - shell.reads|any_re: '(?i)^((~|\$\{?HOME\}?|%USERPROFILE%|\$env:USERPROFILE|/root|/var/root|/(home|Users)/[^/*?\[{]+|[a-z]:[\\/]Users[\\/][^\\/*?\[{]+|(\.\.[/\\])*\.\.)([/\\]\.[^/\\*?\[{]+([/\\][^/\\*?\[{]+)*)?([/\\]([?\[{][^/\\]*|[^/\\*?\[{][^/\\*?\[{]*[*?\[{][^/\\]*)|[/\\]\.(aws|ssh|gnupg|kube|docker|azure|password-store|config[/\\](gcloud|gh))[/\\]\*[^/\\]*)|/(home|Users)/[^/]*[*?\[{][^/]*(/[^/*?\[{]+)+|[a-z]:[\\/]Users[\\/][^\\/]*[*?\[{][^\\/]*([\\/][^\\/*?\[{]+)+)$'
         - mcp.arg_path_classes|contains_any: [secret_env, ssh_private_key, cloud_credentials, kube_config, docker_config, git_credentials, netrc, npm_token, pypi_token, password_store, keychain, browser_data, crypto_wallet, token_file, cert_private_key]
     flags:
       set: [secret_read]
@@ -401,27 +401,27 @@ rules:
             # A glob's classes are those of every file it could match
             # (grep x deploy/*.yaml is "kube_config", *.json is
             # "cloud_credentials"), so a globbed read counts only when it
-            # is anchored at a home directory and narrow: globs in the last
-            # segment without a leading * (any name inside ~/.aws, ~/.ssh
-            # and the like), or only in the user name
-            # (/home/*/.aws/credentials). cat ~/.aws/cred* counts.
+            # is anchored at a home directory and narrow, as in
+            # SPR-CRED-002: directly in the home directory or below a
+            # hidden directory there, or only in the user name. cat
+            # ~/.aws/cred* counts; ~/proj/package*.json does not.
             - any:
                 - not:
                     shell.reads|any_contains: ["*", "?", "[", "{"]
-                - shell.reads|any_re: '(?i)^((~|\$\{?HOME\}?|%USERPROFILE%|\$env:USERPROFILE|/root|/var/root|/(home|Users)/[^/*?\[{]+|[a-z]:[\\/]Users[\\/][^\\/*?\[{]+|(\.\.[/\\])*\.\.)([/\\][^/\\*?\[{]+)*([/\\]([?\[{][^/\\]*|[^/\\*?\[{][^/\\*?\[{]*[*?\[{][^/\\]*)|[/\\]\.(aws|ssh|gnupg|kube|docker|azure|password-store|config[/\\](gcloud|gh))[/\\]\*[^/\\]*)|/(home|Users)/[^/]*[*?\[{][^/]*(/[^/*?\[{]+)+|[a-z]:[\\/]Users[\\/][^\\/]*[*?\[{][^\\/]*([\\/][^\\/*?\[{]+)+)$'
+                - shell.reads|any_re: '(?i)^((~|\$\{?HOME\}?|%USERPROFILE%|\$env:USERPROFILE|/root|/var/root|/(home|Users)/[^/*?\[{]+|[a-z]:[\\/]Users[\\/][^\\/*?\[{]+|(\.\.[/\\])*\.\.)([/\\]\.[^/\\*?\[{]+([/\\][^/\\*?\[{]+)*)?([/\\]([?\[{][^/\\]*|[^/\\*?\[{][^/\\*?\[{]*[*?\[{][^/\\]*)|[/\\]\.(aws|ssh|gnupg|kube|docker|azure|password-store|config[/\\](gcloud|gh))[/\\]\*[^/\\]*)|/(home|Users)/[^/]*[*?\[{][^/]*(/[^/*?\[{]+)+|[a-z]:[\\/]Users[\\/][^\\/]*[*?\[{][^\\/]*([\\/][^\\/*?\[{]+)+)$'
         - all:
             - shell.read_classes|contains_all: [token_file, outside_cwd]
             # A glob's classes are those of every file it could match
             # (grep x deploy/*.yaml is "kube_config", *.json is
             # "cloud_credentials"), so a globbed read counts only when it
-            # is anchored at a home directory and narrow: globs in the last
-            # segment without a leading * (any name inside ~/.aws, ~/.ssh
-            # and the like), or only in the user name
-            # (/home/*/.aws/credentials). cat ~/.aws/cred* counts.
+            # is anchored at a home directory and narrow, as in
+            # SPR-CRED-002: directly in the home directory or below a
+            # hidden directory there, or only in the user name. cat
+            # ~/.aws/cred* counts; ~/proj/package*.json does not.
             - any:
                 - not:
                     shell.reads|any_contains: ["*", "?", "[", "{"]
-                - shell.reads|any_re: '(?i)^((~|\$\{?HOME\}?|%USERPROFILE%|\$env:USERPROFILE|/root|/var/root|/(home|Users)/[^/*?\[{]+|[a-z]:[\\/]Users[\\/][^\\/*?\[{]+|(\.\.[/\\])*\.\.)([/\\][^/\\*?\[{]+)*([/\\]([?\[{][^/\\]*|[^/\\*?\[{][^/\\*?\[{]*[*?\[{][^/\\]*)|[/\\]\.(aws|ssh|gnupg|kube|docker|azure|password-store|config[/\\](gcloud|gh))[/\\]\*[^/\\]*)|/(home|Users)/[^/]*[*?\[{][^/]*(/[^/*?\[{]+)+|[a-z]:[\\/]Users[\\/][^\\/]*[*?\[{][^\\/]*([\\/][^\\/*?\[{]+)+)$'
+                - shell.reads|any_re: '(?i)^((~|\$\{?HOME\}?|%USERPROFILE%|\$env:USERPROFILE|/root|/var/root|/(home|Users)/[^/*?\[{]+|[a-z]:[\\/]Users[\\/][^\\/*?\[{]+|(\.\.[/\\])*\.\.)([/\\]\.[^/\\*?\[{]+([/\\][^/\\*?\[{]+)*)?([/\\]([?\[{][^/\\]*|[^/\\*?\[{][^/\\*?\[{]*[*?\[{][^/\\]*)|[/\\]\.(aws|ssh|gnupg|kube|docker|azure|password-store|config[/\\](gcloud|gh))[/\\]\*[^/\\]*)|/(home|Users)/[^/]*[*?\[{][^/]*(/[^/*?\[{]+)+|[a-z]:[\\/]Users[\\/][^\\/]*[*?\[{][^\\/]*([\\/][^\\/*?\[{]+)+)$'
         - mcp.arg_path_classes|contains_any: [secret_env, ssh_private_key, cloud_credentials, kube_config, docker_config, git_credentials, netrc, npm_token, pypi_token, password_store, keychain, browser_data, crypto_wallet, token_file, cert_private_key]
     flags:
       set: [credential_source_read]

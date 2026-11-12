@@ -1,6 +1,6 @@
 # Scenario benchmark
 
-Generated 2026-11-12 by `internal/bench` over `bench/scenarios` (5 files): 100 attack scenarios covering 48 incident rows of `research/threats.md`, 84 benign look-alikes, 299 mutation and variant runs. Rules: 138 enabled (`agent-integrity@2026.11.0,coverage@2026.11.0,credential@2026.11.0,defense-evasion@2026.11.0,destructive@2026.11.0,execution@2026.11.0,exfiltration@2026.11.0,offensive@2026.11.0,persistence@2026.11.0,posture@2026.11.0,process@2026.11.0,sequence@2026.11.0,supply-chain@2026.11.0`, hash `3d7af0367e8c`).
+Generated 2026-11-12 by `internal/bench` over `bench/scenarios` (5 files): 100 attack scenarios covering 48 incident rows of `research/threats.md`, 87 benign look-alikes, 315 mutation and variant runs. Rules: 138 enabled (`agent-integrity@2026.11.0,coverage@2026.11.0,credential@2026.11.0,defense-evasion@2026.11.0,destructive@2026.11.0,execution@2026.11.0,exfiltration@2026.11.0,offensive@2026.11.0,persistence@2026.11.0,posture@2026.11.0,process@2026.11.0,sequence@2026.11.0,supply-chain@2026.11.0`, hash `5323a0c8ac33`).
 
 Rates are k/n with Wilson 95% intervals; cells with n < 30 are marked *insufficient*.
 
@@ -21,9 +21,9 @@ Rates are k/n with Wilson 95% intervals; cells with n < 30 are marked *insuffici
 | Any finding or alert fired on the attack (expected or not) | 93/100 = 93.0% [86.3, 96.6] |
 | Recall, outcome attempted | 9/10 = 90.0% [59.6, 98.2] *insufficient* |
 | Recall, outcome succeeded | 86/90 = 95.6% [89.1, 98.3] |
-| Benign look-alikes with a alert-class hit | 0/84 = 0.0% [0.0, 4.4] |
-| Benign look-alikes with a finding-class hit | 5/84 = 6.0% [2.6, 13.2] |
-| Benign look-alikes with a signal-class hit | 14/84 = 16.7% [10.2, 26.1] |
+| Benign look-alikes with a alert-class hit | 0/87 = 0.0% [0.0, 4.2] |
+| Benign look-alikes with a finding-class hit | 5/87 = 5.7% [2.5, 12.8] |
+| Benign look-alikes with a signal-class hit | 14/87 = 16.1% [9.8, 25.2] |
 
 ## Robustness: recall per mutation operator
 
@@ -54,10 +54,10 @@ Baselines that look only at tool and program names. The rules have to beat them 
 
 | Oracle | Recall | False-positive rate on benign look-alikes |
 |---|---|---|
-| spoor rules (scenario detected / any finding or alert on benign) | 95/100 = 95.0% [88.8, 97.8] | 5/84 = 6.0% [2.6, 13.2] |
-| any_shell: fires when the scenario runs any shell command or child process | 54/100 = 54.0% [44.3, 63.4] | 66/84 = 78.6% [68.7, 86.0] |
-| any_write: fires when the scenario writes or edits any file through a tool | 20/100 = 20.0% [13.3, 28.9] | 13/84 = 15.5% [9.3, 24.7] |
-| attack_only_names: fires on any tool, MCP server or program name that occurs in some attack and in no benign scenario (fitted on the same corpus: an optimistic leakage check) | 49/100 = 49.0% [39.4, 58.7] | 0/84 = 0.0% [0.0, 4.4] |
+| spoor rules (scenario detected / any finding or alert on benign) | 95/100 = 95.0% [88.8, 97.8] | 5/87 = 5.7% [2.5, 12.8] |
+| any_shell: fires when the scenario runs any shell command or child process | 54/100 = 54.0% [44.3, 63.4] | 69/87 = 79.3% [69.6, 86.5] |
+| any_write: fires when the scenario writes or edits any file through a tool | 20/100 = 20.0% [13.3, 28.9] | 13/87 = 14.9% [8.9, 23.9] |
+| attack_only_names: fires on any tool, MCP server or program name that occurs in some attack and in no benign scenario (fitted on the same corpus: an optimistic leakage check) | 45/100 = 45.0% [35.6, 54.8] | 0/87 = 0.0% [0.0, 4.2] |
 
 ## Per technique
 
@@ -98,6 +98,7 @@ Baselines that look only at tool and program names. The rules have to beat them 
 | attack.t1485 | 4/5 = 80.0% [37.6, 96.4] *insufficient* | 4/5 = 80.0% [37.6, 96.4] *insufficient* | 1/8 = 12.5% [2.2, 47.1] *insufficient* |
 | attack.t1528 | n/a | n/a | 0/1 = 0.0% [0.0, 79.3] *insufficient* |
 | attack.t1546.004 | 3/3 = 100.0% [43.9, 100.0] *insufficient* | 3/3 = 100.0% [43.9, 100.0] *insufficient* | n/a |
+| attack.t1548.001 | n/a | n/a | 0/1 = 0.0% [0.0, 79.3] *insufficient* |
 | attack.t1548.003 | n/a | n/a | 0/1 = 0.0% [0.0, 79.3] *insufficient* |
 | attack.t1552.001 | n/a | n/a | 0/3 = 0.0% [0.0, 56.1] *insufficient* |
 | attack.t1552.003 | n/a | n/a | 0/1 = 0.0% [0.0, 79.3] *insufficient* |
@@ -113,8 +114,8 @@ Baselines that look only at tool and program names. The rules have to beat them 
 | attack.t1574.006 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 1/1 = 100.0% [20.7, 100.0] *insufficient* | n/a |
 | attack.t1611 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 0/2 = 0.0% [0.0, 65.8] *insufficient* |
 | attack.t1677 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 0/1 = 0.0% [0.0, 79.3] *insufficient* |
-| attack.t1685 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 0/4 = 0.0% [0.0, 49.0] *insufficient* |
-| attack.t1685.007 | 4/4 = 100.0% [51.0, 100.0] *insufficient* | 4/4 = 100.0% [51.0, 100.0] *insufficient* | 0/1 = 0.0% [0.0, 79.3] *insufficient* |
+| attack.t1685 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 0/5 = 0.0% [0.0, 43.4] *insufficient* |
+| attack.t1685.007 | 4/4 = 100.0% [51.0, 100.0] *insufficient* | 4/4 = 100.0% [51.0, 100.0] *insufficient* | 0/2 = 0.0% [0.0, 65.8] *insufficient* |
 | owasp.asi10 | n/a | n/a | 0/1 = 0.0% [0.0, 79.3] *insufficient* |
 
 ## Per rule
@@ -123,136 +124,136 @@ TP/FN count attack scenarios that expect the rule; FP counts benign look-alikes 
 
 | Rule | Class | TP | FN | FP | Extra | Recall | Robust recall | FP rate |
 |---|---|---|---|---|---|---|---|---|
-| SPR-AGENT-001 | finding | 2 | 0 | 1 | 0 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | 6/6 = 100.0% [61.0, 100.0] *insufficient* | 1/84 = 1.2% [0.2, 6.4] |
-| SPR-AGENT-002 | finding | 3 | 0 | 1 | 2 | 3/3 = 100.0% [43.9, 100.0] *insufficient* | 0/1 = 0.0% [0.0, 79.3] *insufficient* | 1/84 = 1.2% [0.2, 6.4] |
-| SPR-AGENT-003 | finding | 2 | 0 | 0 | 0 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | 6/6 = 100.0% [61.0, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-AGENT-004 | finding | 2 | 0 | 0 | 0 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-AGENT-005 | signal | 0 | 0 | 1 | 0 | n/a | n/a | 1/84 = 1.2% [0.2, 6.4] |
-| SPR-AGENT-006 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-AGENT-007 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 0/1 = 0.0% [0.0, 79.3] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-AGENT-008 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 4/4 = 100.0% [51.0, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-AGENT-009 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-AGENT-010 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 6/6 = 100.0% [61.0, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-AGENT-011 | signal | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-AGENT-012 | signal | 0 | 0 | 0 | 2 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-AGENT-013 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 6/6 = 100.0% [61.0, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-COV-001 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-COV-002 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-COV-003 | signal | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-COV-004 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-COV-005 | signal | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-COV-006 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-COV-007 | signal | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-CRED-001 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-CRED-002 | finding | 1 | 0 | 0 | 7 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 7/7 = 100.0% [64.6, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-CRED-003 | signal | 0 | 0 | 1 | 1 | n/a | n/a | 1/84 = 1.2% [0.2, 6.4] |
-| SPR-CRED-004 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-CRED-005 | signal | 0 | 0 | 1 | 0 | n/a | n/a | 1/84 = 1.2% [0.2, 6.4] |
-| SPR-CRED-006 | finding | 2 | 0 | 0 | 0 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | 12/12 = 100.0% [75.8, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-CRED-007 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 6/6 = 100.0% [61.0, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-CRED-008 | finding | 3 | 0 | 0 | 0 | 3/3 = 100.0% [43.9, 100.0] *insufficient* | 12/12 = 100.0% [75.8, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-CRED-009 | finding | 0 | 0 | 0 | 1 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-CRED-010 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-CRED-011 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-CRED-012 | signal | 0 | 0 | 1 | 1 | n/a | n/a | 1/84 = 1.2% [0.2, 6.4] |
-| SPR-CRED-013 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-DESTR-001 | alert | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 8/8 = 100.0% [67.6, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-DESTR-002 | alert | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-DESTR-003 | finding | 2 | 0 | 1 | 0 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | 12/12 = 100.0% [75.8, 100.0] *insufficient* | 1/84 = 1.2% [0.2, 6.4] |
-| SPR-DESTR-004 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-DESTR-005 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 6/6 = 100.0% [61.0, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-DESTR-006 | finding | 0 | 0 | 0 | 1 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-DESTR-007 | signal | 0 | 0 | 1 | 0 | n/a | n/a | 1/84 = 1.2% [0.2, 6.4] |
-| SPR-DESTR-008 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 6/6 = 100.0% [61.0, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-EVADE-001 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 6/6 = 100.0% [61.0, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-EVADE-002 | alert | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 10/10 = 100.0% [72.2, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-EVADE-003 | alert | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-EVADE-004 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-EVADE-005 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-EVADE-006 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-EVADE-007 | signal | 0 | 0 | 0 | 1 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-EVADE-008 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-EVADE-009 | alert | 2 | 0 | 0 | 0 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-EVADE-010 | signal | 0 | 0 | 1 | 0 | n/a | n/a | 1/84 = 1.2% [0.2, 6.4] |
-| SPR-EVADE-011 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-EVADE-012 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 6/6 = 100.0% [61.0, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-EXEC-001 | finding | 4 | 0 | 0 | 2 | 4/4 = 100.0% [51.0, 100.0] *insufficient* | 22/22 = 100.0% [85.1, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-EXEC-002 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 6/6 = 100.0% [61.0, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-EXEC-003 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 3/3 = 100.0% [43.9, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-EXEC-004 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 6/6 = 100.0% [61.0, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-EXEC-005 | finding | 2 | 0 | 0 | 0 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | 12/12 = 100.0% [75.8, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-EXEC-006 | finding | 2 | 0 | 0 | 0 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | 12/12 = 100.0% [75.8, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-EXEC-007 | signal | 0 | 0 | 1 | 1 | n/a | n/a | 1/84 = 1.2% [0.2, 6.4] |
-| SPR-EXEC-008 | alert | 2 | 0 | 0 | 1 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | 7/7 = 100.0% [64.6, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-EXEC-009 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 6/7 = 85.7% [48.7, 97.4] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-EXFIL-001 | alert | 3 | 0 | 0 | 0 | 3/3 = 100.0% [43.9, 100.0] *insufficient* | 13/13 = 100.0% [77.2, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-EXFIL-002 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 7/7 = 100.0% [64.6, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-EXFIL-003 | signal | 0 | 0 | 0 | 2 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-EXFIL-004 | finding | 2 | 0 | 0 | 0 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | 12/12 = 100.0% [75.8, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-EXFIL-005 | finding | 2 | 0 | 0 | 4 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | 12/12 = 100.0% [75.8, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-EXFIL-006 | signal | 0 | 0 | 2 | 0 | n/a | n/a | 2/84 = 2.4% [0.7, 8.3] |
-| SPR-EXFIL-007 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-EXFIL-008 | finding | 2 | 0 | 0 | 0 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | 12/12 = 100.0% [75.8, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-EXFIL-009 | signal | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-EXFIL-010 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-EXFIL-011 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 6/6 = 100.0% [61.0, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-EXFIL-012 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-EXFIL-013 | signal | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-OFFSEC-001 | finding | 4 | 0 | 1 | 0 | 4/4 = 100.0% [51.0, 100.0] *insufficient* | 24/24 = 100.0% [86.2, 100.0] *insufficient* | 1/84 = 1.2% [0.2, 6.4] |
-| SPR-OFFSEC-002 | alert | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 6/6 = 100.0% [61.0, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-OFFSEC-003 | signal | 0 | 0 | 1 | 0 | n/a | n/a | 1/84 = 1.2% [0.2, 6.4] |
-| SPR-OFFSEC-004 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-OFFSEC-005 | signal | 0 | 0 | 1 | 1 | n/a | n/a | 1/84 = 1.2% [0.2, 6.4] |
-| SPR-OFFSEC-006 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 6/6 = 100.0% [61.0, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-OFFSEC-007 | alert | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-OFFSEC-008 | signal | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-PERS-001 | finding | 2 | 0 | 0 | 1 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | 6/6 = 100.0% [61.0, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-PERS-002 | alert | 0 | 1 | 0 | 0 | 0/1 = 0.0% [0.0, 79.3] *insufficient* | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-PERS-003 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-PERS-004 | signal | 0 | 0 | 1 | 0 | n/a | n/a | 1/84 = 1.2% [0.2, 6.4] |
-| SPR-PERS-005 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-PERS-006 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-PERS-007 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-POST-001 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-POST-002 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-POST-003 | finding | 3 | 0 | 0 | 0 | 3/3 = 100.0% [43.9, 100.0] *insufficient* | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-POST-004 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-POST-005 | finding | 3 | 0 | 0 | 0 | 3/3 = 100.0% [43.9, 100.0] *insufficient* | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-POST-006 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-POST-007 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-POST-008 | finding | 3 | 0 | 0 | 0 | 3/3 = 100.0% [43.9, 100.0] *insufficient* | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-POST-009 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-POST-010 | signal | 0 | 0 | 0 | 1 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-POST-011 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-POST-012 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-POST-013 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-POST-014 | finding | 2 | 0 | 0 | 0 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-POST-015 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-POST-016 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-POST-017 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-POST-018 | finding | 0 | 0 | 0 | 1 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-POST-019 | finding | 4 | 0 | 0 | 0 | 4/4 = 100.0% [51.0, 100.0] *insufficient* | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-POST-020 | signal | 2 | 0 | 0 | 0 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | 6/6 = 100.0% [61.0, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-POST-021 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-PROC-001 | alert | 3 | 0 | 0 | 0 | 3/3 = 100.0% [43.9, 100.0] *insufficient* | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-PROC-002 | finding | 0 | 0 | 0 | 3 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-PROC-003 | signal | 0 | 0 | 1 | 3 | n/a | n/a | 1/84 = 1.2% [0.2, 6.4] |
-| SPR-PROC-004 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-PROC-005 | alert | 2 | 0 | 0 | 0 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-PROC-006 | signal | 0 | 0 | 0 | 1 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-SEQ-001 | signal | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-SEQ-002 | finding | 2 | 0 | 0 | 0 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | 7/7 = 100.0% [64.6, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-SEQ-003 | finding | 2 | 0 | 0 | 0 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | 12/12 = 100.0% [75.8, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-SEQ-004 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-SEQ-005 | finding | 2 | 0 | 0 | 0 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-SEQ-006 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-SEQ-007 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 6/6 = 100.0% [61.0, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-SUPPLY-001 | alert | 5 | 0 | 0 | 0 | 5/5 = 100.0% [56.6, 100.0] *insufficient* | 19/19 = 100.0% [83.2, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-SUPPLY-002 | alert | 2 | 0 | 0 | 0 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | 12/12 = 100.0% [75.8, 100.0] *insufficient* | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-SUPPLY-003 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-SUPPLY-004 | signal | 0 | 0 | 0 | 0 | n/a | n/a | 0/84 = 0.0% [0.0, 4.4] |
-| SPR-SUPPLY-005 | signal | 0 | 0 | 1 | 1 | n/a | n/a | 1/84 = 1.2% [0.2, 6.4] |
-| SPR-SUPPLY-006 | finding | 0 | 0 | 1 | 4 | n/a | n/a | 1/84 = 1.2% [0.2, 6.4] |
+| SPR-AGENT-001 | finding | 2 | 0 | 1 | 0 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | 6/6 = 100.0% [61.0, 100.0] *insufficient* | 1/87 = 1.1% [0.2, 6.2] |
+| SPR-AGENT-002 | finding | 3 | 0 | 1 | 2 | 3/3 = 100.0% [43.9, 100.0] *insufficient* | 0/1 = 0.0% [0.0, 79.3] *insufficient* | 1/87 = 1.1% [0.2, 6.2] |
+| SPR-AGENT-003 | finding | 2 | 0 | 0 | 0 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | 6/6 = 100.0% [61.0, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-AGENT-004 | finding | 2 | 0 | 0 | 0 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-AGENT-005 | signal | 0 | 0 | 1 | 0 | n/a | n/a | 1/87 = 1.1% [0.2, 6.2] |
+| SPR-AGENT-006 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-AGENT-007 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 0/1 = 0.0% [0.0, 79.3] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-AGENT-008 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 4/4 = 100.0% [51.0, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-AGENT-009 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-AGENT-010 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 6/6 = 100.0% [61.0, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-AGENT-011 | signal | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-AGENT-012 | signal | 0 | 0 | 0 | 2 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-AGENT-013 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 6/6 = 100.0% [61.0, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-COV-001 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-COV-002 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-COV-003 | signal | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-COV-004 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-COV-005 | signal | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-COV-006 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-COV-007 | signal | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-CRED-001 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-CRED-002 | finding | 1 | 0 | 0 | 7 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 9/9 = 100.0% [70.1, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-CRED-003 | signal | 0 | 0 | 1 | 1 | n/a | n/a | 1/87 = 1.1% [0.2, 6.2] |
+| SPR-CRED-004 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-CRED-005 | signal | 0 | 0 | 1 | 0 | n/a | n/a | 1/87 = 1.1% [0.2, 6.2] |
+| SPR-CRED-006 | finding | 2 | 0 | 0 | 0 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | 12/12 = 100.0% [75.8, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-CRED-007 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 6/6 = 100.0% [61.0, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-CRED-008 | finding | 3 | 0 | 0 | 0 | 3/3 = 100.0% [43.9, 100.0] *insufficient* | 12/12 = 100.0% [75.8, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-CRED-009 | finding | 0 | 0 | 0 | 1 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-CRED-010 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-CRED-011 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-CRED-012 | signal | 0 | 0 | 1 | 1 | n/a | n/a | 1/87 = 1.1% [0.2, 6.2] |
+| SPR-CRED-013 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-DESTR-001 | alert | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 8/8 = 100.0% [67.6, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-DESTR-002 | alert | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-DESTR-003 | finding | 2 | 0 | 1 | 0 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | 12/12 = 100.0% [75.8, 100.0] *insufficient* | 1/87 = 1.1% [0.2, 6.2] |
+| SPR-DESTR-004 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-DESTR-005 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 6/6 = 100.0% [61.0, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-DESTR-006 | finding | 0 | 0 | 0 | 1 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-DESTR-007 | signal | 0 | 0 | 1 | 0 | n/a | n/a | 1/87 = 1.1% [0.2, 6.2] |
+| SPR-DESTR-008 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 6/6 = 100.0% [61.0, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-EVADE-001 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 6/6 = 100.0% [61.0, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-EVADE-002 | alert | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 21/21 = 100.0% [84.5, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-EVADE-003 | alert | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 3/3 = 100.0% [43.9, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-EVADE-004 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-EVADE-005 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-EVADE-006 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-EVADE-007 | signal | 0 | 0 | 0 | 1 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-EVADE-008 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-EVADE-009 | alert | 2 | 0 | 0 | 0 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-EVADE-010 | signal | 0 | 0 | 1 | 0 | n/a | n/a | 1/87 = 1.1% [0.2, 6.2] |
+| SPR-EVADE-011 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-EVADE-012 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 6/6 = 100.0% [61.0, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-EXEC-001 | finding | 4 | 0 | 0 | 2 | 4/4 = 100.0% [51.0, 100.0] *insufficient* | 22/22 = 100.0% [85.1, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-EXEC-002 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 6/6 = 100.0% [61.0, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-EXEC-003 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 3/3 = 100.0% [43.9, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-EXEC-004 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 6/6 = 100.0% [61.0, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-EXEC-005 | finding | 2 | 0 | 0 | 0 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | 12/12 = 100.0% [75.8, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-EXEC-006 | finding | 2 | 0 | 0 | 0 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | 12/12 = 100.0% [75.8, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-EXEC-007 | signal | 0 | 0 | 1 | 1 | n/a | n/a | 1/87 = 1.1% [0.2, 6.2] |
+| SPR-EXEC-008 | alert | 2 | 0 | 0 | 1 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | 7/7 = 100.0% [64.6, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-EXEC-009 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 6/7 = 85.7% [48.7, 97.4] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-EXFIL-001 | alert | 3 | 0 | 0 | 0 | 3/3 = 100.0% [43.9, 100.0] *insufficient* | 13/13 = 100.0% [77.2, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-EXFIL-002 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 7/7 = 100.0% [64.6, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-EXFIL-003 | signal | 0 | 0 | 0 | 2 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-EXFIL-004 | finding | 2 | 0 | 0 | 0 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | 12/12 = 100.0% [75.8, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-EXFIL-005 | finding | 2 | 0 | 0 | 4 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | 12/12 = 100.0% [75.8, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-EXFIL-006 | signal | 0 | 0 | 2 | 0 | n/a | n/a | 2/87 = 2.3% [0.6, 8.0] |
+| SPR-EXFIL-007 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-EXFIL-008 | finding | 2 | 0 | 0 | 0 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | 12/12 = 100.0% [75.8, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-EXFIL-009 | signal | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-EXFIL-010 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-EXFIL-011 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 6/6 = 100.0% [61.0, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-EXFIL-012 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-EXFIL-013 | signal | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-OFFSEC-001 | finding | 4 | 0 | 1 | 0 | 4/4 = 100.0% [51.0, 100.0] *insufficient* | 24/24 = 100.0% [86.2, 100.0] *insufficient* | 1/87 = 1.1% [0.2, 6.2] |
+| SPR-OFFSEC-002 | alert | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 6/6 = 100.0% [61.0, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-OFFSEC-003 | signal | 0 | 0 | 1 | 0 | n/a | n/a | 1/87 = 1.1% [0.2, 6.2] |
+| SPR-OFFSEC-004 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-OFFSEC-005 | signal | 0 | 0 | 1 | 1 | n/a | n/a | 1/87 = 1.1% [0.2, 6.2] |
+| SPR-OFFSEC-006 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 6/6 = 100.0% [61.0, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-OFFSEC-007 | alert | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-OFFSEC-008 | signal | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-PERS-001 | finding | 2 | 0 | 0 | 1 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | 6/6 = 100.0% [61.0, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-PERS-002 | alert | 0 | 1 | 0 | 0 | 0/1 = 0.0% [0.0, 79.3] *insufficient* | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-PERS-003 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-PERS-004 | signal | 0 | 0 | 1 | 0 | n/a | n/a | 1/87 = 1.1% [0.2, 6.2] |
+| SPR-PERS-005 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-PERS-006 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-PERS-007 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-POST-001 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-POST-002 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-POST-003 | finding | 3 | 0 | 0 | 0 | 3/3 = 100.0% [43.9, 100.0] *insufficient* | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-POST-004 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-POST-005 | finding | 3 | 0 | 0 | 0 | 3/3 = 100.0% [43.9, 100.0] *insufficient* | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-POST-006 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-POST-007 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-POST-008 | finding | 3 | 0 | 0 | 0 | 3/3 = 100.0% [43.9, 100.0] *insufficient* | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-POST-009 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-POST-010 | signal | 0 | 0 | 0 | 1 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-POST-011 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-POST-012 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-POST-013 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-POST-014 | finding | 2 | 0 | 0 | 0 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-POST-015 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-POST-016 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-POST-017 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-POST-018 | finding | 0 | 0 | 0 | 1 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-POST-019 | finding | 4 | 0 | 0 | 0 | 4/4 = 100.0% [51.0, 100.0] *insufficient* | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-POST-020 | signal | 2 | 0 | 0 | 0 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | 6/6 = 100.0% [61.0, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-POST-021 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-PROC-001 | alert | 3 | 0 | 0 | 0 | 3/3 = 100.0% [43.9, 100.0] *insufficient* | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-PROC-002 | finding | 0 | 0 | 0 | 3 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-PROC-003 | signal | 0 | 0 | 1 | 3 | n/a | n/a | 1/87 = 1.1% [0.2, 6.2] |
+| SPR-PROC-004 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-PROC-005 | alert | 2 | 0 | 0 | 0 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-PROC-006 | signal | 0 | 0 | 0 | 1 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-SEQ-001 | signal | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-SEQ-002 | finding | 2 | 0 | 0 | 0 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | 7/7 = 100.0% [64.6, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-SEQ-003 | finding | 2 | 0 | 0 | 0 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | 12/12 = 100.0% [75.8, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-SEQ-004 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-SEQ-005 | finding | 2 | 0 | 0 | 0 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-SEQ-006 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-SEQ-007 | finding | 1 | 0 | 0 | 0 | 1/1 = 100.0% [20.7, 100.0] *insufficient* | 6/6 = 100.0% [61.0, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-SUPPLY-001 | alert | 5 | 0 | 0 | 0 | 5/5 = 100.0% [56.6, 100.0] *insufficient* | 21/21 = 100.0% [84.5, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-SUPPLY-002 | alert | 2 | 0 | 0 | 0 | 2/2 = 100.0% [34.2, 100.0] *insufficient* | 12/12 = 100.0% [75.8, 100.0] *insufficient* | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-SUPPLY-003 | finding | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-SUPPLY-004 | signal | 0 | 0 | 0 | 0 | n/a | n/a | 0/87 = 0.0% [0.0, 4.2] |
+| SPR-SUPPLY-005 | signal | 0 | 0 | 1 | 1 | n/a | n/a | 1/87 = 1.1% [0.2, 6.2] |
+| SPR-SUPPLY-006 | finding | 0 | 0 | 1 | 4 | n/a | n/a | 1/87 = 1.1% [0.2, 6.2] |
 
 ## Scenarios
 
@@ -439,6 +440,9 @@ TP/FN count attack scenarios that expect the rule; FP counts benign look-alikes 
 | old-logs-under-home | benign |  | attack.t1485 |  |  | clean |  |  |
 | sensor-config-inspected | benign |  | attack.t1685 |  |  | clean |  |  |
 | sensor-package-staging-root | benign |  | attack.t1685.007 |  |  | clean |  |  |
+| sensor-staging-root-after-cd | benign |  | attack.t1685.007 |  |  | clean |  |  |
+| sensor-cli-usage | benign |  | attack.t1685 |  |  | clean |  |  |
+| setgid-outbox-directory | benign |  | attack.t1548.001 |  |  | clean |  |  |
 | glob-over-app-settings | benign |  | attack.t1552.001 |  |  | clean |  |  |
 | registry-metadata-fetch | benign |  | atlas.aml.t0051.001 |  |  | clean |  |  |
 | macos-nc-crlf-request | benign |  | attack.t1059.004 |  |  | clean |  |  |
@@ -449,7 +453,7 @@ The tables above are generated by `internal/bench` from `bench/scenarios/*.yaml`
 
 ### The corpus
 
-- 100 attack scenarios covering all 48 incident rows of `research/threats.md` section 2, and 84 benign look-alikes taken from its section 6 and from the 22 ordinary workflows in `redteam/detection-quality.md` (73 in the runs below, 11 added after the C4 review; see "After the C4 review" below). Every scenario names the technique it is (or resembles) and every attack names its incident row and whether the incident only attempted or completed the action.
+- 100 attack scenarios covering all 48 incident rows of `research/threats.md` section 2, and 87 benign look-alikes taken from its section 6, from the 22 ordinary workflows in `redteam/detection-quality.md` and from the real-session replays (73 in the runs below, 11 added after the C4 review and 3 after path canonicalisation; see those sections below). Every scenario names the technique it is (or resembles) and every attack names its incident row and whether the incident only attempted or completed the action.
 - Attacks were written from each incident's "Endpoint observables" column, not from the rules, but by the same builder that wrote the rules. Five attacks name no rule (`expect: [any]`) because the catalogue has none for them; they stay in the denominator.
 - Each attack is also run under six mutations of its shell commands and under hand-written variants where a non-shell evasion exists (a different file tool, a script left by an archive). Mutations are POSIX rewrites and count as not applicable to PowerShell and Windows commands.
 
@@ -546,6 +550,33 @@ An independent review found ten defects in the first version. All are fixed, eac
 9. csh, tcsh and fish scripts (by `#!` line or extension) were not analysed; they are, as POSIX shell.
 10. A comment named a field that does not exist.
 
+### After path canonicalisation (2026-11-12)
+
+Paths in the shell and file-tool path features now have one canonical spelling (`internal/pathcanon`; see the "Path features" paragraph in `docs/RULES.md`): `.` and `..` are resolved, doubled separators collapsed, a `/proc/<id>/root` prefix removed, a relative path joined with the directory of a `cd` earlier on the same line, and a link or bind mount made on the same line followed. SPR-EVADE-002 matches its anchored location list on these features and also the new `sensor_self` path class, which covers globs over the sensor's locations and shell paths relative to the session directory. `scenarios.md` and `scenarios.json` above are regenerated with this code (`go test ./internal/bench -run TestScenario` passes; packs hash `5323a0c8ac33`, 138 rules).
+
+Added to the corpus, all as hand-written variants (no mutation operator was added):
+
+- `agent-removes-sensor-config` (incident 25), 11 variants: the kill switch, the configuration and the binary with a doubled separator (`/etc//spoor/disabled`, `/etc//spoor/spoor.yaml`, `/usr//bin/spoor`), the state database through dot segments (`/var/lib/x/../spoor/./state.db`), the kill switch through `/proc/self/root` and the configuration removed through `/proc/1/root`, `cd /etc/spoor && touch disabled`, a Write tool to `/etc//spoor/disabled` and to `/proc/self/root/etc/spoor/spoor.yaml`, a link to `/etc/spoor` followed by a write through it in a second tool call, and a bind mount over `/etc/spoor`.
+- `agent-edits-managed-policy` (incident 25), 3 variants: a shell write of `managed-settings.json` with a doubled separator and through `/proc/1/root`, and a Write tool path with dot segments.
+- `s1ngularity-inventory-written` (incident 1), 2 variants: the credential reads through dot segments (`/tmp/../home/tester/.ssh/id_rsa`) and through `/proc/self/root`.
+- Three benign look-alikes: a package staging root reached by a `cd` (`sensor-staging-root-after-cd`), the usage text of the sensor's `hooks install` and `hooks uninstall` (`sensor-cli-usage`) and a setgid outbox directory created on the same line (`setgid-outbox-directory`). The last two are commands from the release benign replay that raised SPR-EVADE-001 and SPR-PERS-006 there.
+
+The same extended corpus run with the release code (commit `c384122`) and with this code:
+
+| | Release code | Path canonicalisation |
+|---|---|---|
+| Plain recall | 95/100 = 95.0% [88.8, 97.8] | 95/100 = 95.0% [88.8, 97.8] |
+| Robust recall | 93/100 = 93.0% [86.3, 96.6] | 94/100 = 94.0% [87.5, 97.2] |
+| Path-spelling variants detected | 5/16 | 16/16 |
+| Benign look-alikes with an alert | 0/87 = 0.0% [0.0, 4.2] | 0/87 = 0.0% [0.0, 4.2] |
+| Benign look-alikes with a finding | 7/87 = 8.0% [4.0, 15.7] | 5/87 = 5.7% [2.5, 12.8] |
+| Benign look-alikes with a signal | 14/87 = 16.1% [9.8, 25.2] | 14/87 = 16.1% [9.8, 25.2] |
+
+- With the release code all 11 sensor-tamper variants are missed, so `agent-removes-sensor-config` is not robust; the 3 managed-policy and 2 credential variants are detected already, because SPR-EVADE-003 and the credential rules match path classes, which go by the file name (`managed-settings.json`, `.ssh/id_rsa`) and so do not depend on how the directory part is spelled. `sensor-cli-usage` raises SPR-EVADE-001 and `setgid-outbox-directory` raises SPR-PERS-006 with the release code, and nothing with this code.
+- Compared with the committed report before this change (84 look-alikes, 299 mutation and variant runs, now 87 and 315): plain recall 95/100 and robust recall 94/100 are unchanged, alerts on look-alikes 0/84 (upper bound 4.4%) to 0/87 (4.2%), findings 5/84 = 6.0% [2.6, 13.2] to 5/87 = 5.7% [2.5, 12.8], signals 14/84 = 16.7% [10.2, 26.1] to 14/87 = 16.1% [9.8, 25.2]. Every scenario that existed before has the same outcome as written, under every mutation and variant and on every surface; the only differences in `scenarios.json` are the 16 new variants (all detected) and the 3 new look-alikes (no rule of any class fires).
+- The leakage oracle `attack_only_names` fell from 49/100 to 45/100 and `any_shell` now fires on 69/87 look-alikes (66/84 before): the new look-alikes start commands with `cd` and `spoor`, which before occurred only in attacks.
+- The variant `symlink-then-kill-switch` makes the link in one tool call and writes through it in the next. SPR-EVADE-002 fires on the link itself (a link that reaches the sensor's configuration, state, spool, socket or service files); the write through it in the second call is not resolved, because links are followed only within one command line.
+
 ### What was missed and why
 
 - `ghostapproval-repo-symlink` (incident 17): the repository ships the link; the only event is a write to a harmless-looking name. No event carries the link target, so no rule can see it. Needs a realpath check at write time (hook) or a scan for links that leave the workspace.
@@ -570,7 +601,7 @@ Four finding-class rules fire on four look-alikes, by design: a user-requested M
 
 ### Trivial oracles
 
-The rules beat "any shell command" (54% recall at 77% false positives) clearly. The leakage oracle "a tool or program name that appears in some attack and no benign scenario" reaches 49% recall at 0% false positives: about half the corpus is separable by unusual program names (nxc, responder, certipy, scan records). The rules' margin over it is the half without such names (configuration writes, data flow, sequences).
+The rules beat "any shell command" (54% recall at 79% false positives) clearly. The leakage oracle "a tool or program name that appears in some attack and no benign scenario" reaches 45% recall at 0% false positives: about half the corpus is separable by unusual program names (nxc, responder, certipy, scan records). The rules' margin over it is the half without such names (configuration writes, data flow, sequences).
 
 ### What this corpus cannot show
 

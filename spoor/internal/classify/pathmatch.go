@@ -44,8 +44,15 @@ type ruleGroup struct {
 	// ci makes the patterns case-insensitive on every OS. It is for names
 	// whose meaning is a convention of tools rather than a location
 	// ("*.PEM" is still a PEM file on Linux).
-	ci   bool
-	pats []string
+	ci bool
+	// named: the last component of each pattern is the name the class is
+	// about ("spoor" in /etc/spoor/**). An input wildcard with no literal
+	// text there matches it only when the input names something literal
+	// below it: "/etc/*/disabled" can reach /etc/spoor/disabled, while
+	// "/usr/local/bin/*" and "/var/log/*" are about every name in the
+	// directory.
+	named bool
+	pats  []string
 }
 
 type segPat struct {
@@ -58,6 +65,7 @@ type pathPat struct {
 	class   pathClass
 	os      osMask
 	ci      bool
+	named   bool
 	rooted  bool
 	subtree bool
 	segs    []segPat
@@ -91,7 +99,7 @@ func buildIndex(groups []ruleGroup) *patIndex {
 	for _, g := range groups {
 		for _, src := range g.pats {
 			p := compilePattern(src)
-			p.class, p.os, p.ci = g.class, g.os, g.ci
+			p.class, p.os, p.ci, p.named = g.class, g.os, g.ci, g.named
 			idx.all = append(idx.all, p)
 			first := p.segs[0]
 			switch {
@@ -156,6 +164,9 @@ func (p *pathPat) matchAt(lp *lexPath, i int, os osMask) bool {
 			return false
 		}
 		strong = strong || firm
+		if p.named && j == len(p.segs)-1 && !firm && lp.wild[i+j] && !literalBelow(lp, end) {
+			return false
+		}
 	}
 	// A subtree match that continues below the pattern has matched every
 	// pattern component against a directory name, which a bare "*" in the
@@ -205,6 +216,17 @@ func matchSeg(sp *segPat, lp *lexPath, i int, fold bool) (ok, firm bool) {
 		return false, false
 	}
 	return true, lit >= 3
+}
+
+// literalBelow reports a component at index from or after it that holds
+// no wildcard.
+func literalBelow(lp *lexPath, from int) bool {
+	for k := from; k < len(lp.segs); k++ {
+		if !lp.wild[k] {
+			return true
+		}
+	}
+	return false
 }
 
 func literalLen(glob string) int {

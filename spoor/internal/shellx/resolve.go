@@ -556,7 +556,9 @@ func (w *walker) cmdSubst(b *fieldBuilder, cs *syntax.CmdSubst, quoted bool) {
 		b.dynamic("$(...)", 0)
 		return
 	}
+	saved := w.a.saveCwd()
 	out := sub.stmts(cs.Stmts, noFlow(), true)
+	w.a.restoreCwd(saved)
 	if out.static != nil {
 		s := strings.TrimRight(*out.static, "\n")
 		if out.t&tPayload != 0 {
@@ -582,7 +584,9 @@ func (w *walker) procSubst(b *fieldBuilder, ps *syntax.ProcSubst) {
 		b.cur.proc = true
 		return
 	}
+	saved := w.a.saveCwd()
 	out := sub.stmts(ps.Stmts, noFlow(), true)
+	w.a.restoreCwd(saved)
 	if out.static != nil && out.t&tPayload != 0 {
 		w.a.sinkDecoded(*out.static, w.depth)
 	}

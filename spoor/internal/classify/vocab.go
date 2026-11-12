@@ -52,6 +52,11 @@ const (
 	// arrived from elsewhere (a browser download directory) are the untrusted
 	// location several threat rules key on.
 	PathDownloads = "downloads"
+	// PathSensorSelf is an addition too: this sensor's own files at the
+	// locations it installs to (configuration, state, logs, binary, service
+	// definitions), rooted or anchored at a home directory. sensor_files is
+	// broader (other security tools, and these names at any depth).
+	PathSensorSelf = "sensor_self"
 )
 
 // pathClass is a bit index into a set; the order here is the order classes
@@ -106,6 +111,7 @@ const (
 	pcHomeRoot
 	pcSystemDir
 	pcDownloads
+	pcSensorSelf
 	pcCount
 )
 
@@ -121,6 +127,7 @@ var pathClassNames = [pcCount]string{
 	PathPackageManifest, PathLockfile, PathDockerfile, PathIaC,
 	PathCertPrivateKey, PathTokenFile, PathTemp, PathDevice, PathProcEnviron,
 	PathOutsideCWD, PathHomeRoot, PathSystemDir, PathDownloads,
+	PathSensorSelf,
 }
 
 // pathSet is a set of path classes.
@@ -171,7 +178,7 @@ var sensitiveWrite = lazySet{list: []string{
 	PathCron, PathLaunchd, PathSystemdUnit,
 	PathStartupItem, PathSystemAuth, PathAgentConfig,
 	PathAgentManagedPolicy, PathAgentHook, PathAgentSkill,
-	PathMCPConfig, PathSensorFiles, PathVCSHook,
+	PathMCPConfig, PathSensorFiles, PathSensorSelf, PathVCSHook,
 	PathVCSInternal, PathNPMToken, PathPyPIToken,
 	PathDockerConfig, PathKubeConfig, PathGitCredentials,
 	PathDevice, PathSystemDir,

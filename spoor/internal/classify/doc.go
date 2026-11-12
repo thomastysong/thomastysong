@@ -64,6 +64,7 @@
 //	home_root             a home directory or an entry directly in it
 //	system_dir            directories owned by the operating system
 //	downloads             a user's Downloads directory (addition to the specified vocabulary)
+//	sensor_self           this sensor's own files where it installs them, rooted or under a home directory (addition)
 //
 // IsSensitiveRead and IsSensitiveWrite group these into "reading this is
 // credential access" and "writing this is persistence or tampering".

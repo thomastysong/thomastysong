@@ -5,11 +5,24 @@ import (
 	"strings"
 )
 
+// Options carry what the caller knows about where the command line runs.
+type Options struct {
+	// OS is the host's operating system in runtime.GOOS spelling, or ""
+	// when unknown. On a host known not to be Windows a POSIX shell's
+	// paths are POSIX paths: "a:" is a name, not a drive.
+	OS string
+}
+
 // Analyze derives Facts from one command line. hint selects the dialect; ""
 // auto-detects it. Analyze never panics and always returns non-nil Facts:
 // the input is attacker-controlled (it arrives on hook stdin), so every
 // failure mode degrades to a heuristic, truncated result instead of an error.
 func Analyze(cmdline string, hint Dialect) *Facts {
+	return AnalyzeWith(cmdline, hint, Options{})
+}
+
+// AnalyzeWith is Analyze with what the caller knows about the host.
+func AnalyzeWith(cmdline string, hint Dialect, o Options) *Facts {
 	ensureTables()
 	f := &Facts{ParseOK: true}
 	src := cmdline
@@ -25,6 +38,11 @@ func Analyze(cmdline string, hint Dialect) *Facts {
 	}
 	f.Dialect = d
 	a := newAnalyzer(f)
+	switch strings.ToLower(o.OS) {
+	case "", "windows", "win", "win32":
+	default:
+		a.posixHost = true
+	}
 	func() {
 		defer a.guard()
 		if strings.TrimSpace(src) == "" {
@@ -466,19 +484,26 @@ func winPathCommand(w string) bool {
 // front end and every command gets the same answer.
 func (a *analyzer) classifyUses() {
 	for _, u := range a.uses {
-		n := normPath(u.path)
+		n := u.norm
 		if n == "" {
 			continue
 		}
 		switch u.mode {
 		case mRead, mMove:
-			if cls := readClass(u.path); cls != "" {
+			if cls := readClassNorm(n); cls != "" {
 				a.cred(cls)
 			}
 		}
 		switch u.mode {
 		case mWrite, mAppend, mLink, mAttr:
-			if cls := persistClass(n); cls != "" {
+			cls := persistClass(n)
+			if cls == "" && u.mode != mAttr {
+				// A write whose target is a persistence directory itself
+				// (cp x.service /etc/systemd/system/) puts a file in it; the
+				// canonical form has dropped the trailing separator.
+				cls = persistClass(n + "/")
+			}
+			if cls != "" {
 				a.persist(cls)
 			}
 			if isSudoersPath(n) && u.mode != mAttr {
@@ -487,6 +512,9 @@ func (a *analyzer) classifyUses() {
 		}
 		switch u.mode {
 		case mWrite, mAppend, mLink, mDelete, mAttr, mMove:
+			// Not mAlias: making a path reachable under another name changes
+			// nothing. A write through the new name on this line is recorded
+			// under the path it reaches (analyzer.reached).
 			if isAgentHookPath(n) {
 				a.evasion("agent_hook_tamper")
 			}

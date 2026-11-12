@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/thomastysong/spoor/internal/classify"
 	"github.com/thomastysong/spoor/internal/event"
@@ -22,6 +23,9 @@ const (
 	defaultSamples    = 5
 	maxSampleText     = 240
 	maxLabelledSample = 40
+	// evidenceCut is the length the engine cuts an evidence value to
+	// (maxEvidenceValue in internal/rules); see cutTail.
+	evidenceCut = 256
 )
 
 // ReplayOptions configures a benign replay.
@@ -439,9 +443,46 @@ func summarize(ev map[string]string, aliases []Alias) string {
 	keys := sortedKeys(ev)
 	parts := make([]string, 0, len(keys))
 	for _, k := range keys {
-		parts = append(parts, k+"="+ev[k])
+		parts = append(parts, k+"="+cutTail(ev[k], aliases))
 	}
 	return cleanText(applyAliases(strings.Join(parts, "; "), aliases))
+}
+
+// cutTail handles a path alias cut short at the end of an evidence value
+// the engine cut ("cd /home/u" left of "cd /home/user/repo" with the alias
+// "/home/user/repo=$REPO"). applyAliases leaves short path prefixes alone,
+// because they also occur whole ("/home/user"), so such a tail would show
+// the path the alias hides. Only a value of the engine's cut length is
+// treated, and only its tail: a proper prefix of a path alias, at least
+// minAliasCut bytes, that starts a path and does not start with a whole
+// alias (applyAliases replaces that one). It is replaced by the alias's
+// To, or dropped when it is a prefix of aliases with different To.
+func cutTail(v string, as []Alias) string {
+	if len(v) <= evidenceCut-utf8.UTFMax {
+		return v
+	}
+	for i := 0; i+minAliasCut <= len(v); i++ {
+		if i > 0 && (idByte(v[i-1]) || strings.IndexByte(`/\.~$`, v[i-1]) >= 0) {
+			continue
+		}
+		tail, to, n := v[i:], "", 0
+		for _, a := range as {
+			if a.From != "" && strings.HasPrefix(tail, a.From) {
+				n = 0
+				break
+			}
+			if strings.ContainsAny(a.From, `/\`) && len(tail) < len(a.From) && strings.HasPrefix(a.From, tail) && (n == 0 || a.To != to) {
+				to, n = a.To, n+1
+			}
+		}
+		switch {
+		case n == 1:
+			return v[:i] + to
+		case n > 1:
+			return v[:i]
+		}
+	}
+	return v
 }
 
 func summarizeEvent(ev *event.Event, aliases []Alias) string {

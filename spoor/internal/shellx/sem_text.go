@@ -30,9 +30,21 @@ func hNoOutput(a *analyzer, c *simple, in flow, out *flow) {
 	out.static, out.t = &empty, 0
 }
 
-// secretVarRefs reports "$NAME" / "%NAME%" / "$env:NAME" references to
-// variables whose names denote credentials.
-func secretVarRef(s string) bool {
+// secretVarRef reports "$NAME" / "%NAME%" / "$env:NAME" references to
+// variables whose names denote credentials and whose value the analysis
+// does not know to be literal text of the command line: "for pat in
+// '*.go' ...; do printf '%s' "$pat"" prints a glob, not a personal access
+// token.
+func (a *analyzer) secretVarRef(s string) bool {
+	return secretVarRefExcept(s, func(name string) bool {
+		v, ok := a.getVar(name)
+		return ok && v.lit
+	})
+}
+
+func secretVarRef(s string) bool { return secretVarRefExcept(s, nil) }
+
+func secretVarRefExcept(s string, literal func(string) bool) bool {
 	for i := 0; i < len(s); i++ {
 		switch s[i] {
 		case '$':
@@ -47,7 +59,7 @@ func secretVarRef(s string) bool {
 			for k < len(s) && isIdentByte(s[k]) {
 				k++
 			}
-			if k > j && secretName(s[j:k]) {
+			if k > j && secretName(s[j:k]) && (literal == nil || !literal(s[j:k])) {
 				return true
 			}
 			i = k - 1
@@ -95,7 +107,7 @@ func hEcho(a *analyzer, c *simple, in flow, out *flow) {
 		t |= args[i].t
 		if args[i].dyn {
 			static = false
-			if secretVarRef(args[i].s) {
+			if a.secretVarRef(args[i].s) {
 				a.cred("token_print")
 			}
 		}
@@ -138,7 +150,7 @@ func hPrintf(a *analyzer, c *simple, in flow, out *flow) {
 	}
 	for i := range args {
 		if args[i].dyn {
-			if secretVarRef(args[i].s) {
+			if a.secretVarRef(args[i].s) {
 				a.cred("token_print")
 			}
 			return

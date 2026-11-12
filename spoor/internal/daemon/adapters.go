@@ -67,7 +67,8 @@ func (r *adapterRunner) run(ctx context.Context) error {
 
 func (r *adapterRunner) step() {
 	d := r.d
-	if d.env.disabled() {
+	off, settling := d.gate.state()
+	if off {
 		r.off = true
 		d.board.update("adapters", func(s *event.SurfaceStatus) { s.Status, s.Reason = "disabled", "kill_switch" })
 		return
@@ -77,10 +78,14 @@ func (r *adapterRunner) step() {
 		r.loaded = true
 	}
 	if r.off {
-		// Records written while the sensor was off are not collected later.
+		// Records written while the sensor was off are not collected
+		// later: with no checkpoints the next pass records every file's
+		// current end and hands nothing over, so it may run at once.
 		r.off = false
 		r.ck = map[string]adCkpt{}
 		r.dirty = true
+	} else if settling {
+		return
 	}
 	seen := map[string]bool{}
 	drift := false

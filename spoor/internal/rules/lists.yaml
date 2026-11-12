@@ -113,6 +113,44 @@ lists:
     - "function-color@*"
     - "postmark-mcp@1.0.16"   # row 35: one-line BCC added after 15 clean versions (Sep 2025)
 
+  # Search, listing and inspection commands. A command line made only of
+  # these that names a worm indicator is someone hunting for it, which is
+  # what every advisory asked developers to do (SPR-SUPPLY-006). gh is
+  # listed for gh search / gh repo list; gh repo create with an indicator
+  # name is SPR-SUPPLY-001 whatever else is on the line.
+  ioc_hunt_commands:
+    - find
+    - fd
+    - locate
+    - mdfind
+    - grep
+    - egrep
+    - fgrep
+    - rg
+    - ag
+    - ack
+    - git
+    - ls
+    - stat
+    - file
+    - cat
+    - head
+    - tail
+    - less
+    - wc
+    - sort
+    - uniq
+    - xargs
+    - sha256sum
+    - sha1sum
+    - shasum
+    - md5sum
+    - jq
+    - gh
+    - npm
+    - pnpm
+    - yarn
+
   # Offensive security tools (SPR-OFFSEC-001), by command name. Hosts
   # tagged offsec (Options.HostTags) are exempt in the rule itself.
   offensive_tools:

@@ -189,7 +189,7 @@ func (b *bundleMgr) run(ctx context.Context) error {
 			return nil
 		case <-time.After(wait):
 		}
-		if !d.env.disabled() {
+		if !d.gate.idle() {
 			b.pull(ctx)
 		}
 		wait = interval - interval/10 + time.Duration(rand.Int64N(int64(interval/5)+1))

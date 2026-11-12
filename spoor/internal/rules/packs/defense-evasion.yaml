@@ -57,7 +57,7 @@ rules:
       (/etc/spoor, /var/lib/spoor, /run/spoor on Linux; /Library/Application
       Support/spoor and /var/run/spoor on macOS; C:\ProgramData\spoor on
       Windows), the per-user directories (~/.local/state/spoor,
-      ~/Library/Application Support/spoor, %'(?i)^(/etc/spoor|/var/lib/spoor|(/private)?/var/run/spoor|/run/spoor|/var/log/spoor|/opt/spoor|/usr/(local/)?(s?bin|lib|libexec)/spoor|(/usr/lib|/lib|/etc)/systemd/system/spoor\.service(\.d)?|/Library/(Application Support|Logs)/spoor|/Library/LaunchDaemons/com\.github\.thomastysong\.spoor\.plist|[a-z]:[\\/](program files|programdata)[\\/]spoor|(%(programdata|programfiles|localappdata)%|\$env:(programdata|programfiles|localappdata))[\\/]spoor|(~|\$\{?home\}?|/root|/var/root|/home/[^/]+|/Users/[^/]+)/(\.local/state|Library/Application Support)/spoor|(~|\$\{?home\}?|%userprofile%|\$env:userprofile|[a-z]:[\\/]users[\\/][^\\/]+)[\\/]appdata[\\/]local[\\/]spoor)([/\\]|$)'ALAPPDATA%\spoor), the
+      ~/Library/Application Support/spoor, %LOCALAPPDATA%\spoor), the
       binary, the service unit and the launchd plist. Creating the file
       "disabled" in the configuration directory is the documented kill
       switch. Whoever can change the sensor decides what it reports. The
@@ -138,7 +138,7 @@ rules:
         event: { type: tool.pre, host: { os: darwin }, tool: { kind: shell, name: Bash }, target: { command: "sudo touch '/Library/Application Support/spoor/disabled'" } }
         expect: match
       - name: Windows per-user spool removed
-        event: { type: tool.pre, host: { os: windows }, tool: { kind: shell, name: PowerShell }, target: { command: "Remove-Item -Recurse -Force $env:'(?i)^(/etc/spoor|/var/lib/spoor|(/private)?/var/run/spoor|/run/spoor|/var/log/spoor|/opt/spoor|/usr/(local/)?(s?bin|lib|libexec)/spoor|(/usr/lib|/lib|/etc)/systemd/system/spoor\.service(\.d)?|/Library/(Application Support|Logs)/spoor|/Library/LaunchDaemons/com\.github\.thomastysong\.spoor\.plist|[a-z]:[\\/](program files|programdata)[\\/]spoor|(%(programdata|programfiles|localappdata)%|\$env:(programdata|programfiles|localappdata))[\\/]spoor|(~|\$\{?home\}?|/root|/var/root|/home/[^/]+|/Users/[^/]+)/(\.local/state|Library/Application Support)/spoor|(~|\$\{?home\}?|%userprofile%|\$env:userprofile|[a-z]:[\\/]users[\\/][^\\/]+)[\\/]appdata[\\/]local[\\/]spoor)([/\\]|$)'ALAPPDATA\\spoor" } }
+        event: { type: tool.pre, host: { os: windows }, tool: { kind: shell, name: PowerShell }, target: { command: "Remove-Item -Recurse -Force $env:LOCALAPPDATA\\spoor" } }
         expect: match
       - name: Windows kill switch
         event: { type: tool.pre, host: { os: windows }, tool: { kind: shell, name: PowerShell }, target: { command: "New-Item -ItemType File -Path C:\\ProgramData\\spoor\\disabled" } }

@@ -88,21 +88,27 @@ func (r *transcriptRunner) run(ctx context.Context) error {
 // step is one poll: kill switch, root changes (priming), then reading.
 func (r *transcriptRunner) step(ctx context.Context) {
 	d := r.d
-	if d.env.disabled() {
+	off, settling := d.gate.state()
+	if off {
 		r.off = true
 		d.board.update("transcripts", func(s *event.SurfaceStatus) { s.Status, s.Reason = "disabled", "kill_switch" })
 		return
 	}
-	if r.off {
-		// Nothing written while the sensor was switched off is collected
-		// afterwards: forget the checkpoints and start every file at its
-		// current end again.
-		r.off = false
-		r.reset()
-	}
 	if !r.loaded {
 		r.loadAdmitted()
 		r.loaded = true
+	}
+	if r.off {
+		// Nothing written while the sensor was switched off is collected
+		// afterwards: forget the checkpoints and prime at once, so every
+		// file starts where it stands at the release (a priming pass with
+		// no checkpoints hands nothing over).
+		r.off = false
+		r.reset()
+		r.prime(ctx, d.transcriptRoots())
+	}
+	if settling {
+		return
 	}
 	roots := d.transcriptRoots()
 	fresh := false

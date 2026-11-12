@@ -185,7 +185,7 @@ func (s *scanner) projectWorker(ctx context.Context) error {
 			return nil
 		case req = <-s.projQ:
 		}
-		if d.env.disabled() {
+		if d.gate.idle() {
 			continue
 		}
 		u, ok := d.users.byID(req.uid)
@@ -259,7 +259,7 @@ func (s *scanner) run(ctx context.Context) error {
 	defer t.Stop()
 	for {
 		now := d.env.now()
-		if s.enabled() && !d.env.disabled() && (lastScan.IsZero() || now.Sub(lastScan) >= interval) {
+		if s.enabled() && !d.gate.idle() && (lastScan.IsZero() || now.Sub(lastScan) >= interval) {
 			full := lastFull.IsZero() || now.Sub(lastFull) >= fullEvery
 			s.scan(ctx, full)
 			lastScan = d.env.now()
@@ -271,7 +271,7 @@ func (s *scanner) run(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return nil
 		}
-		if !d.env.disabled() && (lastHooks.IsZero() || now.Sub(lastHooks) >= hooksEvery) {
+		if !d.gate.idle() && (lastHooks.IsZero() || now.Sub(lastHooks) >= hooksEvery) {
 			s.refreshHooks()
 			lastHooks = d.env.now()
 		}

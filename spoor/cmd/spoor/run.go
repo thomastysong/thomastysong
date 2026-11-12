@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"strings"
 	"syscall"
 
@@ -60,7 +61,15 @@ func (a *app) cmdRun(args []string) int {
 
 // runDaemon runs the daemon until ctx ends; a return caused by the
 // cancellation itself is a clean stop.
-func runDaemon(ctx context.Context, cfg *config.Config, path string, log *slog.Logger) int {
+func runDaemon(ctx context.Context, cfg *config.Config, path string, log *slog.Logger) (code int) {
+	defer func() {
+		// A panic on the daemon's own goroutine becomes an orderly failure
+		// with the stack in the log; the service manager restarts it.
+		if r := recover(); r != nil {
+			log.Error("spoor daemon panicked", "panic", fmt.Sprint(r), "stack", string(debug.Stack()))
+			code = exitError
+		}
+	}()
 	log.Info("spoor starting", "version", versionString(), "config", path, "data_dir", cfg.DataDir, "profile", cfg.Privacy.Profile)
 	err := daemonRun(ctx, cfg, log)
 	if err != nil && !(errors.Is(err, context.Canceled) && ctx.Err() != nil) {

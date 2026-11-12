@@ -101,9 +101,9 @@ func (r *spoolRunner) run(ctx context.Context) error {
 	t := time.NewTicker(poll)
 	defer t.Stop()
 	for {
-		if d.env.disabled() {
+		if off, settling := d.gate.state(); off {
 			d.board.update("hooks", func(s *event.SurfaceStatus) { s.Status, s.Reason = "disabled", "kill_switch" })
-		} else {
+		} else if !settling {
 			r.pollOnce(ctx)
 		}
 		select {

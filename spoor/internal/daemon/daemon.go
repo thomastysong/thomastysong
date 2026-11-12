@@ -138,6 +138,8 @@ type daemon struct {
 	scans  *scanner
 	trans  *transcriptRunner
 
+	gate *killGate
+
 	earlyMu sync.Mutex
 	early   []*event.Event // health records produced before the pipeline existed
 
@@ -169,6 +171,7 @@ func newDaemon(cfg *config.Config, log *slog.Logger, env runEnv) (_ *daemon, err
 		procs:   newProcView(),
 		hooks:   newHookView(),
 		board:   newBoard(),
+		gate:    newKillGate(env.disabled, env.now),
 	}
 	// Anything opened before a later step fails is closed again.
 	defer func() {
@@ -267,6 +270,48 @@ func newDaemon(cfg *config.Config, log *slog.Logger, env runEnv) (_ *daemon, err
 	d.scans = newScanner(d)
 	d.trans = newTranscriptRunner(d)
 	return d, nil
+}
+
+// releaseSettle is how long collectors keep their records back after the
+// kill switch is released: the pipeline caches its view of the switch for
+// up to a second (engine disabledTTL) and drops what it is handed meanwhile.
+const releaseSettle = 2 * time.Second
+
+// killGate is the collectors' view of the kill switch.
+type killGate struct {
+	disabled func() bool
+	now      func() time.Time
+	mu       sync.Mutex
+	wasOff   bool
+	until    time.Time
+}
+
+func newKillGate(disabled func() bool, now func() time.Time) *killGate {
+	return &killGate{disabled: disabled, now: now}
+}
+
+// state reports whether the switch is on, and whether it was released so
+// recently that records must not be handed to the pipeline yet.
+func (g *killGate) state() (off, settling bool) {
+	off = g.disabled()
+	now := g.now()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if off {
+		g.wasOff = true
+		return true, false
+	}
+	if g.wasOff {
+		g.wasOff = false
+		g.until = now.Add(releaseSettle)
+	}
+	return false, now.Before(g.until)
+}
+
+// idle is true while collectors must not hand records over.
+func (g *killGate) idle() bool {
+	off, settling := g.state()
+	return off || settling
 }
 
 // ingest hands collector output to the pipeline. The pipeline owns the

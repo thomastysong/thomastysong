@@ -186,7 +186,10 @@ func takesValue(mode flagMode, slash bool, a string) bool {
 // dashes: an option, not a value.
 func flagShaped(a string) bool {
 	name := strings.TrimLeft(a, "-")
-	if dashes := len(a) - len(name); dashes == 0 || dashes > 2 || name == "" || len(name) > 48 || !(name[0] >= 'a' && name[0] <= 'z' || name[0] >= 'A' && name[0] <= 'Z') {
+	if dashes := len(a) - len(name); dashes == 0 || dashes > 2 || name == "" || len(name) > 48 {
+		return false
+	}
+	if c := name[0]; !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z') {
 		return false
 	}
 	for i := 0; i < len(name); i++ {

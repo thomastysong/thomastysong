@@ -25,6 +25,7 @@ type counters struct {
 	bypassFindings, bypassSignals, ruleTimeouts, flowScrubbed    uint64
 	panics, errors                                               uint64
 	otelAttributed, otelUnattributed, otelAmbiguous, otelPending uint64
+	otelUnmatched                                                uint64
 	covUnknownAgent, untrustedProcess, unknownVocab              uint64
 	firstSeenHosts, firstSeenMCP                                 uint64
 }
@@ -127,6 +128,7 @@ func (p *Pipeline) totals() map[string]uint64 {
 		"correlate.otel_unattributed":  c.otelUnattributed,
 		"correlate.otel_ambiguous":     c.otelAmbiguous,
 		"correlate.otel_pending":       c.otelPending,
+		"correlate.otel_unmatched":     c.otelUnmatched,
 		"ingest.unknown_vocab":         c.unknownVocab,
 		"baseline.first_seen_hosts":    c.firstSeenHosts,
 		"baseline.first_seen_mcp":      c.firstSeenMCP,

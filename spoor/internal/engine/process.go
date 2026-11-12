@@ -317,6 +317,11 @@ func (p *Pipeline) activity(ev *event.Event, skey string, now time.Time, how att
 	case corrHeld, corrDuplicate:
 		return
 	}
+	if how == attrSession {
+		// Not folded into a twin: on its own it is not that account's.
+		p.withoutAccount(ev, now)
+		return
+	}
 	p.evaluate(ev, s, now)
 	if s != nil {
 		p.maybeFinal(s, now)

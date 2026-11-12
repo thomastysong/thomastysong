@@ -59,9 +59,9 @@ type held struct {
 	skey string
 	at   time.Time
 	done bool
-	// noBypass: released unmatched, the record is not a tool call the hook
-	// missed (an OTel record whose account was attributed, see
-	// attribution.go).
+	// noBypass: an OTel record whose account was attributed through its
+	// session id (attribution.go). Released unmatched, it is not a tool
+	// call the hook missed, and it is processed without the account.
 	noBypass bool
 }
 
@@ -288,7 +288,12 @@ func (p *Pipeline) releaseOne(h *held, now time.Time, unmatched bool) {
 			s.unmatchedCall(h.ev.Tool.UseID, h.ev.ID)
 		}
 	}
-	p.processHeld(h.ev, s, now)
+	if h.noBypass {
+		// An attributed OTel record without its twin (attribution.go).
+		p.withoutAccount(h.ev, now)
+	} else {
+		p.processHeld(h.ev, s, now)
+	}
 	if s != nil {
 		p.maybeFinal(s, now)
 	}

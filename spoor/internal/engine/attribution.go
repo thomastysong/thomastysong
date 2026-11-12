@@ -18,13 +18,15 @@ import (
 // The engine therefore attributes such a record to the one live session,
 // with an account, that has the same host, agent and session id:
 //
-//   - exactly one: the record takes that session's account. Because any
-//     local user can post OTel, an attributed record only corroborates and
-//     is compared: it adds its surface, folds into its twin, feeds the
-//     hook-run comparison and, unmatched, is written as that session's
-//     activity, but it never counts as a tool call the hook missed (the
-//     input of the hook-bypass finding), so one account cannot push another
-//     towards a finding with forged calls.
+//   - exactly one: the record takes that session's account, but only as a
+//     correlation key. Any local user can post OTel, so an attributed
+//     record only corroborates and is compared: it adds its surface, folds
+//     into its twin (same Dedupe) and feeds the hook-run comparison. A
+//     record that does not fold (no twin within HoldFor, or nothing to fold
+//     into) is processed without an account, like a record no session
+//     claimed, so its content, and any rule finding from it, is never put
+//     on an account it cannot prove; for the same reason it never counts as
+//     a tool call the hook missed (the input of the hook-bypass finding).
 //   - several (two accounts claim the same session id, which only a forgery
 //     produces): the record is dropped and counted.
 //   - none yet: the record waits up to HoldFor (OTel batches usually arrive
@@ -222,6 +224,15 @@ func (p *Pipeline) adoptPending(now time.Time) {
 			p.resolvePending(r, now, false)
 		}
 	}
+}
+
+// withoutAccount processes an attributed OTel record that did not fold into
+// a twin as a record without an account.
+func (p *Pipeline) withoutAccount(ev *event.Event, now time.Time) {
+	ev.User = nil
+	ev.Dedupe = "" // derived again, without the account
+	p.ctr.otelUnmatched++
+	p.processAsSafe(ev, now, attrNone)
 }
 
 // releasePending ends the wait of records older than HoldFor (all of them

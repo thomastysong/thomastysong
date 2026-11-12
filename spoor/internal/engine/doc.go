@@ -10,8 +10,11 @@
 //     before any content is looked at. An excluded session stays excluded
 //     for its later records. Counted as ingest.excluded.
 //  2. Identity: an OTel record (no account: loopback carries no peer
-//     identity) takes the account of the one live session with its host,
-//     agent and session id, or waits HoldFor for one (attribution.go).
+//     identity) is attributed to the one live session with its host, agent
+//     and session id, or waits HoldFor for one (attribution.go). The
+//     account is a correlation key only: what folds into a twin or feeds
+//     the hook-run comparison uses it; anything else is processed without
+//     an account, since any local user can post OTel.
 //     Host forced to Options.Host (when set), Integrity "user" for every
 //     user-writable surface (hook, transcript, OTel, adapter) whatever the
 //     record claims, otherwise defaulted from Options and never above the
@@ -141,8 +144,11 @@
 //   - An OTel record is attributed only through a live session; when two
 //     accounts claim one session id it is dropped
 //     (correlate.otel_ambiguous); when none does within HoldFor it is
-//     processed without an account (correlate.otel_unattributed). An OTel
-//     record of an excluded session is excluded.
+//     processed without an account (correlate.otel_unattributed), and so is
+//     an attributed record that does not fold into a twin
+//     (correlate.otel_unmatched). An OTel record of an excluded session is
+//     excluded. Attributed records do add the OTel surface to the
+//     account's session and coverage.
 //   - The secret-flow skeleton keeps host names except labels shaped like
 //     an encoding; a credential that is itself a plain lower-case word used
 //     as a host label is kept.

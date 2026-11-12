@@ -330,11 +330,13 @@ lists:
   # untrusted. Hosts, not the package_registry host class: an unknown host
   # has no class, so a class test cannot see an attacker's URL next to a
   # registry URL in one command. Every host of the result must be listed
-  # here (or every host in trusted_content_hosts). The public registries of
-  # classify's package_registry class, each with its subdomains; CDNs that
-  # serve any repository's files (cdn.jsdelivr.net/gh/, esm.sh/gh/) and
-  # skill and MCP directories are left out because they serve arbitrary
-  # third-party text.
+  # here (or every host in trusted_content_hosts). These are the package
+  # indexes and metadata hosts of classify's package_registry class, each
+  # with its subdomains. Left out of that class: CDNs that serve any
+  # repository's files (cdn.jsdelivr.net/gh/, esm.sh/gh/, unpkg.com),
+  # user-submitted build recipes (aur.archlinux.org), extension
+  # marketplaces, and skill and MCP directories, whose pages are the text
+  # an agent is steered by.
   trusted_registry_hosts:
     - registry.npmjs.org
     - npmjs.com

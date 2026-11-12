@@ -62,6 +62,14 @@ Replayed on 2026-11-12 over a snapshot taken at 05:17:47Z (report: `live-benign-
 - Zero false-positive alerts in 5,337 tool calls bounds the alert false-positive rate below 0.72 per 1,000 tool calls at 95% confidence, nothing tighter. Showing a rule below 1 in 10,000 sessions takes about 30,000 benign sessions with zero hits (rule of three).
 - Hooks, the process monitor and inventory scans were not part of the replay; OS-plane (SPR-PROC-*), posture (SPR-POST-*) and coverage rules are exercised only by the scenario corpus.
 
+### After the C4 review fixes
+
+The rule changes listed in `scenarios.md` ("After the C4 review": the installer allowlist, sensor files, globbed credential reads, the registry exemption, SPR-EXEC-008's loopback exemption, home-directory wipes, the worm-indicator alert and `nc -c`) were measured on real sessions before they were kept.
+
+- Both earlier snapshots were replayed again with the fixed packs (this report and `live-benign-replay.md` are that run). Every rule has the same hits as before except SPR-EXFIL-013, a signal, with one more hit in each snapshot. The pre-fix packs give the same extra hit on the current features package, so it comes from a concurrent change there, not from the packs; its two newly sampled hits are labelled `false_positive` (the same captured-value pattern as the other samples).
+- A third snapshot, taken 2026-11-12T05:59Z: 117 threads, 15,514 events, 7,687 tool calls, 6,210 shell commands. It adds the threads of later builders and of the reviewer, whose tests are full of the evasions above. Replayed with the packs as the reviewer saw them and with the fixed packs, on the same features: identical hits for every rule. Alerts: 4, all known (SPR-EVADE-003 three times, red team; SPR-EVADE-002 once, the true positive described under "Second run"); no false-positive alert in 7,687 tool calls (Wilson 95% upper bound 0.50 per 1,000). The highest finding-class rate is 0.91 per 1,000 tool calls (SPR-CRED-007 and SPR-EVADE-001).
+- Two intermediate versions were rejected on this evidence. Counting any globbed read outside the working directory as a credential read, as the review suggested, added three finding-class hits each to SPR-CRED-001 and SPR-CRED-002 on ordinary greps (`grep -c osquery $S/img/etc/*`, `grep -l '"args"' $W/*.json`): a glob's classes are every class a file it could match might have. Matching a sensor location anywhere on a command line that the analyser tags `sensor_tamper` added one false alert (SPR-EVADE-002): a verification thread created `$V/bin/Program Files/spoor` and ran a stub named like the Windows install path inside `bash -c`. The kept versions count only narrow globs anchored at a home directory, and match the location on the modifying command's own operand.
+
 ### Reproducing
 
 ```

@@ -2,8 +2,8 @@
   "date": "2026-11-12",
   "corpus": "snapshot of /root/.claude/projects taken 2026-11-12T04:28:51Z",
   "rules_version": "agent-integrity@2026.11.0,coverage@2026.11.0,credential@2026.11.0,defense-evasion@2026.11.0,destructive@2026.11.0,execution@2026.11.0,exfiltration@2026.11.0,offensive@2026.11.0,persistence@2026.11.0,posture@2026.11.0,process@2026.11.0,sequence@2026.11.0,supply-chain@2026.11.0",
-  "rules_hash": "8fe10020dcff9d34db31c1b897cb49598762675d6163ba695f9f8a9c9134a8e5",
-  "rules_count": 137,
+  "rules_hash": "3d7af0367e8cb74ea80f78fd02d01ed6b008a3e4c9c6f9dc4f722cc3e1f06525",
+  "rules_count": 138,
   "stats": {
     "files": 94,
     "files_unreadable": 0,
@@ -2471,25 +2471,25 @@
       "title": "Value from an earlier broad read leaves in an outbound request",
       "class": "signal",
       "severity": "low",
-      "hits": 35,
-      "threads": 8,
-      "per_1k_tool_calls": 6.557991380925614,
+      "hits": 36,
+      "threads": 9,
+      "per_1k_tool_calls": 6.745362563237774,
       "hit_rate": {
-        "k": 35,
+        "k": 36,
         "n": 5337,
-        "p": 0.006557991380925614,
-        "lo": 0.004719292079560536,
-        "hi": 0.009106517840099387
+        "p": 0.006745362563237774,
+        "lo": 0.004876446761660151,
+        "hi": 0.009323835985066543
       },
       "thread_rate": {
-        "k": 8,
+        "k": 9,
         "n": 94,
-        "p": 0.0851063829787234,
-        "lo": 0.04375548837127667,
-        "hi": 0.15903644727489874
+        "p": 0.09574468085106383,
+        "lo": 0.05119196076308952,
+        "hi": 0.17204120730241473
       },
       "labels": {
-        "false_positive": 8
+        "false_positive": 10
       },
       "samples": [
         {
@@ -2529,6 +2529,15 @@
           "reason": "build:platform: a value captured from an earlier broad read (a glob or a listing) recurs in a download URL; not a credential"
         },
         {
+          "event_id": "01a1cbc1-58a0-757d-9716-92bf0f2cd071",
+          "thread": "-home-user/\u003csession\u003e/subagents/workflows/wf_81321001-875/agent-a6dc2f4fa112e786b.jsonl",
+          "ts": "2026-11-11T17:56:48Z",
+          "tool": "Bash",
+          "summary": "net.host=a.example, run.example, x; session.secret_flow_kinds=env_value",
+          "label": "false_positive",
+          "reason": "build:mcpconf: a value captured from an earlier broad read (a glob or a listing) recurs in fixture URLs of a test file written through a heredoc; not a credential"
+        },
+        {
           "event_id": "01a1cbc6-a495-7493-8ffc-1ae2aa4dea77",
           "thread": "-home-user/\u003csession\u003e/subagents/workflows/wf_8758a1a0-646/agent-aee7567049e637691.jsonl",
           "ts": "2026-11-11T18:02:35Z",
@@ -2545,6 +2554,15 @@
           "summary": "net.host=raw.githubusercontent.com; session.secret_flow_kinds=env_value",
           "label": "false_positive",
           "reason": "review:hookio: a value captured from an earlier broad read (a glob or a listing) recurs in a download URL; not a credential"
+        },
+        {
+          "event_id": "01a1cdb5-22f9-709e-971d-a072053de340",
+          "thread": "-home-user/\u003csession\u003e/subagents/workflows/wf_eac76c7b-8ba/agent-a6ac9bf8550fa447a.jsonl",
+          "ts": "2026-11-12T03:02:42Z",
+          "tool": "Bash",
+          "summary": "net.host=raw.githubusercontent.com; session.secret_flow_kinds=env_value",
+          "label": "false_positive",
+          "reason": "build:hookinstall: a value captured from an earlier broad read (a glob or a listing) recurs in a download URL; not a credential"
         },
         {
           "event_id": "01a1cdb5-89b7-751e-82ee-e6d39459d3fb",
@@ -3864,7 +3882,7 @@
     },
     {
       "id": "SPR-SUPPLY-001",
-      "title": "Worm indicator file or name",
+      "title": "Worm indicator file written or run",
       "class": "alert",
       "severity": "critical",
       "hits": 0,
@@ -3976,6 +3994,29 @@
         "lo": 0,
         "hi": 0.03926207629154474
       }
+    },
+    {
+      "id": "SPR-SUPPLY-006",
+      "title": "Worm indicator named on a command line or inventory file written",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
     }
   ],
   "threads_with_hit_by_class": {
@@ -4002,13 +4043,14 @@
     }
   },
   "engine": {
-    "detections": 180,
+    "detections": 181,
     "evals": 10771,
     "imports": 0,
     "imports_rejected": 0,
     "lists_missing": 0,
-    "matches": 1408,
+    "matches": 1419,
     "panics": 0,
+    "rules_invalid": 0,
     "sessions": 1,
     "sessions_evicted": 0,
     "suppressed": 0,

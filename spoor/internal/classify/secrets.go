@@ -42,8 +42,9 @@ type rawHit struct {
 // a placeholder filter (example keys, "changeme", "<token>", "${VAR}" ...) and,
 // where the value is machine generated, a Shannon-entropy gate.
 //
-// Hits are sorted by Start and never overlap. Only the first 16 MiB of s are
-// scanned. FindSecrets never panics.
+// Hits are sorted by Start and never overlap. Existing redaction markers
+// ("[REDACTED:<kind>:<fp>]") are opaque: no hit lies inside one or spans
+// one. Only the first 16 MiB of s are scanned. FindSecrets never panics.
 func FindSecrets(s string) (hits []SecretHit) {
 	defer func() {
 		if recover() != nil {
@@ -56,7 +57,26 @@ func FindSecrets(s string) (hits []SecretHit) {
 	return findSecrets(s)
 }
 
+// findSecrets scans the text between redaction markers piece by piece, so no
+// pattern can match inside a marker or span one (see markers.go). Hit
+// offsets refer to s.
 func findSecrets(s string) []SecretHit {
+	if !strings.Contains(s, markerOpen) {
+		return findSecretsIn(s)
+	}
+	var hits []SecretHit
+	eachUnmarked(s, func(off int, run string) {
+		for _, h := range findSecretsIn(run) {
+			h.Start += off
+			h.End += off
+			hits = append(hits, h)
+		}
+	})
+	return hits
+}
+
+// findSecretsIn scans text that holds no redaction marker.
+func findSecretsIn(s string) []SecretHit {
 	if len(s) < minSecretScan {
 		return nil
 	}
@@ -186,11 +206,11 @@ func keyMaterial(body string) int {
 
 // defaultCreds are passwords so common in local development URLs
 // (postgres://postgres:postgres@localhost) that reporting them is noise.
-var defaultCreds = map[string]bool{
-	"postgres": true, "root": true, "admin": true, "guest": true, "user": true,
-	"mysql": true, "redis": true, "mongo": true, "test": true, "dev": true,
-	"local": true, "docker": true, "anonymous": true,
-}
+var defaultCreds = lazySet{list: []string{
+	"postgres", "root", "admin", "guest", "user",
+	"mysql", "redis", "mongo", "test", "dev",
+	"local", "docker", "anonymous",
+}}
 
 func scanURLCreds(s string, raw []rawHit) []rawHit {
 	if !strings.Contains(s, "://") || !strings.Contains(s, "@") {
@@ -199,7 +219,7 @@ func scanURLCreds(s string, raw []rawHit) []rawHit {
 	for _, loc := range urlCredsRegex().FindAllStringSubmatchIndex(s, -1) {
 		scheme := asciiLower(s[loc[2]:loc[3]])
 		kind := KindBasicAuthURL
-		if dbSchemes[scheme] {
+		if dbSchemes.has(scheme) {
 			kind = KindDatabaseURL
 		}
 		user := s[loc[4]:loc[5]]
@@ -210,7 +230,7 @@ func scanURLCreds(s string, raw []rawHit) []rawHit {
 		if loc[6] >= 0 && loc[7] > loc[6] {
 			pass := s[loc[6]:loc[7]]
 			lp := asciiLower(pass)
-			if isPlaceholder(pass) || isReference(pass) || lp == asciiLower(user) || defaultCreds[lp] {
+			if isPlaceholder(pass) || isReference(pass) || lp == asciiLower(user) || defaultCreds.has(lp) {
 				continue
 			}
 			raw = append(raw, rawHit{loc[6], loc[7], kind, prioURLCreds})
@@ -225,11 +245,11 @@ func scanURLCreds(s string, raw []rawHit) []rawHit {
 }
 
 // authSchemes are words that are an Authorization scheme, never a credential.
-var authSchemes = map[string]bool{
-	"bearer": true, "basic": true, "token": true, "digest": true, "apikey": true,
-	"api-key": true, "oauth": true, "negotiate": true, "ntlm": true,
-	"sso-key": true, "bot": true, "key": true,
-}
+var authSchemes = lazySet{list: []string{
+	"bearer", "basic", "token", "digest", "apikey",
+	"api-key", "oauth", "negotiate", "ntlm",
+	"sso-key", "bot", "key",
+}}
 
 func scanAuthHeaders(s, low string, raw []rawHit) []rawHit {
 	hasAuth := strings.Contains(low, "authorization")
@@ -247,7 +267,7 @@ func scanAuthHeaders(s, low string, raw []rawHit) []rawHit {
 			a, b := loc[4], loc[5]
 			v := s[a:b]
 			lv := asciiLower(v)
-			if scheme == "digest" || authSchemes[lv] || strings.HasPrefix(lv, "aws4-") {
+			if scheme == "digest" || authSchemes.has(lv) || strings.HasPrefix(lv, "aws4-") {
 				continue
 			}
 			if !credentialShaped(v) {

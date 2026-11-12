@@ -502,6 +502,10 @@ func mutIFS(cmd string, _ int) (string, bool) {
 	if !ok {
 		return "", false
 	}
+	kw, ok := ifsKeywords(toks)
+	if !ok {
+		return "", false
+	}
 	changed := false
 	for i := 1; i < len(toks); i++ {
 		prev, cur := toks[i-1], toks[i]
@@ -515,6 +519,9 @@ func mutIFS(cmd string, _ int) (string, bool) {
 		if i >= 2 && toks[i-2].redir {
 			continue
 		}
+		if kw[i-1] || kw[i] {
+			continue
+		}
 		toks[i].pre = "${IFS}"
 		changed = true
 	}
@@ -522,6 +529,59 @@ func mutIFS(cmd string, _ int) (string, bool) {
 		return "", false
 	}
 	return join(toks), true
+}
+
+// ifsKeywords marks the tokens a ${IFS} must not touch. A reserved word is
+// recognised only as a whole unquoted word in command position, so
+// "for${IFS}b" is a call to a command named "for b" and the loop around
+// it no longer parses; the header of a for or select loop is kept intact
+// for the same reason. It refuses (ok=false) constructs whose words are
+// never field-split, so ${IFS} cannot stand in for a blank there: [[ ]],
+// arithmetic (( )), case patterns and function definitions.
+func ifsKeywords(toks []tok) ([]bool, bool) {
+	kw := make([]bool, len(toks))
+	start := true     // the next word is in command position
+	header := false   // inside "for NAME in WORDS" or "select ..."
+	skipNext := false // the word after a redirection operator
+	for i, t := range toks {
+		next := ""
+		if i+1 < len(toks) && toks[i+1].op {
+			next = toks[i+1].text
+		}
+		switch {
+		case t.op:
+			if t.text == "(" && (next == "(" || next == ")") {
+				return nil, false
+			}
+			start = t.text != ")"
+			header = false
+			continue
+		case t.redir:
+			skipNext = true
+			continue
+		case skipNext:
+			skipNext = false
+			continue
+		case header:
+			kw[i] = true
+			continue
+		case !start, t.assign:
+			continue
+		}
+		switch t.text {
+		case "[[", "]]", "((", "case", "esac", "function", "coproc":
+			return nil, false
+		case "for", "select":
+			kw[i], header, start = true, true, false
+		case "if", "then", "else", "elif", "while", "until", "do", "!", "time", "{":
+			kw[i] = true // a command follows
+		case "fi", "done", "}":
+			kw[i], start = true, false
+		default:
+			start = false
+		}
+	}
+	return kw, true
 }
 
 func mutWrapper(cmd string, _ int) (string, bool) {

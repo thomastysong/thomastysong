@@ -32,17 +32,17 @@ type urlParts struct {
 }
 
 // opaqueSchemes have no authority component.
-var opaqueSchemes = map[string]bool{
-	"mailto": true, "data": true, "javascript": true, "tel": true, "sms": true,
-	"urn": true, "about": true, "blob": true, "magnet": true, "bitcoin": true,
-	"cid": true, "mid": true, "news": true, "xmpp": true, "vbscript": true,
-}
+var opaqueSchemes = lazySet{list: []string{
+	"mailto", "data", "javascript", "tel", "sms",
+	"urn", "about", "blob", "magnet", "bitcoin",
+	"cid", "mid", "news", "xmpp", "vbscript",
+}}
 
 // slashOptionalSchemes are parsed by browsers and curl even when the "//" is
 // missing or malformed ("http:/host", "https:host").
-var slashOptionalSchemes = map[string]bool{
-	"http": true, "https": true, "ftp": true, "ws": true, "wss": true,
-}
+var slashOptionalSchemes = lazySet{list: []string{
+	"http", "https", "ftp", "ws", "wss",
+}}
 
 func isSchemeChar(c byte, first bool) bool {
 	if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' {
@@ -78,10 +78,10 @@ func splitURL(s string) urlParts {
 			switch {
 			case len(after) >= 2 && isSlash(after[0]) && isSlash(after[1]):
 				p.scheme, p.prefix, rest = scheme, s[:i+3], after[2:]
-			case opaqueSchemes[scheme]:
+			case opaqueSchemes.has(scheme):
 				p.scheme, p.opaque, p.rest = scheme, true, after
 				return p
-			case slashOptionalSchemes[scheme]:
+			case slashOptionalSchemes.has(scheme):
 				p.scheme = scheme
 				trimmed := strings.TrimLeft(after, `/\`)
 				p.prefix, rest = s[:len(s)-len(trimmed)], trimmed

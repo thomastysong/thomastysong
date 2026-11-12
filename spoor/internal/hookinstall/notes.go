@@ -91,6 +91,17 @@ func installNotes(t target, o Options, rel related, n *notes) {
 			n.add("allowManagedHooksOnly in " + rel.managedOnly + " makes Claude Code ignore user hooks; install in the managed scope")
 		}
 	case "codex":
+		// codex-rs/core/src/session/mod.rs build_hooks_config and
+		// codex-rs/hooks/src/engine/command_runner.rs: pwsh/powershell -NoProfile
+		// -Command normally, %COMSPEC% /C without a single local
+		// environment.
+		if o.GOOS == "windows" {
+			if plainWindowsPath(o.Binary) {
+				n.add("commandWindows is written bare so that cmd.exe, Codex's fallback shell, can run it too: it has no missing-binary check, and run by PowerShell, Codex's usual shell, it exits 1 where spoor exits 2, so a block by spoor does not take effect")
+			} else {
+				n.add("commandWindows is written for PowerShell, Codex's usual shell; cmd.exe, which Codex uses when a session has no single local environment, cannot run it")
+			}
+		}
 		switch t.scope {
 		case event.ScopeManaged:
 			if o.GOOS == "darwin" {

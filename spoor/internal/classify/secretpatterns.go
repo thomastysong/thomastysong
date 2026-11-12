@@ -306,17 +306,17 @@ const (
 )
 
 // dbSchemes are URL schemes whose userinfo is a database credential.
-var dbSchemes = map[string]bool{
-	"postgres": true, "postgresql": true, "mysql": true, "mariadb": true,
-	"mongodb": true, "mongodb+srv": true, "redis": true, "rediss": true,
-	"amqp": true, "amqps": true, "mssql": true, "sqlserver": true,
-	"oracle": true, "clickhouse": true, "cockroachdb": true, "snowflake": true,
-	"cassandra": true, "couchbase": true, "neo4j": true, "bolt": true,
-	"memcached": true, "nats": true, "kafka": true, "db2": true,
-	"sqlite": true, "libsql": true, "influxdb": true, "trino": true,
-	"presto": true, "vertica": true, "redshift": true, "mysql+pymysql": true,
-	"postgresql+psycopg2": true, "postgresql+asyncpg": true, "mysqlx": true,
-}
+var dbSchemes = lazySet{list: []string{
+	"postgres", "postgresql", "mysql", "mariadb",
+	"mongodb", "mongodb+srv", "redis", "rediss",
+	"amqp", "amqps", "mssql", "sqlserver",
+	"oracle", "clickhouse", "cockroachdb", "snowflake",
+	"cassandra", "couchbase", "neo4j", "bolt",
+	"memcached", "nats", "kafka", "db2",
+	"sqlite", "libsql", "influxdb", "trino",
+	"presto", "vertica", "redshift", "mysql+pymysql",
+	"postgresql+psycopg2", "postgresql+asyncpg", "mysqlx",
+}}
 
 var (
 	urlCredsOnce sync.Once

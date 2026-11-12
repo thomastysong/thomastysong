@@ -37,9 +37,42 @@
 // tests execute them through every POSIX shell installed, sh, bash and dash
 // in the build environment, with a path holding spaces, '&' and an
 // apostrophe); PowerShell fields use the call operator with a verbatim
-// string; Windows fields that may also meet cmd.exe (Codex commandWindows,
-// Cursor) are written bare when the path needs no quoting. A Windows install
-// path without spaces is therefore the most portable choice.
+// string. Every shell command first checks that the binary is there:
+//
+//	[ -x '<bin>' ] || exit 0; exec '<bin>' hook --agent <id>
+//	if (Test-Path -LiteralPath '<bin>' -PathType Leaf) { & '<bin>' hook --agent <id>; exit $LASTEXITCODE } else { exit 0 }
+//
+// A shell that cannot find the program exits 126 or 127. Copilot CLI
+// denies a preToolUse call on any such exit and Gemini CLI reads it, with
+// the shell's message on stderr, as a deny, so a removed, half-replaced or
+// quarantined binary would block every tool call; Codex and Claude Code
+// would show an error on every event. With the binary present the check is
+// invisible: exec hands the process to spoor, so stdin, stdout, signals and
+// the exit status are spoor's own, and PowerShell exits with $LASTEXITCODE
+// (with -Command it otherwise turns any native exit code but 0 and 1 into
+// 1, which loses Codex's exit-2 block). The check is a shell builtin and
+// starts no process; the tests measure the whole invocation.
+//
+// Three kinds of field carry no check. Claude Code uses the exec form: no
+// shell, and a binary that is not there is a spawn failure, which Claude
+// Code treats as a non-blocking error unless onFailure is "block". A
+// handler that asks the agent to block when it fails (Cursor failClosed)
+// is written as exec '<bin>' hook --agent <id>, so a missing binary still
+// blocks, as the operator asked. Windows fields that may also meet cmd.exe
+// (Codex commandWindows, Cursor) are written bare when the path needs no
+// quoting, which both shells run: no line was found that does the check
+// and is valid in cmd.exe, Windows PowerShell 5.1 and PowerShell 7 alike
+// (5.1 has no && or ||, and each parser rejects the other's if). Run by
+// PowerShell, Codex's usual Windows shell, the bare line also ends with
+// exit code 1 where spoor exited 2, so a Codex block (exit 2 and a reason
+// on stderr; every other reply of every agent is JSON with exit 0) does not
+// take effect there. A path that needs quoting gets the PowerShell form,
+// which keeps the 2 but which cmd.exe cannot run. Neither choice is right
+// for both shells, and a plan for Codex on Windows says which one it made.
+//
+// Entries written by releases before the check are still spoor's: install
+// replaces them, uninstall removes them, and Status reports them as
+// modified with a Detail that names them as an earlier release's.
 //
 // Every tool, prompt and session hook is registered synchronously with an
 // explicit timeout (Options.Timeout, default 10 s): a background hook is
@@ -148,7 +181,19 @@
 //   - Fail-closed hooks exist only for Claude Code (onFailure) and Cursor
 //     (failClosed, UNVERIFIED) and only with Guard; other agents get a Note.
 //     Copilot timeouts always fail open, even for policy hooks, while a
-//     preToolUse hook that cannot start denies the tool call.
+//     preToolUse hook that crashes or exits non-zero denies the tool call
+//     (the missing-binary check keeps a missing binary from doing so).
+//   - The missing-binary check is the shell's -x (PowerShell: a file
+//     exists). In a POSIX shell a path that passes it but cannot run still
+//     fails at exec: a directory, a truncated copy (dash even runs a
+//     non-ELF file as a script, whose syntax error exits 2, a deny), or a
+//     binary that Gatekeeper or an antivirus kills at exec. Replace the
+//     binary by rename, never in place. fish before 3.0 has no ||. The
+//     PowerShell lines are checked for shape by the tests but were not
+//     executed in the build environment (UNVERIFIED by execution).
+//   - A missing binary is now silent at the agent: Status audits the hook
+//     files, not the binary they name, so the missing record of an active
+//     agent (the coverage signal) is what shows it.
 //   - Native OTel settings are written only when Options.OTel is set, only
 //     for Claude Code, Codex and Gemini CLI, and are refused (a separate
 //     unsupported Plan) when a telemetry destination is already configured:

@@ -157,7 +157,7 @@ Called by an AI agent for every hooked event, with the event as JSON on
 stdin. It records the event in the user's spool and, in guard mode, answers
 the agent on stdout. It always exits 0 and never writes to stderr; a crash,
 hang or timeout of its worker answers with the agent's allow-shaped reply
-(observe) or "ask" (guard). Register it with ` + "`spoor hooks install`" + `.
+(observe) or "ask" (guard). Register it with `+"`spoor hooks install`"+`.
 
 The kill switch (a file named "disabled" in the system config directory or
 next to --config) makes it exit at once without reading anything.
@@ -278,6 +278,9 @@ func (a *app) printJSON(v any) int {
 func (a *app) table() *tabwriter.Writer {
 	return tabwriter.NewWriter(a.stdout, 0, 0, 2, ' ', 0)
 }
+
+// flagSet shortens signatures of helpers that register extra flags.
+type flagSet = flag.FlagSet
 
 // listFlag is a repeatable string flag that also splits on commas.
 type listFlag []string

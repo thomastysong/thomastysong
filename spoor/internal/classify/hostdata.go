@@ -265,9 +265,9 @@ var loopbackHosts = []string{
 var wildcardDNS = []string{"nip.io", "sslip.io", "xip.io", "traefik.me", "localtest.me", "lvh.me"}
 
 // mailLabels are leftmost labels that conventionally name a mail server.
-var mailLabels = map[string]bool{
-	"smtp": true, "mail": true, "mx": true, "imap": true, "pop": true,
-	"pop3": true, "smtps": true, "mailout": true, "smtp-relay": true,
-	"email": true, "webmail": true, "mailgw": true, "mx1": true, "mx2": true,
-	"smtp1": true, "smtp2": true, "mail1": true, "mail2": true, "mta": true,
-}
+var mailLabels = lazySet{list: []string{
+	"smtp", "mail", "mx", "imap", "pop",
+	"pop3", "smtps", "mailout", "smtp-relay",
+	"email", "webmail", "mailgw", "mx1", "mx2",
+	"smtp1", "smtp2", "mail1", "mail2", "mta",
+}}

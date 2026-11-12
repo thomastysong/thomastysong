@@ -90,6 +90,8 @@ func safeCut(s string, limit int) int {
 // sig, code, password, X-Amz-Signature ...) are replaced by markers. The
 // result then passes through Redact, so credentials in the path (webhook
 // URLs, bot tokens) are covered too. data: URLs keep only their media type.
+// Redaction markers already in the URL are kept as written and never
+// matched inside or across.
 func RedactURL(raw string, keepQuery bool) (out string) {
 	defer func() {
 		if recover() != nil {
@@ -181,7 +183,9 @@ func redactPair(pair string) string {
 	if !secretParamName(name) || keepAsWritten(percentDecode(value)) {
 		return pair
 	}
-	return pair[:i+1] + markerFor(KindURLParam, value)
+	// A value that already holds a marker keeps it: the new markers cover
+	// only what is around it.
+	return pair[:i+1] + markAroundMarkers(KindURLParam, value)
 }
 
 // keepAsWritten reports values that structural redaction leaves alone even

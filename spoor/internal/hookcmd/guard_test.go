@@ -286,7 +286,13 @@ func TestGuardTruncatedStdinAsks(t *testing.T) {
 		{"complete block payload", full, func(b []byte) bool { return replyCarries(b, hookio.ActionDeny) }, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			s := newSandbox(t, cfgGuardCrash)
+			// Half the deadline goes to the stdin wait; a race-instrumented
+			// worker needs more than the other half of one second.
+			cfg := cfgGuardCrash
+			if raceSlowdown > 1 {
+				cfg = strings.Replace(cfg, "deadline: 1s", "deadline: 4s", 1)
+			}
+			s := newSandbox(t, cfg)
 			pr, pw := io.Pipe()
 			t.Cleanup(func() { _ = pw.Close() })
 			go func() { _, _ = pw.Write(c.payload) }() // never closed while the hook waits

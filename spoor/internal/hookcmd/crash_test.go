@@ -198,3 +198,23 @@ func TestProcessExitStatus(t *testing.T) {
 		})
 	}
 }
+
+// A guard decision the worker cannot render is not answered as "proceed":
+// the worker writes no reply and no end marker, and the supervisor gives
+// the dialect's fallback. A benign call (nothing to render) is unaffected.
+func TestRenderFailureFallsBack(t *testing.T) {
+	d := dialects[0]
+	s := newSandbox(t, cfgGuard)
+	r := s.supervised(t, d.agent, d.payload("spoor-test-block now"), "norender")
+	if r.code != 0 {
+		t.Fatalf("exit %d", r.code)
+	}
+	assertFallback(t, d, true, r.stdout)
+	if got := healthReasons(s.ofKind(t, event.KindHealth)); !slices.Equal(got, []string{ReasonRender}) {
+		t.Fatalf("health %v, want [%s]", got, ReasonRender)
+	}
+	s = newSandbox(t, cfgGuard)
+	if r := s.supervised(t, d.agent, d.payload("ls -la"), "norender"); r.code != 0 || len(r.stdout) != 0 {
+		t.Fatalf("benign: exit %d reply %q", r.code, r.stdout)
+	}
+}

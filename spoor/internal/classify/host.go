@@ -97,7 +97,7 @@ func hostBitsFor(h string) hostBits {
 	if n >= 2 && labels[n-2] == "oast" {
 		b |= hbWebhookSink // interactsh public servers: oast.pro, oast.live, ...
 	}
-	if n >= 3 && mailLabels[labels[0]] {
+	if n >= 3 && mailLabels.has(labels[0]) {
 		b |= hbMail
 	}
 	b |= cloudPatternBits(h, labels)
@@ -147,50 +147,80 @@ func cloudPatternBits(h string, labels []string) hostBits {
 	return b
 }
 
-// metadataIPs are instance metadata and workload credential endpoints.
-var metadataIPs = map[netip.Addr]bool{
-	netip.MustParseAddr("169.254.169.254"): true, // AWS, GCP, Azure, DigitalOcean, OpenStack, Oracle
-	netip.MustParseAddr("169.254.170.2"):   true, // AWS ECS task credentials
-	netip.MustParseAddr("169.254.170.23"):  true, // AWS EKS Pod Identity
-	netip.MustParseAddr("100.100.100.200"): true, // Alibaba Cloud
-	netip.MustParseAddr("192.0.0.192"):     true, // Oracle Cloud (classic)
-	netip.MustParseAddr("168.63.129.16"):   true, // Azure WireServer
-	netip.MustParseAddr("fd00:ec2::254"):   true, // AWS IMDS over IPv6
-	netip.MustParseAddr("fd00:ec2::23"):    true, // AWS EKS Pod Identity over IPv6
+// metadataIPs are instance metadata and workload credential endpoints. They
+// are parsed on first use (metadataAddrs), not by package init.
+var metadataIPs = []string{
+	"169.254.169.254", // AWS, GCP, Azure, DigitalOcean, OpenStack, Oracle
+	"169.254.170.2",   // AWS ECS task credentials
+	"169.254.170.23",  // AWS EKS Pod Identity
+	"100.100.100.200", // Alibaba Cloud
+	"192.0.0.192",     // Oracle Cloud (classic)
+	"168.63.129.16",   // Azure WireServer
+	"fd00:ec2::254",   // AWS IMDS over IPv6
+	"fd00:ec2::23",    // AWS EKS Pod Identity over IPv6
 	// UNVERIFIED: GCP documents an IPv6 metadata address for IPv6-only
 	// instances; the value is from memory.
-	netip.MustParseAddr("fd20:ce::254"): true,
+	"fd20:ce::254",
 }
 
 var (
-	prefixCGNAT   = netip.MustParsePrefix("100.64.0.0/10")
-	prefixNAT64   = netip.MustParsePrefix("64:ff9b::/96")
-	prefixThisNet = netip.MustParsePrefix("0.0.0.0/8")
+	metadataOnce sync.Once
+	metadataSet  map[netip.Addr]bool
 )
+
+func metadataAddrs() map[netip.Addr]bool {
+	metadataOnce.Do(func() {
+		m := make(map[netip.Addr]bool, len(metadataIPs))
+		for _, s := range metadataIPs {
+			m[netip.MustParseAddr(s)] = true
+		}
+		metadataSet = m
+	})
+	return metadataSet
+}
+
+// The special ranges below are tested on the address bytes: a
+// netip.MustParsePrefix at package level would run in every process.
+
+// inCGNAT reports 100.64.0.0/10 (carrier-grade NAT, RFC 6598).
+func inCGNAT(a netip.Addr) bool {
+	b := a.As4()
+	return b[0] == 100 && b[1]&0xC0 == 64
+}
+
+// inNAT64 reports 64:ff9b::/96 (the well-known NAT64 prefix, RFC 6052).
+func inNAT64(a netip.Addr) bool {
+	b := a.As16()
+	return b[0] == 0 && b[1] == 0x64 && b[2] == 0xff && b[3] == 0x9b &&
+		b[4]|b[5]|b[6]|b[7]|b[8]|b[9]|b[10]|b[11] == 0
+}
+
+// inThisNet reports 0.0.0.0/8 ("this network", RFC 1122).
+func inThisNet(a netip.Addr) bool { return a.As4()[0] == 0 }
 
 // ipBits classifies an address. IPv4-mapped and NAT64 addresses are unwrapped
 // first so the embedded IPv4 address decides.
 func ipBits(a netip.Addr) hostBits {
 	if a.Is4In6() {
 		a = a.Unmap()
-	} else if a.Is6() && prefixNAT64.Contains(a) {
+	} else if a.Is6() && inNAT64(a) {
 		raw := a.As16()
 		a = netip.AddrFrom4([4]byte{raw[12], raw[13], raw[14], raw[15]})
 	}
 	var b hostBits
-	if metadataIPs[a] {
+	if metadataAddrs()[a] {
 		b |= hbMetadata
 	}
 	switch {
 	case a.IsLoopback(), a.IsUnspecified():
 		b |= hbLoopback
-	case a.Is4() && prefixThisNet.Contains(a):
+	case a.Is4() && inThisNet(a):
 		// 0.x.y.z is "this host" to most stacks; Linux routes 0.0.0.0 to
 		// loopback, which makes it a classic localhost filter bypass.
 		b |= hbLoopback
 	case a.IsPrivate(), a.IsLinkLocalUnicast():
 		b |= hbPrivateIP
-	case a.Is4() && prefixCGNAT.Contains(a):
+	case a.Is4() && inCGNAT(a):
 		b |= hbPrivateIP
 	}
 	return b

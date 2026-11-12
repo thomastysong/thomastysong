@@ -56,6 +56,7 @@ var (
 	exitFunc     = os.Exit
 	faultHook    func(stage string)
 	appendRecord = func(w *spool.Writer, e *event.Event) error { return w.Append(e) }
+	renderReply  = render
 )
 
 func fault(stage string) {
@@ -205,7 +206,7 @@ func (w *work) run(stdout io.Writer) int {
 	code := exitOK
 	var reply []byte
 	if dec.Action != hookio.ActionNone && req != nil {
-		r, ok := render(w.dialect, req, dec)
+		r, ok := renderReply(w.dialect, req, dec)
 		if !ok {
 			code = exitRender
 		}
@@ -215,8 +216,12 @@ func (w *work) run(stdout io.Writer) int {
 	// One write: the supervisor forwards only a complete object, and a
 	// reply under the pipe buffer size arrives in one piece. It goes out
 	// before the records, so a decision survives a spool that cannot be
-	// written.
-	w.answer(stdout, reply)
+	// written. A decision that could not be rendered is not answered at
+	// all (no end marker either): the supervisor then gives the dialect's
+	// fallback ("ask" in guard mode) instead of an implicit "proceed".
+	if code != exitRender {
+		w.answer(stdout, reply)
+	}
 	carried := replyCarries(reply, dec.Action)
 	annotateDecision(evs, ev.dets, dec, reply, carried)
 
@@ -375,7 +380,8 @@ type savedState struct {
 	data           []byte
 }
 
-// sessRef is one session of the events, with the state loaded for it.
+// sessRef names one session of the events: the engine's key and the ids
+// the spool hashes into the state file name.
 type sessRef struct {
 	key, agent, session string
 }

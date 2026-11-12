@@ -133,15 +133,16 @@ func isEmojiish(r rune) bool {
 	return false
 }
 
-// joinerScripts use ZWJ and ZWNJ in ordinary spelling.
-var joinerScripts = []*unicode.RangeTable{
-	unicode.Arabic, unicode.Devanagari, unicode.Bengali, unicode.Gurmukhi,
-	unicode.Gujarati, unicode.Oriya, unicode.Tamil, unicode.Telugu,
-	unicode.Kannada, unicode.Malayalam, unicode.Sinhala, unicode.Khmer,
-	unicode.Myanmar, unicode.Tibetan, unicode.Mongolian, unicode.Syriac,
+// usesJoiners reports scripts that use ZWJ and ZWNJ in ordinary spelling.
+// The tables are named in the call rather than kept in a package-level
+// slice, which package init would have to build in every process.
+func usesJoiners(r rune) bool {
+	return r >= 0x0600 && unicode.In(r,
+		unicode.Arabic, unicode.Devanagari, unicode.Bengali, unicode.Gurmukhi,
+		unicode.Gujarati, unicode.Oriya, unicode.Tamil, unicode.Telugu,
+		unicode.Kannada, unicode.Malayalam, unicode.Sinhala, unicode.Khmer,
+		unicode.Myanmar, unicode.Tibetan, unicode.Mongolian, unicode.Syriac)
 }
-
-func usesJoiners(r rune) bool { return r >= 0x0600 && unicode.IsOneOf(joinerScripts, r) }
 
 // scanRunes counts hidden characters and returns the text with invisible
 // characters removed (the "visible" text markers are searched in).
@@ -327,20 +328,24 @@ func mostlyPrintable(s string) bool {
 
 // lookalikes maps letters of other scripts that are near-identical to an
 // ASCII letter in common fonts. It is deliberately small: only pairs a reader
-// cannot tell apart, so ordinary mixed-language text is not flagged.
-var lookalikes = map[rune]byte{
+// cannot tell apart, so ordinary mixed-language text is not flagged. The
+// list is static; lookalikeMap indexes it on first use.
+var lookalikes = []struct {
+	r rune
+	c byte
+}{
 	// Cyrillic lower case.
-	'а': 'a', 'е': 'e', 'о': 'o', 'р': 'p', 'с': 'c', 'х': 'x', 'у': 'y',
-	'і': 'i', 'ј': 'j', 'ѕ': 's', 'һ': 'h', 'ԁ': 'd', 'ԛ': 'q', 'ԝ': 'w', 'ѵ': 'v',
+	{'а', 'a'}, {'е', 'e'}, {'о', 'o'}, {'р', 'p'}, {'с', 'c'}, {'х', 'x'}, {'у', 'y'},
+	{'і', 'i'}, {'ј', 'j'}, {'ѕ', 's'}, {'һ', 'h'}, {'ԁ', 'd'}, {'ԛ', 'q'}, {'ԝ', 'w'}, {'ѵ', 'v'},
 	// Cyrillic upper case.
-	'А': 'A', 'В': 'B', 'Е': 'E', 'К': 'K', 'М': 'M', 'Н': 'H', 'О': 'O',
-	'Р': 'P', 'С': 'C', 'Т': 'T', 'Х': 'X', 'У': 'Y', 'І': 'I', 'Ј': 'J',
-	'Ѕ': 'S', 'Ԛ': 'Q', 'Ԝ': 'W',
+	{'А', 'A'}, {'В', 'B'}, {'Е', 'E'}, {'К', 'K'}, {'М', 'M'}, {'Н', 'H'}, {'О', 'O'},
+	{'Р', 'P'}, {'С', 'C'}, {'Т', 'T'}, {'Х', 'X'}, {'У', 'Y'}, {'І', 'I'}, {'Ј', 'J'},
+	{'Ѕ', 'S'}, {'Ԛ', 'Q'}, {'Ԝ', 'W'},
 	// Greek.
-	'ο': 'o', 'Α': 'A', 'Β': 'B', 'Ε': 'E', 'Ζ': 'Z', 'Η': 'H', 'Ι': 'I',
-	'Κ': 'K', 'Μ': 'M', 'Ν': 'N', 'Ο': 'O', 'Ρ': 'P', 'Τ': 'T', 'Υ': 'Y', 'Χ': 'X',
+	{'ο', 'o'}, {'Α', 'A'}, {'Β', 'B'}, {'Ε', 'E'}, {'Ζ', 'Z'}, {'Η', 'H'}, {'Ι', 'I'},
+	{'Κ', 'K'}, {'Μ', 'M'}, {'Ν', 'N'}, {'Ο', 'O'}, {'Ρ', 'P'}, {'Τ', 'T'}, {'Υ', 'Y'}, {'Χ', 'X'},
 	// Armenian and Latin look-alikes.
-	'օ': 'o', 'ս': 'u', 'հ': 'h', 'ı': 'i', 'ɑ': 'a', 'ɡ': 'g', 'ℓ': 'l',
+	{'օ', 'o'}, {'ս', 'u'}, {'հ', 'h'}, {'ı', 'i'}, {'ɑ', 'a'}, {'ɡ', 'g'}, {'ℓ', 'l'},
 }
 
 func lookalike(r rune) byte {
@@ -350,7 +355,23 @@ func lookalike(r rune) byte {
 	if r >= 0xFF21 && r <= 0xFF3A || r >= 0xFF41 && r <= 0xFF5A {
 		return byte(r - 0xFF21 + 'A') // full-width Latin
 	}
-	return lookalikes[r]
+	return lookalikeMap()[r]
+}
+
+var (
+	lookalikeOnce sync.Once
+	lookalikeIdx  map[rune]byte
+)
+
+func lookalikeMap() map[rune]byte {
+	lookalikeOnce.Do(func() {
+		m := make(map[rune]byte, len(lookalikes))
+		for _, p := range lookalikes {
+			m[p.r] = p.c
+		}
+		lookalikeIdx = m
+	})
+	return lookalikeIdx
 }
 
 // normalizeForMarkers returns the lower-cased, ASCII-folded form of visible

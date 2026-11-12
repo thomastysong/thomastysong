@@ -46,11 +46,21 @@ type RulesOptions struct {
 // clock follows the events: the engine's Now is the timestamp of the
 // event being evaluated (never earlier than the previous one), so flag
 // lifetimes and threshold windows behave as they did when the session was
-// live, however fast the replay runs.
+// live, however fast the replay runs. Eval may be called concurrently;
+// the clock is then the latest of the events in flight.
 type RulesEvaluator struct {
 	mu    sync.Mutex
 	eng   *rules.Engine
 	clock time.Time
+}
+
+// now is the engine's clock. It takes the lock because the engine calls it
+// from inside Eval, after Eval has released the lock to let another
+// goroutine move the clock.
+func (r *RulesEvaluator) now() time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.clock
 }
 
 // NewRulesEvaluator builds an engine over o.Set.
@@ -61,7 +71,7 @@ func NewRulesEvaluator(o RulesOptions) *RulesEvaluator {
 		sup = countEvery
 	}
 	re.eng = rules.NewEngine(o.Set, rules.Options{
-		Now:         func() time.Time { return re.clock },
+		Now:         re.now,
 		SuppressFor: sup,
 		Home:        o.Home,
 		OS:          o.OS,

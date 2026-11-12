@@ -70,9 +70,10 @@
 // deadline. Without the marker the supervisor forwards exactly one
 // complete JSON object of at most MaxReply bytes, or an empty reply after
 // a clean exit; in every other case (worker missing, killed, crashed, hung,
-// partial or oversized output) it answers with the dialect's allow-shaped
-// reply (empty stdout) in observe mode or the dialect's "ask" in guard
-// mode, and exits 0.
+// partial or oversized output, a guard decision the worker could not
+// render, which it answers without a marker) it answers with the dialect's
+// allow-shaped reply (empty stdout) in observe mode or the dialect's "ask"
+// in guard mode, and exits 0.
 //
 // The supervisor touches the spool only after its reply is written: its
 // health.error records (Reason* constants) are appended then, with a wait
@@ -207,7 +208,10 @@
 //   - An agent that never closes stdin costs one stdin wait (half the hard
 //     deadline) per call. A complete JSON payload is judged normally; in
 //     guard mode a prefix that does not parse is answered "ask" on a gated
-//     event.
+//     event, provided the event name is in the prefix (or comes from
+//     --event or SPOOR_HOOK_EVENT; the installer writes only --agent). A
+//     prefix cut before the event name gets no answer, because the reply's
+//     shape depends on the event.
 //   - On Windows the worker is not tied to its supervisor by a job object;
 //     its own watchdog ends it at most one second after the hard deadline.
 //

@@ -151,37 +151,37 @@ func PathClassVocabulary() []string {
 
 // sensitiveRead are the classes whose READ is credential access: the file
 // holds a secret, or lets its reader act as the user.
-var sensitiveRead = map[string]bool{
-	PathSecretEnv: true, PathSSHPrivateKey: true, PathCloudCredentials: true,
-	PathKubeConfig: true, PathDockerConfig: true, PathGitCredentials: true,
-	PathNetrc: true, PathNPMToken: true, PathPyPIToken: true,
-	PathGPGKeyring: true, PathPasswordStore: true, PathKeychain: true,
-	PathBrowserData: true, PathCryptoWallet: true, PathShellHistory: true,
-	PathSystemAuth: true, PathCertPrivateKey: true, PathTokenFile: true,
-	PathProcEnviron: true,
-}
+var sensitiveRead = lazySet{list: []string{
+	PathSecretEnv, PathSSHPrivateKey, PathCloudCredentials,
+	PathKubeConfig, PathDockerConfig, PathGitCredentials,
+	PathNetrc, PathNPMToken, PathPyPIToken,
+	PathGPGKeyring, PathPasswordStore, PathKeychain,
+	PathBrowserData, PathCryptoWallet, PathShellHistory,
+	PathSystemAuth, PathCertPrivateKey, PathTokenFile,
+	PathProcEnviron,
+}}
 
 // sensitiveWrite are the classes whose WRITE is persistence or tampering: the
 // file is executed or trusted later by the OS, a tool, an agent or the sensor.
 // agent_memory and ci_config are deliberately absent: agents edit CLAUDE.md
 // and workflow files in ordinary work, so a write there is a signal for
 // sequence rules (untrusted read, then memory write), not a finding alone.
-var sensitiveWrite = map[string]bool{
-	PathSSHAuthorizedKeys: true, PathSSHConfig: true, PathShellProfile: true,
-	PathCron: true, PathLaunchd: true, PathSystemdUnit: true,
-	PathStartupItem: true, PathSystemAuth: true, PathAgentConfig: true,
-	PathAgentManagedPolicy: true, PathAgentHook: true, PathAgentSkill: true,
-	PathMCPConfig: true, PathSensorFiles: true, PathVCSHook: true,
-	PathVCSInternal: true, PathNPMToken: true, PathPyPIToken: true,
-	PathDockerConfig: true, PathKubeConfig: true, PathGitCredentials: true,
-	PathDevice: true, PathSystemDir: true,
-}
+var sensitiveWrite = lazySet{list: []string{
+	PathSSHAuthorizedKeys, PathSSHConfig, PathShellProfile,
+	PathCron, PathLaunchd, PathSystemdUnit,
+	PathStartupItem, PathSystemAuth, PathAgentConfig,
+	PathAgentManagedPolicy, PathAgentHook, PathAgentSkill,
+	PathMCPConfig, PathSensorFiles, PathVCSHook,
+	PathVCSInternal, PathNPMToken, PathPyPIToken,
+	PathDockerConfig, PathKubeConfig, PathGitCredentials,
+	PathDevice, PathSystemDir,
+}}
 
 // IsSensitiveRead reports whether any class marks a path whose read is
 // credential access.
 func IsSensitiveRead(classes []string) bool {
 	for _, c := range classes {
-		if sensitiveRead[c] {
+		if sensitiveRead.has(c) {
 			return true
 		}
 	}
@@ -192,7 +192,7 @@ func IsSensitiveRead(classes []string) bool {
 // persistence or tampering.
 func IsSensitiveWrite(classes []string) bool {
 	for _, c := range classes {
-		if sensitiveWrite[c] {
+		if sensitiveWrite.has(c) {
 			return true
 		}
 	}
@@ -201,16 +201,16 @@ func IsSensitiveWrite(classes []string) bool {
 
 // SensitiveReadClasses returns the classes IsSensitiveRead accepts, in
 // vocabulary order.
-func SensitiveReadClasses() []string { return filterVocab(sensitiveRead) }
+func SensitiveReadClasses() []string { return filterVocab(&sensitiveRead) }
 
 // SensitiveWriteClasses returns the classes IsSensitiveWrite accepts, in
 // vocabulary order.
-func SensitiveWriteClasses() []string { return filterVocab(sensitiveWrite) }
+func SensitiveWriteClasses() []string { return filterVocab(&sensitiveWrite) }
 
-func filterVocab(set map[string]bool) []string {
-	out := make([]string, 0, len(set))
+func filterVocab(set *lazySet) []string {
+	out := make([]string, 0, len(set.list))
 	for _, n := range pathClassNames {
-		if set[n] {
+		if set.has(n) {
 			out = append(out, n)
 		}
 	}

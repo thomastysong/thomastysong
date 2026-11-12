@@ -37,7 +37,8 @@ type guardMode uint8
 
 const (
 	// guarded checks for the binary first and exits 0 without output when
-	// it is missing, not executable or not a file. A shell that cannot find
+	// it is missing (POSIX: or not executable; PowerShell: or not a file).
+	// A shell that cannot find
 	// a program exits 126/127, and Copilot CLI denies a preToolUse call on
 	// any non-zero exit while Gemini CLI reads a non-JSON exit 127 as a
 	// deny: a removed, half-replaced or quarantined binary would otherwise
@@ -79,8 +80,9 @@ const (
 //
 //	[ -x '<bin>' ] || exit 0; exec '<bin>' hook --agent <id>
 //
-// `[` is a builtin in sh, dash, bash, zsh, ksh and fish 3, so the check
-// starts no process. exec replaces the shell with spoor, so stdin, stdout,
+// `[` is a builtin in sh, dash, bash, zsh and ksh (and fish, which needs
+// 3.0 for ||; UNVERIFIED, fish is not installed in the build
+// environment), so the check starts no process. exec replaces the shell with spoor, so stdin, stdout,
 // signals and the exit status are spoor's own; nothing follows the call
 // that could rewrite its status (no `|| true`).
 func posixCommand(bin, agent string, m guardMode) string {
@@ -104,8 +106,11 @@ func posixCommand(bin, agent string, m guardMode) string {
 // status: with -Command, PowerShell turns any native exit code other than
 // 0 or 1 into 1 unless the script exits with it explicitly
 // (about_Pwsh.md, "-Command", re-read 2026-11-12), which loses Codex's
-// exit-2 block. The strict and legacy forms are the bare call, which
-// exits 1 when the binary is missing.
+// exit-2 block. A call that fails without running anything (a file that
+// is not a program) leaves $LASTEXITCODE unset, so the guarded line then
+// exits 0 too (UNVERIFIED: no PowerShell in the build environment). The
+// strict and legacy forms are the bare call, which exits 1 when the binary
+// is missing.
 func pwshCommand(bin, agent string, m guardMode) string {
 	q := pwshQuote(bin)
 	if m != guarded {
@@ -126,9 +131,10 @@ func bareCommand(bin, agent string) string {
 // That form has no missing-binary guard: the guard needs `if`, and no
 // single line found here is valid in cmd.exe, Windows PowerShell 5.1 and
 // PowerShell 7 alike (5.1 has no && or ||, and both parsers reject the
-// other's `if`). Any other path gets the PowerShell form (a path with
-// spaces cannot be written so that both shells accept it; the package doc
-// recommends a path without spaces for that reason).
+// other's `if`). Run by PowerShell it also exits 1 where spoor exited 2
+// (see pwshCommand), which only matters for Codex, the one agent whose
+// block is an exit code. Any other path gets the PowerShell form (a path
+// with spaces cannot be written so that both shells accept it).
 func windowsCommand(bin, agent string, m guardMode) string {
 	if plainWindowsPath(bin) {
 		return bareCommand(bin, agent)
@@ -298,7 +304,8 @@ func binaryOf(line string) string {
 }
 
 // cutPosixQuoted reads one word written by posixQuote at the start of s:
-// single-quoted runs joined by \' (the '\'' sequence for an apostrophe).
+// single-quoted runs, where an apostrophe in the value is written as a
+// closing quote, a backslash-escaped apostrophe and an opening quote.
 func cutPosixQuoted(s string) (val, rest string, ok bool) {
 	if !strings.HasPrefix(s, "'") {
 		return "", s, false

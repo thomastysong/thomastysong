@@ -148,32 +148,32 @@ func findAgentDirWild(lp *lexPath, i int) int {
 }
 
 var (
-	agentSkillDirs = map[string]bool{
-		"skills": true, "plugins": true, "commands": true, "agents": true,
-		"extensions": true, "prompts": true, "workflows": true,
-		"output-styles": true, "recipes": true, "powers": true, "modes": true,
-		"dev-mods": true, "mods": true, "plugin": true, "chatmodes": true,
-	}
-	agentMemoryDirs = map[string]bool{
-		"rules": true, "memory": true, "memories": true, "agent-memory": true,
-		"steering": true, "guidelines.md": true, "memory-bank": true,
-	}
-	agentHookDirs = map[string]bool{"hooks": true, "hooks.json": true}
+	agentSkillDirs = lazySet{list: []string{
+		"skills", "plugins", "commands", "agents",
+		"extensions", "prompts", "workflows",
+		"output-styles", "recipes", "powers", "modes",
+		"dev-mods", "mods", "plugin", "chatmodes",
+	}}
+	agentMemoryDirs = lazySet{list: []string{
+		"rules", "memory", "memories", "agent-memory",
+		"steering", "guidelines.md", "memory-bank",
+	}}
+	agentHookDirs = lazySet{list: []string{"hooks", "hooks.json"}}
 	// agentTranscriptDirs: Claude Code projects/ and history.jsonl, Codex
 	// sessions/ and archived_sessions/, Copilot session-state/, and the
 	// equivalents in other agents.
-	agentTranscriptDirs = map[string]bool{
-		"projects": true, "sessions": true, "archived_sessions": true,
-		"session-state": true, "chats": true, "conversations": true,
-		"transcripts": true, "history.jsonl": true, "session-store.db": true,
-		"file-history": true, "history": true,
-	}
+	agentTranscriptDirs = lazySet{list: []string{
+		"projects", "sessions", "archived_sessions",
+		"session-state", "chats", "conversations",
+		"transcripts", "history.jsonl", "session-store.db",
+		"file-history", "history",
+	}}
 	// agentNestedDirs are product directories one level inside a shared
 	// vendor directory (~/.codeium/windsurf, ~/.gemini/antigravity).
-	agentNestedDirs = map[string]bool{
-		"windsurf": true, "antigravity": true, "antigravity-cli": true,
-		"antigravity-ide": true, "config": true, "settings": true, "user": true,
-	}
+	agentNestedDirs = lazySet{list: []string{
+		"windsurf", "antigravity", "antigravity-cli",
+		"antigravity-ide", "config", "settings", "user",
+	}}
 )
 
 // agentSubclass classifies a path by its position inside an agent directory.
@@ -184,11 +184,11 @@ func agentSubclass(rest []string) pathClass {
 	}
 	r0 := rest[0]
 	switch {
-	case agentSkillDirs[r0]:
+	case agentSkillDirs.has(r0):
 		return pcAgentSkill
-	case agentMemoryDirs[r0] || strings.HasPrefix(r0, "rules-"):
+	case agentMemoryDirs.has(r0) || strings.HasPrefix(r0, "rules-"):
 		return pcAgentMemory
-	case agentHookDirs[r0]:
+	case agentHookDirs.has(r0):
 		return pcAgentHook
 	case r0 == "projects":
 		// ~/.claude/projects/<project>/memory/ is auto memory;
@@ -204,7 +204,7 @@ func agentSubclass(rest []string) pathClass {
 			}
 		}
 		return pcAgentTranscript
-	case agentTranscriptDirs[r0], strings.HasPrefix(r0, "state_") && strings.HasSuffix(r0, ".sqlite"):
+	case agentTranscriptDirs.has(r0), strings.HasPrefix(r0, "state_") && strings.HasSuffix(r0, ".sqlite"):
 		return pcAgentTranscript
 	case r0 == "tmp":
 		// Gemini CLI: ~/.gemini/tmp/<project_hash>/chats/.
@@ -214,7 +214,7 @@ func agentSubclass(rest []string) pathClass {
 			}
 		}
 		return pcAgentConfig
-	case agentNestedDirs[r0] && len(rest) > 1:
+	case agentNestedDirs.has(r0) && len(rest) > 1:
 		return agentSubclass(rest[1:])
 	}
 	return pcAgentConfig

@@ -18,29 +18,29 @@ const (
 // maxNameLen bounds name analysis; longer "names" are not identifiers.
 const maxNameLen = 128
 
-var passwordWords = map[string]bool{
-	"password": true, "passwd": true, "passphrase": true, "pwd": true,
-	"pass": true, "passcode": true, "passwords": true,
-}
+var passwordWords = lazySet{list: []string{
+	"password", "passwd", "passphrase", "pwd",
+	"pass", "passcode", "passwords",
+}}
 
-var secretWords = map[string]bool{
-	"secret": true, "token": true, "apikey": true, "credential": true,
-	"credentials": true, "auth": true, "bearer": true, "authorization": true,
-	"jwt": true, "cookie": true, "cookies": true, "secretkey": true,
-	"privatekey": true, "accesskey": true, "secrets": true,
-}
+var secretWords = lazySet{list: []string{
+	"secret", "token", "apikey", "credential",
+	"credentials", "auth", "bearer", "authorization",
+	"jwt", "cookie", "cookies", "secretkey",
+	"privatekey", "accesskey", "secrets",
+}}
 
 // keyQualifiers are the words that turn a following "key" into a secret name
 // ("api_key", "signing-key"). A bare "key" is far too common to match alone.
-var keyQualifiers = map[string]bool{
-	"api": true, "access": true, "auth": true, "private": true, "signing": true,
-	"encryption": true, "decryption": true, "master": true, "subscription": true,
-	"functions": true, "license": true, "secret": true, "account": true,
-	"storage": true, "shared": true, "session": true, "deploy": true,
-	"service": true, "admin": true, "root": true, "hmac": true, "aes": true,
-	"sas": true, "app": true, "application": true, "client": true, "crypt": true,
-	"webhook": true, "fernet": true, "jwt": true, "token": true,
-}
+var keyQualifiers = lazySet{list: []string{
+	"api", "access", "auth", "private", "signing",
+	"encryption", "decryption", "master", "subscription",
+	"functions", "license", "secret", "account",
+	"storage", "shared", "session", "deploy",
+	"service", "admin", "root", "hmac", "aes",
+	"sas", "app", "application", "client", "crypt",
+	"webhook", "fernet", "jwt", "token",
+}}
 
 // compoundSuffixes catch names written without separators ("dbpassword",
 // "authtoken"). "pass", "pwd" and "auth" are deliberately absent: they are
@@ -58,46 +58,46 @@ var compoundSuffixes = []struct {
 // the value is ("api_key_prod", "password_confirmation", "SecretString").
 // Any other trailing word means the name describes metadata about a secret
 // ("token_url", "secret_name", "password_min_length"), not the secret.
-var allowedTail = map[string]bool{
-	"key": true, "value": true, "val": true, "secret": true, "token": true,
-	"str": true, "string": true, "b64": true, "base64": true, "hex": true,
-	"raw": true, "plain": true, "plaintext": true, "binary": true, "pem": true,
-	"new": true, "old": true, "current": true, "previous": true, "prev": true,
-	"prod": true, "production": true, "dev": true, "development": true,
-	"staging": true, "stage": true, "test": true, "live": true, "sandbox": true,
-	"default": true, "primary": true, "secondary": true, "main": true,
-	"backup": true, "confirm": true, "confirmation": true, "repeat": true,
-	"again": true, "hash": true, "hashed": true, "digest": true, "salt": true,
-	"enc": true, "encrypted": true, "cipher": true, "ciphertext": true,
-	"admin": true, "root": true, "user": true, "rw": true, "ro": true,
-	"read": true, "write": true, "readonly": true, "bearer": true,
-	"access": true, "refresh": true, "a": true, "b": true, "x": true, "y": true,
-	"v1": true, "v2": true, "v3": true,
-}
+var allowedTail = lazySet{list: []string{
+	"key", "value", "val", "secret", "token",
+	"str", "string", "b64", "base64", "hex",
+	"raw", "plain", "plaintext", "binary", "pem",
+	"new", "old", "current", "previous", "prev",
+	"prod", "production", "dev", "development",
+	"staging", "stage", "test", "live", "sandbox",
+	"default", "primary", "secondary", "main",
+	"backup", "confirm", "confirmation", "repeat",
+	"again", "hash", "hashed", "digest", "salt",
+	"enc", "encrypted", "cipher", "ciphertext",
+	"admin", "root", "user", "rw", "ro",
+	"read", "write", "readonly", "bearer",
+	"access", "refresh", "a", "b", "x", "y",
+	"v1", "v2", "v3",
+}}
 
 // booleanPrefixes start names whose value is a switch or a count
 // ("has_password", "use_token", "max_tokens"), not a secret.
-var booleanPrefixes = map[string]bool{
-	"no": true, "has": true, "have": true, "is": true, "use": true, "uses": true,
-	"require": true, "requires": true, "required": true, "show": true,
-	"hide": true, "enable": true, "enabled": true, "disable": true,
-	"disabled": true, "allow": true, "skip": true, "ask": true, "remember": true,
-	"mask": true, "redact": true, "with": true, "without": true, "forgot": true,
-	"max": true, "min": true, "num": true, "count": true, "total": true,
-}
+var booleanPrefixes = lazySet{list: []string{
+	"no", "has", "have", "is", "use", "uses",
+	"require", "requires", "required", "show",
+	"hide", "enable", "enabled", "disable",
+	"disabled", "allow", "skip", "ask", "remember",
+	"mask", "redact", "with", "without", "forgot",
+	"max", "min", "num", "count", "total",
+}}
 
 // paginationWords precede "token" in cursors ("nextPageToken"): high entropy,
 // not credentials, and useful to keep readable.
-var paginationWords = map[string]bool{
-	"page": true, "next": true, "continuation": true, "pagination": true,
-	"cursor": true, "sync": true, "resume": true, "upload": true, "delta": true,
-}
+var paginationWords = lazySet{list: []string{
+	"page", "next", "continuation", "pagination",
+	"cursor", "sync", "resume", "upload", "delta",
+}}
 
 // publicWords mark the non-secret half of a key pair.
-var publicWords = map[string]bool{
-	"public": true, "pub": true, "pubkey": true, "publickey": true,
-	"publishable": true,
-}
+var publicWords = lazySet{list: []string{
+	"public", "pub", "pubkey", "publickey",
+	"publishable",
+}}
 
 // splitNameWords breaks an identifier into lower-case words on separators and
 // camelCase boundaries. It returns nil for names that are too long or have too
@@ -151,30 +151,30 @@ func secretName(name string) nameTier {
 	if len(words) == 0 {
 		return nameNone
 	}
-	if booleanPrefixes[words[0]] && len(words) > 1 {
+	if booleanPrefixes.has(words[0]) && len(words) > 1 {
 		return nameNone
 	}
 	last := -1 // index of the last word that is part of a keyword
 	tier := nameNone
 	for i, w := range words {
-		if publicWords[w] {
+		if publicWords.has(w) {
 			return nameNone
 		}
 		switch {
-		case passwordWords[w]:
+		case passwordWords.has(w):
 			last, tier = i, namePassword
-		case secretWords[w]:
-			if w == "token" && i > 0 && paginationWords[words[i-1]] {
+		case secretWords.has(w):
+			if w == "token" && i > 0 && paginationWords.has(words[i-1]) {
 				return nameNone
 			}
 			last, tier = i, nameSecret
-		case w == "key" && i > 0 && keyQualifiers[words[i-1]]:
+		case w == "key" && i > 0 && keyQualifiers.has(words[i-1]):
 			last, tier = i, nameSecret
 		default:
 			for _, cs := range compoundSuffixes {
 				if len(w) > len(cs.suffix) && strings.HasSuffix(w, cs.suffix) {
 					stem := w[:len(w)-len(cs.suffix)]
-					if cs.suffix == "token" && (paginationWords[stem] || strings.HasSuffix(stem, "page")) {
+					if cs.suffix == "token" && (paginationWords.has(stem) || strings.HasSuffix(stem, "page")) {
 						return nameNone
 					}
 					last, tier = i, cs.tier
@@ -187,7 +187,7 @@ func secretName(name string) nameTier {
 		return nameNone
 	}
 	for _, w := range words[last+1:] {
-		if allowedTail[w] || allDigits(w) {
+		if allowedTail.has(w) || allDigits(w) {
 			continue
 		}
 		return nameNone
@@ -209,13 +209,13 @@ func allDigits(s string) bool {
 
 // urlParamNames are query parameter names that carry credentials in URLs but
 // are too generic to treat as secret names anywhere else ("key", "code").
-var urlParamNames = map[string]bool{
-	"key": true, "sig": true, "signature": true, "code": true, "sas": true,
-	"hmac": true, "otp": true, "assertion": true, "client_assertion": true,
-	"x-amz-signature": true, "x-amz-credential": true, "x-amz-security-token": true,
-	"x-goog-signature": true, "x-goog-credential": true, "awsaccesskeyid": true,
-	"sharedaccesssignature": true, "samlresponse": true,
-}
+var urlParamNames = lazySet{list: []string{
+	"key", "sig", "signature", "code", "sas",
+	"hmac", "otp", "assertion", "client_assertion",
+	"x-amz-signature", "x-amz-credential", "x-amz-security-token",
+	"x-goog-signature", "x-goog-credential", "awsaccesskeyid",
+	"sharedaccesssignature", "samlresponse",
+}}
 
 // secretParamName reports whether a URL query or fragment parameter name
 // should have its value redacted.
@@ -223,5 +223,5 @@ func secretParamName(name string) bool {
 	if secretName(name) != nameNone {
 		return true
 	}
-	return urlParamNames[asciiLower(name)]
+	return urlParamNames.has(asciiLower(name))
 }

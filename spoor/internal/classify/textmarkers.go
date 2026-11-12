@@ -101,10 +101,11 @@ func rule(marker markerID, first map[string]bool, rest ...seqStep) seqRule {
 
 func then(gap int, words ...string) seqStep { return seqStep{gap, ws(words...)} }
 
+// Word lists shared by several rules. They are static data; the sets the
+// rules match against are built with the rules, on first use.
 var (
-	// Word sets shared by several rules.
-	wIgnore       = ws("ignore", "disregard", "forget", "ignoring", "disregarding")
-	wOverride     = ws("override", "bypass", "discard", "neglect", "overlook", "dismiss")
+	wIgnore       = []string{"ignore", "disregard", "forget", "ignoring", "disregarding"}
+	wOverride     = []string{"override", "bypass", "discard", "neglect", "overlook", "dismiss"}
 	wStrongQual   = []string{"previous", "prior", "above", "earlier", "preceding", "former", "foregoing", "original", "initial", "system", "safety"}
 	wWeakQual     = []string{"all", "any", "every", "your", "these", "those"}
 	wInstructions = []string{"instruction", "instructions", "prompt", "prompts", "direction", "directions", "directive", "directives", "guideline", "guidelines", "programming", "training", "safeguards", "guardrails"}
@@ -125,64 +126,69 @@ func concat(lists ...[]string) []string {
 	return out
 }
 
-var seqRules = []seqRule{
-	// ---- ignore_previous ----
-	// "ignore the previous instructions", "disregard all prior rules".
-	rule(mkIgnorePrevious, wIgnore, then(3, wStrongQual...), then(3, concat(wInstructions, wRulesLike)...)),
-	// The weaker verbs are everyday technical vocabulary ("this overrides
-	// the previous rules" is CSS), so they need an unambiguous object.
-	rule(mkIgnorePrevious, wOverride, then(3, wStrongQual...), then(3, wInstructions...)),
-	// "ignore all instructions", "forget your guidelines": the weak qualifiers
-	// only count with an unambiguous object ("ignore all rules" is lint talk).
-	rule(mkIgnorePrevious, wIgnore, then(1, wWeakQual...), then(2, wInstructions...)),
-	rule(mkIgnorePrevious, ws("forget"), then(1, "everything", "all", "anything", "what"), then(4, "above", "before", "previously", "told", "said", "learned", "instructed", "prior", "earlier")),
-	rule(mkIgnorePrevious, ws("do"), then(0, "not"), then(0, "follow", "obey"), then(2, concat(wStrongQual, wWeakQual)...), then(2, wInstructions...)),
-	rule(mkIgnorePrevious, ws("instructions", "instruction"), then(1, "above", "before"), then(3, "void", "invalid", "obsolete", "superseded", "outdated", "cancelled", "canceled", "revoked", "overridden", "ignored")),
+// buildSeqRules returns the phrase rules. It runs once per process, on the
+// first scan (seqRuleIndex): the rules hold about a hundred small word sets,
+// and building them at package init would cost every hook invocation.
+func buildSeqRules() []seqRule {
+	return []seqRule{
+		// ---- ignore_previous ----
+		// "ignore the previous instructions", "disregard all prior rules".
+		rule(mkIgnorePrevious, ws(wIgnore...), then(3, wStrongQual...), then(3, concat(wInstructions, wRulesLike)...)),
+		// The weaker verbs are everyday technical vocabulary ("this overrides
+		// the previous rules" is CSS), so they need an unambiguous object.
+		rule(mkIgnorePrevious, ws(wOverride...), then(3, wStrongQual...), then(3, wInstructions...)),
+		// "ignore all instructions", "forget your guidelines": the weak qualifiers
+		// only count with an unambiguous object ("ignore all rules" is lint talk).
+		rule(mkIgnorePrevious, ws(wIgnore...), then(1, wWeakQual...), then(2, wInstructions...)),
+		rule(mkIgnorePrevious, ws("forget"), then(1, "everything", "all", "anything", "what"), then(4, "above", "before", "previously", "told", "said", "learned", "instructed", "prior", "earlier")),
+		rule(mkIgnorePrevious, ws("do"), then(0, "not"), then(0, "follow", "obey"), then(2, concat(wStrongQual, wWeakQual)...), then(2, wInstructions...)),
+		rule(mkIgnorePrevious, ws("instructions", "instruction"), then(1, "above", "before"), then(3, "void", "invalid", "obsolete", "superseded", "outdated", "cancelled", "canceled", "revoked", "overridden", "ignored")),
 
-	// ---- system_prompt_override ----
-	rule(mkSystemPromptOverride, ws("new", "updated", "revised", "replacement"), then(0, "system"), then(0, "prompt", "message", "instructions", "instruction", "directive")),
-	rule(mkSystemPromptOverride, ws("system"), then(0, "override", "overwrite")),
-	rule(mkSystemPromptOverride, ws("override", "overriding", "overwrite", "replace", "replacing"), then(2, "system"), then(0, "prompt", "instructions", "message")),
-	rule(mkSystemPromptOverride, ws("you"), then(0, "are"), then(0, "now"), then(3, concat(wJailbreak, []string{"evil", "free", "developer", "admin", "root", "god"})...)),
-	rule(mkSystemPromptOverride, ws("you"), then(0, "are"), then(0, "no"), then(0, "longer"), then(3, "bound", "restricted", "limited", "constrained", "required", "obligated", "subject")),
-	rule(mkSystemPromptOverride, ws("from"), then(0, "now"), then(0, "on"), then(1, "you"), then(4, "act", "behave", "respond", "answer", "obey", "ignore", "pretend", "roleplay", "only", "always", "never")),
-	rule(mkSystemPromptOverride, ws(concat(wJailbreak, []string{"god", "jailbreak"})...), then(0, "mode"), then(1, "enabled", "activated", "on", "engaged", "active", "unlocked")),
-	rule(mkSystemPromptOverride, ws("enter", "enable", "activate", "switch"), then(2, concat(wJailbreak, []string{"god", "jailbreak"})...), then(0, "mode")),
-	rule(mkSystemPromptOverride, ws("reveal", "print", "show", "repeat", "output", "display", "leak", "reproduce", "recite", "dump", "disclose"), then(2, "your", "the"), then(0, "system", "initial", "hidden", "original", "secret", "full", "entire", "exact"), then(1, "prompt", "instructions", "instruction", "directives")),
-	rule(mkSystemPromptOverride, ws("you"), then(0, "have"), then(0, "no"), then(2, "restrictions", "rules", "guidelines", "limitations", "limits", "filters")),
-	rule(mkSystemPromptOverride, ws("act", "behave", "respond", "pretend"), then(1, "as", "like"), then(3, wJailbreak...)),
-	rule(mkSystemPromptOverride, ws("end"), then(0, "of"), then(0, "system"), then(0, "prompt", "message", "instructions")),
-	rule(mkSystemPromptOverride, ws("instructions", "message", "directive", "update"), then(0, "from"), then(1, "anthropic", "openai", "creators")),
+		// ---- system_prompt_override ----
+		rule(mkSystemPromptOverride, ws("new", "updated", "revised", "replacement"), then(0, "system"), then(0, "prompt", "message", "instructions", "instruction", "directive")),
+		rule(mkSystemPromptOverride, ws("system"), then(0, "override", "overwrite")),
+		rule(mkSystemPromptOverride, ws("override", "overriding", "overwrite", "replace", "replacing"), then(2, "system"), then(0, "prompt", "instructions", "message")),
+		rule(mkSystemPromptOverride, ws("you"), then(0, "are"), then(0, "now"), then(3, concat(wJailbreak, []string{"evil", "free", "developer", "admin", "root", "god"})...)),
+		rule(mkSystemPromptOverride, ws("you"), then(0, "are"), then(0, "no"), then(0, "longer"), then(3, "bound", "restricted", "limited", "constrained", "required", "obligated", "subject")),
+		rule(mkSystemPromptOverride, ws("from"), then(0, "now"), then(0, "on"), then(1, "you"), then(4, "act", "behave", "respond", "answer", "obey", "ignore", "pretend", "roleplay", "only", "always", "never")),
+		rule(mkSystemPromptOverride, ws(concat(wJailbreak, []string{"god", "jailbreak"})...), then(0, "mode"), then(1, "enabled", "activated", "on", "engaged", "active", "unlocked")),
+		rule(mkSystemPromptOverride, ws("enter", "enable", "activate", "switch"), then(2, concat(wJailbreak, []string{"god", "jailbreak"})...), then(0, "mode")),
+		rule(mkSystemPromptOverride, ws("reveal", "print", "show", "repeat", "output", "display", "leak", "reproduce", "recite", "dump", "disclose"), then(2, "your", "the"), then(0, "system", "initial", "hidden", "original", "secret", "full", "entire", "exact"), then(1, "prompt", "instructions", "instruction", "directives")),
+		rule(mkSystemPromptOverride, ws("you"), then(0, "have"), then(0, "no"), then(2, "restrictions", "rules", "guidelines", "limitations", "limits", "filters")),
+		rule(mkSystemPromptOverride, ws("act", "behave", "respond", "pretend"), then(1, "as", "like"), then(3, wJailbreak...)),
+		rule(mkSystemPromptOverride, ws("end"), then(0, "of"), then(0, "system"), then(0, "prompt", "message", "instructions")),
+		rule(mkSystemPromptOverride, ws("instructions", "message", "directive", "update"), then(0, "from"), then(1, "anthropic", "openai", "creators")),
 
-	// ---- do_not_tell_user ----
-	rule(mkDoNotTellUser, ws("do"), then(0, "not"), then(1, wTellVerbs...), then(5, wUser...)),
-	rule(mkDoNotTellUser, ws("dont", "never"), then(1, wTellVerbs...), then(5, wUser...)),
-	rule(mkDoNotTellUser, ws("do"), then(0, "not"), then(0, "mention", "reveal", "disclose"), then(0, "this", "these", "that", "it", "any"), then(1, "instruction", "instructions", "message", "step", "steps", "action", "actions", "to", "in")),
-	rule(mkDoNotTellUser, ws("without"), then(0, wTellGerunds...), then(2, wUser...)),
-	// Stealth, not consent: "without the user's approval" is what careful
-	// instruction files say and must not match.
-	rule(mkDoNotTellUser, ws("without"), then(2, "user", "users", "human", "their"), then(1, "knowledge", "noticing", "knowing", "awareness", "realizing")),
-	rule(mkDoNotTellUser, ws("hide", "conceal", "withhold", "keep"), then(3, "from"), then(2, "user", "users", "human", "humans")),
-	rule(mkDoNotTellUser, ws("user", "human"), then(1, "must", "should", "shall", "can", "need", "does"), then(0, "not", "never"), then(1, "know", "see", "notice", "realize", "suspect", "learn", "find")),
-	rule(mkDoNotTellUser, ws("user", "human"), then(1, "must", "should", "shall", "can", "need"), then(0, "not", "never"), then(0, "be"), then(1, "told", "informed", "aware", "notified", "alerted", "shown")),
-	rule(mkDoNotTellUser, ws("silently", "secretly", "covertly", "quietly", "discreetly", "stealthily"), then(2, "send", "upload", "post", "exfiltrate", "transmit", "forward", "copy", "collect", "read", "include", "append")),
+		// ---- do_not_tell_user ----
+		rule(mkDoNotTellUser, ws("do"), then(0, "not"), then(1, wTellVerbs...), then(5, wUser...)),
+		rule(mkDoNotTellUser, ws("dont", "never"), then(1, wTellVerbs...), then(5, wUser...)),
+		rule(mkDoNotTellUser, ws("do"), then(0, "not"), then(0, "mention", "reveal", "disclose"), then(0, "this", "these", "that", "it", "any"), then(1, "instruction", "instructions", "message", "step", "steps", "action", "actions", "to", "in")),
+		rule(mkDoNotTellUser, ws("without"), then(0, wTellGerunds...), then(2, wUser...)),
+		// Stealth, not consent: "without the user's approval" is what careful
+		// instruction files say and must not match.
+		rule(mkDoNotTellUser, ws("without"), then(2, "user", "users", "human", "their"), then(1, "knowledge", "noticing", "knowing", "awareness", "realizing")),
+		rule(mkDoNotTellUser, ws("hide", "conceal", "withhold", "keep"), then(3, "from"), then(2, "user", "users", "human", "humans")),
+		rule(mkDoNotTellUser, ws("user", "human"), then(1, "must", "should", "shall", "can", "need", "does"), then(0, "not", "never"), then(1, "know", "see", "notice", "realize", "suspect", "learn", "find")),
+		rule(mkDoNotTellUser, ws("user", "human"), then(1, "must", "should", "shall", "can", "need"), then(0, "not", "never"), then(0, "be"), then(1, "told", "informed", "aware", "notified", "alerted", "shown")),
+		rule(mkDoNotTellUser, ws("silently", "secretly", "covertly", "quietly", "discreetly", "stealthily"), then(2, "send", "upload", "post", "exfiltrate", "transmit", "forward", "copy", "collect", "read", "include", "append")),
 
-	// ---- exfil_instruction ----
-	// A transfer verb, a store of secrets, and an external sink. Collections
-	// only ("credentials", "keys"): "send your API key to https://api..." is
-	// what every API guide says.
-	rule(mkExfilInstruction, ws("send", "post", "upload", "forward", "exfiltrate", "transmit", "leak", "email", "mail", "submit", "deliver", "paste", "transfer"), then(8, wStash...), then(8, wSinks...)),
-	rule(mkExfilInstruction, ws("append", "include", "embed", "encode", "attach", "add", "put", "insert", "place"), then(8, wStash...), then(8, "url", "query", "parameter", "param", "querystring")),
+		// ---- exfil_instruction ----
+		// A transfer verb, a store of secrets, and an external sink. Collections
+		// only ("credentials", "keys"): "send your API key to https://api..." is
+		// what every API guide says.
+		rule(mkExfilInstruction, ws("send", "post", "upload", "forward", "exfiltrate", "transmit", "leak", "email", "mail", "submit", "deliver", "paste", "transfer"), then(8, wStash...), then(8, wSinks...)),
+		rule(mkExfilInstruction, ws("append", "include", "embed", "encode", "attach", "add", "put", "insert", "place"), then(8, wStash...), then(8, "url", "query", "parameter", "param", "querystring")),
 
-	// ---- tool_call_injection (phrases; forged markup is matched as text) ----
-	// "tool" only: "you must run the command" and "call the function first"
-	// are what ordinary documentation says.
-	rule(mkToolCallInjection, ws("you"), then(0, "must", "should", "need", "shall", "have", "will"), then(2, "call", "use", "invoke", "execute", "run", "trigger"), then(4, "tool", "mcp")),
-	rule(mkToolCallInjection, ws("call", "use", "invoke", "run", "execute"), then(3, "tool", "mcp"), then(6, "without", "immediately", "silently", "automatically")),
-	rule(mkToolCallInjection, ws("before", "prior"), then(1, "using", "calling", "invoking", "responding", "answering", "replying", "proceeding", "continuing", "any"), then(6, "read", "cat", "fetch", "call", "invoke", "send", "pass", "execute", "run"), then(6, "mcp", "ssh", "env", "id_rsa", "credentials", "config", "json", "tool")),
+		// ---- tool_call_injection (phrases; forged markup is matched as text) ----
+		// "tool" only: "you must run the command" and "call the function first"
+		// are what ordinary documentation says.
+		rule(mkToolCallInjection, ws("you"), then(0, "must", "should", "need", "shall", "have", "will"), then(2, "call", "use", "invoke", "execute", "run", "trigger"), then(4, "tool", "mcp")),
+		rule(mkToolCallInjection, ws("call", "use", "invoke", "run", "execute"), then(3, "tool", "mcp"), then(6, "without", "immediately", "silently", "automatically")),
+		rule(mkToolCallInjection, ws("before", "prior"), then(1, "using", "calling", "invoking", "responding", "answering", "replying", "proceeding", "continuing", "any"), then(6, "read", "cat", "fetch", "call", "invoke", "send", "pass", "execute", "run"), then(6, "mcp", "ssh", "env", "id_rsa", "credentials", "config", "json", "tool")),
 
-	// ---- base64_blob_instruction (the phrase; blobs are decoded separately) ----
-	rule(mkBase64Blob, ws("decode", "decoding", "b64decode", "atob"), then(6, "and", "then"), then(2, "run", "execute", "eval", "follow", "obey", "pipe", "apply", "perform")),
+		// ---- base64_blob_instruction (the phrase; blobs are decoded separately) ----
+		rule(mkBase64Blob, ws("decode", "decoding", "b64decode", "atob"), then(6, "and", "then"), then(2, "run", "execute", "eval", "follow", "obey", "pipe", "apply", "perform")),
+	}
 }
 
 var (
@@ -190,15 +196,19 @@ var (
 	seqIndex     map[string][]*seqRule
 )
 
+// seqRuleIndex builds the rules and indexes them by the words their first
+// step accepts.
 func seqRuleIndex() map[string][]*seqRule {
 	seqIndexOnce.Do(func() {
-		seqIndex = map[string][]*seqRule{}
-		for i := range seqRules {
-			r := &seqRules[i]
+		rules := buildSeqRules()
+		idx := map[string][]*seqRule{}
+		for i := range rules {
+			r := &rules[i]
 			for w := range r.steps[0].words {
-				seqIndex[w] = append(seqIndex[w], r)
+				idx[w] = append(idx[w], r)
 			}
 		}
+		seqIndex = idx
 	})
 	return seqIndex
 }
@@ -272,20 +282,20 @@ func textRegexes() {
 
 // aiTerms name an assistant being addressed. "agent" and "model" are absent:
 // they are ordinary programming words.
-var aiTerms = ws("ai", "ais", "assistant", "assistants", "llm", "llms", "claude", "copilot", "cursor", "gemini", "codex", "chatgpt", "gpt")
+var aiTerms = lazySet{list: []string{"ai", "ais", "assistant", "assistants", "llm", "llms", "claude", "copilot", "cursor", "gemini", "codex", "chatgpt", "gpt"}}
 
-var imperativeTerms = ws("must", "should", "please", "always", "never", "ignore", "execute", "send", "fetch", "download", "install", "dont")
+var imperativeTerms = lazySet{list: []string{"must", "should", "please", "always", "never", "ignore", "execute", "send", "fetch", "download", "install", "dont"}}
 
 // badgeHosts serve status badges, whose URLs legitimately carry long query
 // strings. Dynamic shields.io badges are excluded from the exemption because
 // they make the badge server fetch a caller-supplied URL.
-var badgeHosts = map[string]bool{
-	"img.shields.io": true, "shields.io": true, "badgen.net": true,
-	"codecov.io": true, "coveralls.io": true, "sonarcloud.io": true,
-	"badge.fury.io": true, "api.codeclimate.com": true, "app.codacy.com": true,
-	"github.com": true, "raw.githubusercontent.com": true,
-	"user-images.githubusercontent.com": true, "github-readme-stats.vercel.app": true,
-}
+var badgeHosts = lazySet{list: []string{
+	"img.shields.io", "shields.io", "badgen.net",
+	"codecov.io", "coveralls.io", "sonarcloud.io",
+	"badge.fury.io", "api.codeclimate.com", "app.codacy.com",
+	"github.com", "raw.githubusercontent.com",
+	"user-images.githubusercontent.com", "github-readme-stats.vercel.app",
+}}
 
 // scanMarkers adds every marker found in text. full enables the structural
 // checks (comments, images, base64 blobs) that only make sense for the
@@ -422,11 +432,11 @@ func scanComments(text string, ms *markerSet) {
 		}
 		// An assistant addressed by name and told to do something.
 		for i, w := range words {
-			if !aiTerms[w] {
+			if !aiTerms.has(w) {
 				continue
 			}
 			for j := i + 1; j <= i+4 && j < len(words); j++ {
-				if imperativeTerms[words[j]] {
+				if imperativeTerms.has(words[j]) {
 					ms.add(mkHiddenHTMLComment)
 					return
 				}
@@ -446,7 +456,7 @@ func scanImages(text string, ms *markerSet) {
 		u := clipBytes(m[1], maxImageURL)
 		p := splitURL(u)
 		suspicious := false
-		badge := badgeHosts[normalizeHost(p.hostport)] && !strings.Contains(p.path, "/dynamic") && !strings.Contains(p.path, "/endpoint")
+		badge := badgeHosts.has(normalizeHost(p.hostport)) && !strings.Contains(p.path, "/dynamic") && !strings.Contains(p.path, "/endpoint")
 		if p.hasQuery {
 			if strings.ContainsAny(p.query, "{}$<[") || strings.Contains(strings.ToLower(p.query), "%7b") {
 				suspicious = true

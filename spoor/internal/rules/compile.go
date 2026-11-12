@@ -1,7 +1,6 @@
 package rules
 
 import (
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -70,18 +69,22 @@ type rule struct {
 	remedy    string
 	novelty   *novelty
 
-	tests     []rawTest
+	tests     []rawTest // read through testList
 	testCount int
 
 	pack, packVersion string
 	embedded          bool
 
 	// The canonical JSON of the definition (for Hash) is rendered on first
-	// use from the retained node: most hook processes never need it, and
-	// rendering is a third of the cost of loading a pack.
+	// use from the retained node: most hook processes never need it.
 	node      *yaml.Node
 	canonOnce sync.Once
 	canon     []byte
+
+	// lazy is set on rules loaded from the embedded cache: only the fields
+	// set sets, guard subsets and the engine's index read are compiled at
+	// load; the rest on first use (ensure). nil for rules compiled whole.
+	lazy *lazyBody
 }
 
 func (r *rule) canonical() []byte {
@@ -89,7 +92,9 @@ func (r *rule) canonical() []byte {
 		if r.canon == nil {
 			r.canon = canonical(r.node)
 		}
-		r.node = nil
+		if r.lazy == nil {
+			r.node = nil // a lazy rule compiles from it later
+		}
 	})
 	return r.canon
 }
@@ -120,6 +125,21 @@ func oneOf(v, def string, allowed ...string) (string, bool) {
 // compileRule validates one rule. Errors here are structural: a rule that
 // cannot be evaluated as written. Quality problems are Lint's job.
 func compileRule(rr *rawRule, ruleNode *yaml.Node, pack, version string) (*rule, error) {
+	r, err := compileBody(rr, pack, version)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkTests(r.ID, rr.Tests); err != nil {
+		return nil, err
+	}
+	r.tests = rr.Tests
+	r.node = ruleNode
+	r.testCount = len(rr.Tests)
+	return r, nil
+}
+
+// compileBody compiles everything of a rule except its tests.
+func compileBody(rr *rawRule, pack, version string) (*rule, error) {
 	r := &rule{
 		ID: rr.ID, Title: rr.Title, Description: rr.Description, Category: rr.Category,
 		Tags: rr.Tags, References: rr.References, FalsePositives: rr.FalsePositives,
@@ -236,35 +256,41 @@ func compileRule(rr *rawRule, ruleNode *yaml.Node, pack, version string) (*rule,
 			}
 		}
 	}
-	if len(rr.Tests) == 0 {
-		return nil, fail("at least one test is required")
+	return r, nil
+}
+
+// checkTests validates the inline tests of rule id.
+func checkTests(id string, tests []rawTest) error {
+	fail := func(format string, a ...any) error {
+		return fmt.Errorf("rule %s: %s", id, fmt.Sprintf(format, a...))
 	}
-	if len(rr.Tests) > maxTests {
-		return nil, fail("more than %d tests", maxTests)
+	if len(tests) == 0 {
+		return fail("at least one test is required")
 	}
-	for i := range rr.Tests {
-		t := &rr.Tests[i]
+	if len(tests) > maxTests {
+		return fail("more than %d tests", maxTests)
+	}
+	for i := range tests {
+		t := &tests[i]
 		if t.Name == "" {
-			return nil, fail("test %d has no name", i+1)
+			return fail("test %d has no name", i+1)
 		}
 		if t.Expect != "match" && t.Expect != "no_match" {
-			return nil, fail("test %q: expect must be match or no_match", t.Name)
+			return fail("test %q: expect must be match or no_match", t.Name)
 		}
 		if (t.Event.Kind == 0) == (len(t.Events) == 0) {
-			return nil, fail("test %q: give exactly one of event or events", t.Name)
+			return fail("test %q: give exactly one of event or events", t.Name)
 		}
 		if len(t.Events) > 64 {
-			return nil, fail("test %q: more than 64 events", t.Name)
+			return fail("test %q: more than 64 events", t.Name)
 		}
 		for _, name := range t.Flags {
 			if !flagRe.MatchString(name) {
-				return nil, fail("test %q: flag name %q is not valid", t.Name, name)
+				return fail("test %q: flag name %q is not valid", t.Name, name)
 			}
 		}
 	}
-	r.node = ruleNode
-	r.testCount = len(rr.Tests)
-	return r, nil
+	return nil
 }
 
 // typeLiterals returns the event types a when predicate requires, when it
@@ -309,23 +335,6 @@ func parseDuration(s string) (time.Duration, error) {
 		return time.Duration(n * float64(24*time.Hour)), nil
 	}
 	return time.ParseDuration(s)
-}
-
-// canonical renders a YAML node as JSON with sorted keys, so formatting and
-// comments do not change a rule set's hash but content does.
-func canonical(n *yaml.Node) []byte {
-	if n == nil {
-		return nil
-	}
-	var v any
-	if err := n.Decode(&v); err != nil {
-		return []byte(n.Value)
-	}
-	b, err := json.Marshal(jsonable(v))
-	if err != nil {
-		return nil
-	}
-	return b
 }
 
 // jsonable converts yaml.v3's decoded values (map[string]any with possibly

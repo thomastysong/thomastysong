@@ -102,11 +102,11 @@ func (p *lexPath) segIs(i int, lowerLit string) bool {
 
 // sshConfigNames are the files in ~/.ssh that configure the client and are
 // not private keys.
-var sshConfigNames = map[string]bool{
-	"config": true, "config.d": true, "known_hosts": true, "known_hosts.old": true,
-	"known_hosts2": true, "rc": true, "environment": true, "allowed_signers": true,
-	"ssh_config": true,
-}
+var sshConfigNames = lazySet{list: []string{
+	"config", "config.d", "known_hosts", "known_hosts.old",
+	"known_hosts2", "rc", "environment", "allowed_signers",
+	"ssh_config",
+}}
 
 // classifySSHDir classifies the contents of a .ssh directory. Private keys
 // have no fixed name (github, work_ed25519, deploy.pem), so everything that
@@ -125,7 +125,7 @@ func classifySSHDir(lp *lexPath, set *pathSet) {
 		switch {
 		case name == "authorized_keys" || name == "authorized_keys2":
 			set.add(pcSSHAuthorizedKeys)
-		case sshConfigNames[name]:
+		case sshConfigNames.has(name):
 			set.add(pcSSHConfig)
 		case strings.HasSuffix(name, ".pub"):
 		case name == "sockets" || name == "multiplex" || strings.HasPrefix(name, "agent") ||
@@ -140,11 +140,11 @@ func classifySSHDir(lp *lexPath, set *pathSet) {
 
 // envTemplateWords mark dotenv files that are committed on purpose and hold
 // names, not values.
-var envTemplateWords = map[string]bool{
-	"example": true, "sample": true, "template": true, "tmpl": true, "tpl": true,
-	"dist": true, "schema": true, "defaults": true, "default": true, "ex": true,
-	"examples": true, "skel": true,
-}
+var envTemplateWords = lazySet{list: []string{
+	"example", "sample", "template", "tmpl", "tpl",
+	"dist", "schema", "defaults", "default", "ex",
+	"examples", "skel",
+}}
 
 func classifyEnvFile(lp *lexPath, set *pathSet) {
 	if len(lp.segs) == 0 {
@@ -166,14 +166,14 @@ func classifyEnvFile(lp *lexPath, set *pathSet) {
 		set.add(pcSecretEnv)
 	case strings.HasPrefix(b, ".env."):
 		for _, part := range strings.Split(strings.ToLower(b[5:]), ".") {
-			if envTemplateWords[part] {
+			if envTemplateWords.has(part) {
 				return
 			}
 		}
 		set.add(pcSecretEnv)
 	case strings.HasSuffix(b, ".env") && len(b) > 4:
 		for _, part := range strings.FieldsFunc(strings.ToLower(b[:len(b)-4]), func(r rune) bool { return r == '.' || r == '-' || r == '_' }) {
-			if envTemplateWords[part] {
+			if envTemplateWords.has(part) {
 				return
 			}
 		}
@@ -181,10 +181,10 @@ func classifyEnvFile(lp *lexPath, set *pathSet) {
 	}
 }
 
-var keyExtensions = map[string]bool{
-	".pem": true, ".key": true, ".p12": true, ".pfx": true, ".jks": true,
-	".keystore": true, ".p8": true, ".pk8": true, ".ovpn": true, ".agekey": true,
-}
+var keyExtensions = lazySet{list: []string{
+	".pem", ".key", ".p12", ".pfx", ".jks",
+	".keystore", ".p8", ".pk8", ".ovpn", ".agekey",
+}}
 
 // publicKeyHints mark PEM-family files that hold certificates or public keys.
 var publicKeyHints = []string{
@@ -193,10 +193,10 @@ var publicKeyHints = []string{
 }
 
 // publicKeyDirs are system trust stores: full of *.pem, none of them private.
-var publicKeyDirs = map[string]bool{
-	"certs": true, "ca-certificates": true, "ca-trust": true, "certifi": true,
-	"anchors": true, "trust-source": true,
-}
+var publicKeyDirs = lazySet{list: []string{
+	"certs", "ca-certificates", "ca-trust", "certifi",
+	"anchors", "trust-source",
+}}
 
 func extOf(name string) string {
 	if i := strings.LastIndexByte(name, '.'); i > 0 {
@@ -216,11 +216,11 @@ func classifyKeyFile(lp *lexPath, set *pathSet) {
 	named := strings.Contains(b, "privkey") || strings.Contains(b, "private_key") ||
 		strings.Contains(b, "private-key") || strings.Contains(b, "privatekey")
 	ext := extOf(b)
-	if named && !sourceExtensions[ext] {
+	if named && !sourceExtensions.has(ext) {
 		set.add(pcCertPrivateKey)
 		return
 	}
-	if !keyExtensions[ext] {
+	if !keyExtensions.has(ext) {
 		return
 	}
 	if strings.Contains(b, "public") || strings.Contains(b, "pubkey") || strings.Contains(b, ".pub.") ||
@@ -236,7 +236,7 @@ func classifyKeyFile(lp *lexPath, set *pathSet) {
 			}
 		}
 		for _, d := range lp.lsegs[:n-1] {
-			if publicKeyDirs[d] {
+			if publicKeyDirs.has(d) {
 				return
 			}
 		}
@@ -246,22 +246,22 @@ func classifyKeyFile(lp *lexPath, set *pathSet) {
 
 // sourceExtensions are files that talk ABOUT tokens and secrets (code and
 // documentation) rather than hold them.
-var sourceExtensions = map[string]bool{
-	".go": true, ".py": true, ".pyi": true, ".js": true, ".mjs": true, ".cjs": true,
-	".ts": true, ".tsx": true, ".jsx": true, ".java": true, ".kt": true, ".kts": true,
-	".rb": true, ".rs": true, ".c": true, ".h": true, ".cc": true, ".cpp": true,
-	".hpp": true, ".cs": true, ".php": true, ".swift": true, ".scala": true,
-	".m": true, ".mm": true, ".lua": true, ".pl": true, ".pm": true, ".ex": true,
-	".exs": true, ".erl": true, ".hs": true, ".clj": true, ".dart": true,
-	".vue": true, ".svelte": true, ".html": true, ".htm": true, ".css": true,
-	".scss": true, ".less": true, ".md": true, ".mdx": true, ".rst": true,
-	".adoc": true, ".proto": true, ".graphql": true, ".sh": true, ".bash": true,
-	".zsh": true, ".fish": true, ".ps1": true, ".bat": true, ".cmd": true,
-	".tf": true, ".sql": true, ".r": true, ".jl": true, ".zig": true, ".nim": true,
-	".svg": true, ".png": true, ".jpg": true, ".gif": true, ".snap": true,
-	".d.ts": true, ".map": true, ".ipynb": true, ".tmpl": true, ".j2": true,
-	".example": true, ".sample": true, ".template": true, ".dist": true,
-}
+var sourceExtensions = lazySet{list: []string{
+	".go", ".py", ".pyi", ".js", ".mjs", ".cjs",
+	".ts", ".tsx", ".jsx", ".java", ".kt", ".kts",
+	".rb", ".rs", ".c", ".h", ".cc", ".cpp",
+	".hpp", ".cs", ".php", ".swift", ".scala",
+	".m", ".mm", ".lua", ".pl", ".pm", ".ex",
+	".exs", ".erl", ".hs", ".clj", ".dart",
+	".vue", ".svelte", ".html", ".htm", ".css",
+	".scss", ".less", ".md", ".mdx", ".rst",
+	".adoc", ".proto", ".graphql", ".sh", ".bash",
+	".zsh", ".fish", ".ps1", ".bat", ".cmd",
+	".tf", ".sql", ".r", ".jl", ".zig", ".nim",
+	".svg", ".png", ".jpg", ".gif", ".snap",
+	".d.ts", ".map", ".ipynb", ".tmpl", ".j2",
+	".example", ".sample", ".template", ".dist",
+}}
 
 var tokenNameWords = []string{
 	"token", "secret", "credential", "creds", "password", "passwd", "apikey", "api_key", "api-key",
@@ -275,16 +275,16 @@ var tokenNameExclusions = []string{
 }
 
 // tokenFileNames are credential files whose names carry no token word.
-var tokenFileNames = map[string]bool{
-	".pgpass": true, "pgpass.conf": true, ".my.cnf": true, ".mylogin.cnf": true,
-	".htpasswd": true,
-}
+var tokenFileNames = lazySet{list: []string{
+	".pgpass", "pgpass.conf", ".my.cnf", ".mylogin.cnf",
+	".htpasswd",
+}}
 
 // secretDirNames are directories whose non-code contents are secrets by
 // convention (config/secrets/prod.yaml, /etc/secrets/db).
-var secretDirNames = map[string]bool{
-	"secrets": true, ".secrets": true, "secret": true, "credentials": true, ".credentials": true,
-}
+var secretDirNames = lazySet{list: []string{
+	"secrets", ".secrets", "secret", "credentials", ".credentials",
+}}
 
 // classifyTokenName assigns token_file from the file name: a token word in a
 // file that is data, not code or documentation.
@@ -294,7 +294,7 @@ func classifyTokenName(lp *lexPath, set *pathSet) {
 		return
 	}
 	b := lp.lbase()
-	if tokenFileNames[b] {
+	if tokenFileNames.has(b) {
 		set.add(pcTokenFile)
 		return
 	}
@@ -303,7 +303,7 @@ func classifyTokenName(lp *lexPath, set *pathSet) {
 	if set.has(pcCIConfig) || set.has(pcPackageManifest) || set.has(pcLockfile) || set.has(pcDockerfile) || set.has(pcVCSHook) {
 		return
 	}
-	if sourceExtensions[extOf(b)] {
+	if sourceExtensions.has(extOf(b)) {
 		return
 	}
 	if b == "passwd" || b == "passwd-" {
@@ -321,7 +321,7 @@ func classifyTokenName(lp *lexPath, set *pathSet) {
 		}
 	}
 	for _, d := range lp.lsegs[:n-1] {
-		if secretDirNames[d] {
+		if secretDirNames.has(d) {
 			set.add(pcTokenFile)
 			return
 		}
@@ -398,26 +398,26 @@ func isBlockDevice(name string) bool {
 }
 
 // posixSystemRoots are the top-level directories that belong to the OS.
-var posixSystemRoots = map[string]bool{
-	"etc": true, "bin": true, "sbin": true, "usr": true, "lib": true, "lib32": true,
-	"lib64": true, "libx32": true, "boot": true, "sys": true, "proc": true,
-	"var": true, "run": true, "snap": true, "nix": true,
-}
+var posixSystemRoots = lazySet{list: []string{
+	"etc", "bin", "sbin", "usr", "lib", "lib32",
+	"lib64", "libx32", "boot", "sys", "proc",
+	"var", "run", "snap", "nix",
+}}
 
-var darwinSystemRoots = map[string]bool{
-	"system": true, "library": true, "applications": true, "private": true, "cores": true,
-}
+var darwinSystemRoots = lazySet{list: []string{
+	"system", "library", "applications", "private", "cores",
+}}
 
-var windowsSystemRoots = map[string]bool{
-	"windows": true, "program files": true, "program files (x86)": true,
-	"programdata": true, "system volume information": true, "$recycle.bin": true,
-	"recovery": true, "boot": true, "efi": true,
-}
+var windowsSystemRoots = lazySet{list: []string{
+	"windows", "program files", "program files (x86)",
+	"programdata", "system volume information", "$recycle.bin",
+	"recovery", "boot", "efi",
+}}
 
 // sharedWindowsProfiles are C:\Users entries that are not a person's home.
-var sharedWindowsProfiles = map[string]bool{
-	"public": true, "default": true, "default user": true, "all users": true,
-}
+var sharedWindowsProfiles = lazySet{list: []string{
+	"public", "default", "default user", "all users",
+}}
 
 // homeDepth returns how many leading components of lp form a home directory,
 // or -1. Other users' homes count: reading /home/alice/.ssh from bob's
@@ -431,7 +431,7 @@ func homeDepth(lp, home *lexPath, os string) int {
 	}
 	s := lp.lsegs
 	if os == "windows" {
-		if len(s) >= 2 && s[0] == "users" && !sharedWindowsProfiles[s[1]] {
+		if len(s) >= 2 && s[0] == "users" && !sharedWindowsProfiles.has(s[1]) {
 			return 2
 		}
 		return -1
@@ -516,7 +516,7 @@ func classifyLocation(lp, cwd, home *lexPath, os string, set *pathSet) {
 	case n == 0:
 		set.add(pcSystemDir) // the filesystem or drive root
 	case win:
-		if windowsSystemRoots[s[0]] || (s[0] == "users" && n == 1) {
+		if windowsSystemRoots.has(s[0]) || (s[0] == "users" && n == 1) {
 			set.add(pcSystemDir)
 		}
 	case temp:
@@ -524,9 +524,9 @@ func classifyLocation(lp, cwd, home *lexPath, os string, set *pathSet) {
 		if n == 1 {
 			set.add(pcSystemDir)
 		}
-	case posixSystemRoots[lp.segs[0]] || (lp.fold && posixSystemRoots[s[0]]):
+	case posixSystemRoots.has(lp.segs[0]) || (lp.fold && posixSystemRoots.has(s[0])):
 		set.add(pcSystemDir)
-	case os == "darwin" && darwinSystemRoots[s[0]]:
+	case os == "darwin" && darwinSystemRoots.has(s[0]):
 		set.add(pcSystemDir)
 	case n == 1 && (s[0] == "home" || s[0] == "users" || s[0] == "opt" || s[0] == "srv" || s[0] == "mnt" || s[0] == "media"):
 		set.add(pcSystemDir) // the directory itself, not what users keep in it

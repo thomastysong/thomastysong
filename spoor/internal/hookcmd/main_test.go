@@ -18,6 +18,7 @@ import (
 
 	"github.com/thomastysong/spoor/internal/config"
 	"github.com/thomastysong/spoor/internal/event"
+	"github.com/thomastysong/spoor/internal/hookio"
 	"github.com/thomastysong/spoor/internal/rules"
 	"github.com/thomastysong/spoor/internal/spool"
 )
@@ -54,6 +55,10 @@ func installFault(spec string) {
 	kind, stage, _ := strings.Cut(spec, "@")
 	if kind == "nospace" {
 		appendRecord = func(*spool.Writer, *event.Event) error { return spool.ErrNoSpace }
+		return
+	}
+	if kind == "norender" {
+		renderReply = func(hookio.Dialect, *hookio.Request, hookio.Decision) ([]byte, bool) { return nil, false }
 		return
 	}
 	faultHook = func(s string) {

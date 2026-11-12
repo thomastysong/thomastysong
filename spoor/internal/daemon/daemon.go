@@ -138,7 +138,25 @@ type daemon struct {
 	scans  *scanner
 	trans  *transcriptRunner
 
+	earlyMu sync.Mutex
+	early   []*event.Event // health records produced before the pipeline existed
+
 	wg sync.WaitGroup
+}
+
+// emit hands a record the daemon produced itself (health errors) to the
+// pipeline, or keeps it until the pipeline exists.
+func (d *daemon) emit(ev *event.Event) {
+	d.earlyMu.Lock()
+	if d.pipe == nil {
+		if len(d.early) < 64 {
+			d.early = append(d.early, ev)
+		}
+		d.earlyMu.Unlock()
+		return
+	}
+	d.earlyMu.Unlock()
+	d.pipe.Ingest(ev)
 }
 
 func newDaemon(cfg *config.Config, log *slog.Logger, env runEnv) (d *daemon, err error) {
@@ -215,7 +233,7 @@ func newDaemon(cfg *config.Config, log *slog.Logger, env runEnv) (d *daemon, err
 		})
 	}
 
-	d.pipe, err = engine.New(engine.Options{
+	pipe, err := engine.New(engine.Options{
 		Config:        cfg,
 		Catalog:       d.cat,
 		Rules:         set,
@@ -237,6 +255,14 @@ func newDaemon(cfg *config.Config, log *slog.Logger, env runEnv) (d *daemon, err
 	})
 	if err != nil {
 		return nil, fmt.Errorf("daemon: pipeline: %w", err)
+	}
+	d.earlyMu.Lock()
+	d.pipe = pipe
+	early := d.early
+	d.early = nil
+	d.earlyMu.Unlock()
+	if len(early) > 0 {
+		d.pipe.Ingest(early...)
 	}
 	d.scans = newScanner(d)
 	d.trans = newTranscriptRunner(d)
@@ -452,7 +478,7 @@ func (d *daemon) pruneOutbox(now time.Time) {
 	res := d.pruner.prune(now)
 	d.recordPrune(res)
 	if res.unread.events > 0 || res.unread.bytes > 0 {
-		d.ingest(droppedUnshippedEvent(now, res.unread))
+		d.emit(droppedUnshippedEvent(now, res.unread))
 		d.log.Warn("outbox byte cap dropped data no consumer had read",
 			"bytes", res.unread.bytes, "records", res.unread.events, "segments", res.unread.segments)
 	}
@@ -512,8 +538,18 @@ func (d *daemon) refreshProcs() {
 	}
 	agents := d.mon.Agents()
 	d.procs.set(agents, d.users)
+	cwds := make([]agentCWD, 0, len(agents))
+	for _, a := range agents {
+		if a.CWD != "" {
+			cwds = append(cwds, agentCWD{agent: a.AgentID, cwd: a.CWD, user: a.User})
+		}
+	}
+	d.scans.noteAgents(cwds)
 	st := d.mon.Stats()
 	d.board.surface(monitorSurface(st))
+	if config.On(d.cfg.Sources.OsqueryExec.Enabled, true) {
+		d.board.surface(osquerySurface(st))
+	}
 	d.board.set("procmon.roots", uint64(st.Roots))
 	d.board.set("procmon.exec_healthy", boolGauge(st.ExecHealthy))
 	d.board.set("procmon.rate_dropped", st.RateDropped)
@@ -533,6 +569,22 @@ func boolGauge(b bool) uint64 {
 		return 1
 	}
 	return 0
+}
+
+// osquerySurface renders the osquery exec provider (internal/osqexec,
+// run by the monitor): event | unavailable | error:<reason>.
+func osquerySurface(st procmon.Stats) event.SurfaceStatus {
+	s := event.SurfaceStatus{Name: "osquery", Status: "ok", Events: st.OsqueryEvts}
+	switch {
+	case st.Disabled:
+		s.Status, s.Reason = "disabled", "kill_switch"
+	case st.Osquery == "event" || st.Source == procmon.SourceOsquery:
+	case st.Osquery == "" || st.Osquery == "unavailable":
+		s.Status, s.Reason = "disabled", "unavailable"
+	default:
+		s.Status, s.Reason = "failed", "error"
+	}
+	return s
 }
 
 // monitorSurface renders the process monitor's state for the heartbeat.

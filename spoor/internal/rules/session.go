@@ -101,6 +101,11 @@ type dedupEntry struct {
 type secretFP struct {
 	fp, kind string
 	n        int // length of the value in bytes; 0 when unknown
+	// weak marks a value captured only for looking machine generated (an
+	// entropy match under a name that does not say secret): such values
+	// are often identifiers (project refs, bucket names) that are used as
+	// host names, so a raw DNS-label match does not count for them.
+	weak bool
 }
 
 // scopedRef names a per-user or per-host threshold counter (in the
@@ -299,16 +304,19 @@ func (s *sessionState) hasWritten(d string) bool {
 	return false
 }
 
-func (s *sessionState) addSecret(fp, kind string, n int) {
-	for _, x := range s.secrets {
+func (s *sessionState) addSecret(fp, kind string, n int, weak bool) {
+	for i, x := range s.secrets {
 		if x.fp == fp {
+			if x.weak && !weak {
+				s.secrets[i].weak = false // a later read named it a secret
+			}
 			return
 		}
 	}
 	if len(s.secrets) >= maxSecretFPs {
 		s.secrets = s.secrets[1:]
 	}
-	s.secrets = append(s.secrets, secretFP{fp: fp, kind: kind, n: n})
+	s.secrets = append(s.secrets, secretFP{fp: fp, kind: kind, n: n, weak: weak})
 }
 
 // noteScoped records that this session fed the scoped counter key.
@@ -415,6 +423,7 @@ type exportSecret struct {
 	FP   string `json:"h"`
 	Kind string `json:"k"`
 	N    int    `json:"n,omitempty"`
+	Weak bool   `json:"w,omitempty"`
 }
 
 type exportHit struct {
@@ -453,7 +462,7 @@ func (s *sessionState) export() exportState {
 		x.Salt = hex.EncodeToString(s.salt)
 	}
 	for _, sc := range s.secrets {
-		x.Secrets = append(x.Secrets, exportSecret{FP: sc.fp, Kind: sc.kind, N: sc.n})
+		x.Secrets = append(x.Secrets, exportSecret{FP: sc.fp, Kind: sc.kind, N: sc.n, Weak: sc.weak})
 	}
 	if len(s.counters) > 0 {
 		x.Counters = map[string][]exportHit{}
@@ -681,7 +690,7 @@ func importState(key string, data []byte, now time.Time) (*sessionState, error) 
 		if !isHex(sc.FP, 24) || len(sc.Kind) > 64 || len(st.salt) == 0 || sc.N < 0 || sc.N > maxSecretValue {
 			return nil, badState("invalid fingerprint")
 		}
-		st.secrets = append(st.secrets, secretFP{fp: sc.FP, kind: sc.Kind, n: sc.N})
+		st.secrets = append(st.secrets, secretFP{fp: sc.FP, kind: sc.Kind, n: sc.N, weak: sc.Weak})
 	}
 	if len(x.Counters) > maxSessionCounters {
 		return nil, badState("too many counters")

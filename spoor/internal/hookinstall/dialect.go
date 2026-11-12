@@ -158,8 +158,8 @@ const codexSessionEndMax = 3
 // PowerShell form otherwise; see windowsCommand. Codex reads a non-zero
 // exit other than 2 as a failed, non-blocking run and exit 2 with stderr as
 // a block (codex-rs/hooks/src/events/pre_tool_use.rs, read 2026-11-12), so
-// a missing binary there was noise rather than a denial. "timeout" is in
-// seconds.
+// for Codex an unguarded missing binary is noise rather than a denial.
+// "timeout" is in seconds.
 // VERIFIED: codex-rs/core/config.schema.json (HookHandlerConfig),
 // codex-rs/hooks/src/engine/discovery.rs, codex-rs/core/src/session/mod.rs
 // (build_hooks_config), read 2026-11-11.

@@ -4,24 +4,24 @@ import "strings"
 
 // placeholderExact are whole values that stand in for a secret in docs,
 // templates and code, compared case-insensitively.
-var placeholderExact = map[string]bool{
-	"password": true, "passwd": true, "pass": true, "secret": true, "token": true,
-	"key": true, "apikey": true, "api_key": true, "api-key": true,
-	"changeme": true, "change_me": true, "change-me": true, "changeit": true,
-	"example": true, "sample": true, "test": true, "testing": true, "demo": true,
-	"dummy": true, "fake": true, "foo": true, "bar": true, "baz": true,
-	"foobar": true, "none": true, "null": true, "nil": true, "undefined": true,
-	"true": true, "false": true, "yes": true, "no": true, "on": true, "off": true,
-	"string": true, "str": true, "text": true, "value": true, "redacted": true,
-	"hidden": true, "masked": true, "removed": true, "omitted": true,
-	"placeholder": true, "todo": true, "tbd": true, "fixme": true,
-	"required": true, "optional": true, "unset": true, "empty": true,
-	"default": true, "n/a": true, "na": true, "bearer": true, "basic": true,
-	"object": true, "bool": true, "boolean": true, "int": true, "number": true,
-	"any": true, "bytes": true, "secretstr": true, "inherit": true, "include": true,
-	"omit": true, "same-origin": true, "password123": true, "mypassword": true,
-	"mysecret": true, "mytoken": true, "secret123": true,
-}
+var placeholderExact = lazySet{list: []string{
+	"password", "passwd", "pass", "secret", "token",
+	"key", "apikey", "api_key", "api-key",
+	"changeme", "change_me", "change-me", "changeit",
+	"example", "sample", "test", "testing", "demo",
+	"dummy", "fake", "foo", "bar", "baz",
+	"foobar", "none", "null", "nil", "undefined",
+	"true", "false", "yes", "no", "on", "off",
+	"string", "str", "text", "value", "redacted",
+	"hidden", "masked", "removed", "omitted",
+	"placeholder", "todo", "tbd", "fixme",
+	"required", "optional", "unset", "empty",
+	"default", "n/a", "na", "bearer", "basic",
+	"object", "bool", "boolean", "int", "number",
+	"any", "bytes", "secretstr", "inherit", "include",
+	"omit", "same-origin", "password123", "mypassword",
+	"mysecret", "mytoken", "secret123",
+}}
 
 // placeholderContains are substrings that mark a value as a stand-in. "test"
 // is deliberately not here: it is part of real key prefixes (sk_test_).
@@ -41,7 +41,7 @@ func isPlaceholder(v string) bool {
 		return true
 	}
 	lv := asciiLower(v)
-	if placeholderExact[lv] {
+	if placeholderExact.has(lv) {
 		return true
 	}
 	// Text this package already redacted must not be redacted again, or a

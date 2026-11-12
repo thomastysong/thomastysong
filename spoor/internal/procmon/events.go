@@ -147,6 +147,9 @@ func (m *Monitor) startEvent(r *root, now time.Time) *event.Event {
 	}
 	ev.Container = eventContainer(ap.Container)
 	ev.Labels = rootLabels(ap)
+	if r.argsCut {
+		ev.Truncated = []string{"process.args"}
+	}
 	return ev
 }
 
@@ -298,6 +301,11 @@ func (m *Monitor) execEvent(n *node, o *observed, owner *root, marker string, no
 	}
 	if !n.start.IsZero() {
 		p.StartTime = event.At(n.start)
+	}
+	if o.cand != nil {
+		// The process is itself an agent (nested, relaunched, or a
+		// launcher's payload): its risky flags matter as much as a root's.
+		p.Flags = append([]string(nil), o.cand.ap.Flags...)
 	}
 	ev.Process = p
 	sid := n.env.session(product)

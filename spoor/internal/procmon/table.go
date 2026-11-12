@@ -57,7 +57,11 @@ type root struct {
 	// only (npx, uvx, bunx naming the package): the real agent it starts is
 	// its payload, not a second agent.
 	launcher bool
-	bucket   bucket
+	argsCut  bool
+	// bucket rate-caps the root's process.exec events on the monitor's
+	// clock; osqBucket does the same for osquery rows on their own event
+	// time, so that a delivery batch is not mistaken for a burst.
+	bucket, osqBucket bucket
 }
 
 func (r *root) addSession(id string) {
@@ -65,6 +69,26 @@ func (r *root) addSession(id string) {
 		return
 	}
 	r.ap.SessionIDs = append(r.ap.SessionIDs, id)
+}
+
+// absorb merges what the payload of a launcher root shows about the run.
+// The launcher's command line is "npx @openai/codex ..." or, worse, an npm
+// process title that has eaten the arguments; the payload's is the agent's
+// real one. The start event has already gone out; Agents, Attribute, the
+// stop event and the payload's own process.exec event carry the result.
+func (r *root) absorb(p *AgentProc) {
+	for _, f := range p.Flags {
+		if !contains(r.ap.Flags, f) && len(r.ap.Flags) < maxMarkers*4 {
+			r.ap.Flags = append(r.ap.Flags, f)
+		}
+	}
+	r.ap.Headless = r.ap.Headless || p.Headless
+	r.ap.Bare = r.ap.Bare || p.Bare
+	r.ap.HookFree = r.ap.HookFree || p.HookFree
+	r.ap.PersistenceFree = r.ap.PersistenceFree || p.PersistenceFree
+	if r.ap.ConfigHome == "" {
+		r.ap.ConfigHome = p.ConfigHome
+	}
 }
 
 // observed is one process read from the OS outside the table lock.
@@ -199,6 +223,9 @@ func (m *Monitor) resolve(n *node, o *observed, now time.Time) (evs []*event.Eve
 				return evs, 0
 			}
 		}
+		if enc != nil && enc.launcher && enc.prod.id == c.prod.id && n.root == nil {
+			enc.absorb(&c.ap)
+		}
 	}
 	if was != nil {
 		// The root ran exec into something that is not the same agent.
@@ -297,7 +324,7 @@ func (m *Monitor) becomesRoot(n, parent *node, enc *root, c *rootCand) bool {
 }
 
 func (m *Monitor) newRoot(n *node, c *rootCand, enc *root) *root {
-	r := &root{n: n, k: procKey{n.pid, n.key}, prod: c.prod, ap: c.ap.clone(), alive: true, launcher: c.launcher}
+	r := &root{n: n, k: procKey{n.pid, n.key}, prod: c.prod, ap: c.ap.clone(), alive: true, launcher: c.launcher, argsCut: c.argsCut}
 	if r.ap.Start.IsZero() {
 		r.ap.Start = n.start
 	}

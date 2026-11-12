@@ -103,6 +103,9 @@ func markerSafe(s string, i int, down bool) int {
 // finish applies the common tail of the pipeline to a redacted value.
 func (r *run) finishStr(s, name string, max int, headOnly bool) string {
 	s = rewriteMarkers(s, r.s.key)
+	if r.s.key != nil && !r.keyed && strings.Contains(s, ":hmac=") {
+		r.keyed = true // the record carries keyed fingerprints: name the key
+	}
 	s = r.home.rewrite(s)
 	if max > 0 {
 		var cut bool

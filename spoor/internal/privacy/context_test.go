@@ -43,7 +43,9 @@ func TestContextFor(t *testing.T) {
 			if strings.Contains(l, "CtxPw") {
 				t.Errorf("%s: context leaked:\n%s", prof, l)
 			}
-			if c.Labels[LabelContextFor] != "det-123" || c.Privacy != "standard" {
+			// Privacy names the configured profile, as on every record; the
+			// field policy that rendered it is a label.
+			if c.Labels[LabelContextFor] != "det-123" || c.Privacy != string(prof) || c.Labels[LabelContextPolicy] != "standard" {
 				t.Errorf("%s: labels %v privacy %q", prof, c.Labels, c.Privacy)
 			}
 			// Routed to the detection stream, as its own record.
@@ -77,6 +79,10 @@ func TestContextFor(t *testing.T) {
 	}
 	if (&Policy{}).ContextFor("d", prev, 0) != nil || (&Policy{}).ContextFor("d", nil, 5) != nil {
 		t.Error("n=0 or no events gives nil")
+	}
+	// No finding id: nothing could join the records to a case.
+	if got := (&Policy{}).ContextFor("", prev, 5); got != nil {
+		t.Errorf("empty detection id gives %d records, want nil", len(got))
 	}
 	if got := (&Policy{}).ContextFor("d", prev, 1000); len(got) != 8 {
 		t.Errorf("cap/availability: %d (inventory, health, nil and detections are not context)", len(got))
@@ -122,16 +128,46 @@ func TestContextFindsDetectionInRing(t *testing.T) {
 		t.Errorf("newest context = %v", got[2].Labels)
 	}
 
-	// No detection in the ring: everything qualifies, no context_for.
-	plain := (&Policy{}).Context(contextRing(), 2)
-	if len(plain) != 2 || plain[0].Type != TypeContext {
-		t.Fatalf("Context without a detection: %+v", plain)
-	}
-	if _, ok := plain[0].Labels[LabelContextFor]; ok {
-		t.Error("context_for must not be invented")
-	}
 	if (&Policy{}).Context(prev, 0) != nil || (&Policy{}).Context(nil, 5) != nil {
 		t.Error("n=0 or no events gives nil")
+	}
+}
+
+// TestContextNeedsItsFinding: the spec requires every context record to
+// carry context_for. Called with only the per-session ring (no detection
+// in it), Context returns nothing rather than unlabelled records that
+// cannot be joined to a finding (review P10); ContextFor is the call for a
+// finding held outside the ring.
+func TestContextNeedsItsFinding(t *testing.T) {
+	ring := []*event.Event{shellEvent("ls"), shellEvent("cat a")}
+	for _, prof := range Profiles {
+		p := &Policy{Profile: prof}
+		if got := p.Context(ring, 5); got != nil {
+			t.Errorf("%s: Context without a detection gave %d records", prof, len(got))
+		}
+		if got := p.Context(contextRing(), 2); got != nil {
+			t.Errorf("%s: Context over a ring without a finding gave %d records", prof, len(got))
+		}
+		got := p.ContextFor("det-9", ring, 5)
+		if len(got) != 2 {
+			t.Fatalf("%s: ContextFor gave %d records", prof, len(got))
+		}
+		for _, c := range got {
+			if c.Labels[LabelContextFor] != "det-9" {
+				t.Errorf("%s: context record %s has no %s label", prof, c.ID, LabelContextFor)
+			}
+		}
+	}
+	// A context record is not a finding: Context does not take one as the
+	// detection it is rendering context for.
+	det := event.New(event.KindDetection, event.TypeDetectionFinding, event.SourceSensor)
+	det.ID = "det-real"
+	ctx := (&Policy{}).ContextFor("det-real", ring, 1)
+	got := (&Policy{}).Context(append(append(append([]*event.Event{}, ring...), det), ctx...), 5)
+	for _, c := range got {
+		if c.Labels[LabelContextFor] != "det-real" {
+			t.Errorf("context_for = %q, want the finding", c.Labels[LabelContextFor])
+		}
 	}
 }
 

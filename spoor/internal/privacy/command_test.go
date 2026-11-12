@@ -235,8 +235,16 @@ func TestRedactCommandManySecretsBounded(t *testing.T) {
 		if strings.Contains(out, "ManyPw") {
 			t.Errorf("%s: leaked", name)
 		}
-		if len(out) > maxSkeleton+256 {
+		// Either the fail-closed skeleton (bounded) or, when the line was
+		// cut where a structural view stopped (the bearer line is one
+		// command with thousands of arguments, more than shellx records),
+		// a fully redacted head of at most the scan cap.
+		skel := strings.Contains(out, kindUnresolved) || out == markerOpen+kindCommand+"]"
+		if skel && len(out) > maxSkeleton+256 {
 			t.Errorf("%s: skeleton is %d bytes", name, len(out))
+		}
+		if !skel && (!strings.Contains(out, truncOpen) || len(out) > 2*maxCommandScan) {
+			t.Errorf("%s: %d bytes, neither a skeleton nor a cut head", name, len(out))
 		}
 	}
 	moderate := gen("curl -H 'Authorization: Bearer ManyPw%010dabcdefghij' https://h%d.x ; ", 4<<10)

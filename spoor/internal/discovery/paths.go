@@ -232,18 +232,30 @@ func (s *scanner) glob(pattern string, uc *userCtx, project string, limit int) [
 		}
 		if len(cur) > limit*4 {
 			cur = cur[:limit*4]
+			s.globCapped(pattern, limit)
 		}
 	}
 	var out []string
-	for _, p := range cur {
+	for i, p := range cur {
 		if s.g.exists(s.locFor(p, uc, project)) {
 			out = append(out, p)
 			if len(out) >= limit {
+				if i < len(cur)-1 {
+					s.globCapped(pattern, limit)
+				}
 				break
 			}
 		}
 	}
 	return out
+}
+
+// globCapped records a glob cut short by its limit. A limit of one asks
+// whether anything matches at all, which is not a cut.
+func (s *scanner) globCapped(pattern string, limit int) {
+	if limit > 1 {
+		s.led.capped("matches truncated at " + itoa(limit) + ": " + pattern)
+	}
 }
 
 // descendants lists every directory below d (links not followed), breadth
@@ -264,6 +276,7 @@ func (s *scanner) descendants(d string, uc *userCtx, project string, limit int) 
 					next = append(next, p)
 					out = append(out, p)
 					if len(out) >= limit {
+						s.led.capped("directory walk truncated: " + d)
 						return out
 					}
 				}

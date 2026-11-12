@@ -114,6 +114,7 @@ func (s *scanner) scanProjectConfig(uc *userCtx, dir string) {
 		}
 		n++
 		if n > maxProjectControlFiles {
+			s.led.capped("project control files truncated: " + dir)
 			break
 		}
 		s.addProjectConfig(f, uc, dir)
@@ -303,6 +304,7 @@ func (ps *pcSet) cursorRules() {
 	count := 0
 	walk = func(d string, depth int) {
 		if depth > 4 || count > maxContentFiles {
+			ps.s.led.capped("cursor rules not all read: " + root)
 			return
 		}
 		ents, err := ps.s.g.readDir(ps.loc(d))

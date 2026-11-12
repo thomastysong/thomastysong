@@ -38,7 +38,7 @@ func (s *scanner) scanWorkflows(uc *userCtx, dir string) {
 		}
 		n++
 		if n > maxWorkflows {
-			s.led.note("workflow list truncated: " + wdir)
+			s.led.capped("workflow list truncated: " + wdir)
 			return
 		}
 		s.scanWorkflow(joinLogical(wdir, e.name), uc, dir)

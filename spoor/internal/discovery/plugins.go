@@ -62,7 +62,7 @@ func (s *scanner) scanClaudePlugins(dir, parent string, uc *userCtx) {
 			}
 			count++
 			if count > maxPlugins {
-				s.led.note("plugin list truncated: " + homeRelNote(l))
+				s.led.capped("plugin list truncated: " + homeRelNote(l))
 				return
 			}
 			s.addClaudePlugin(key, im, markets, enabled, parent, uc)
@@ -172,7 +172,7 @@ func (s *scanner) scanPluginDir(dir, parent string, uc *userCtx) {
 		}
 		n++
 		if n > maxPlugins {
-			s.led.note("plugin directory truncated: " + homeRelOf(dir, uc))
+			s.led.capped("plugin directory truncated: " + homeRelOf(dir, uc))
 			return
 		}
 		p := joinLogical(dir, e.name)

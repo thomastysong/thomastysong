@@ -137,6 +137,8 @@ func TestListsAndSuppressionsFiles(t *testing.T) {
 	}
 }
 
+// LoadEmbedded returns an independent Set on every call. The check holds
+// whatever packs ship: it uses the first embedded rule, not a fixed id.
 func TestLoadEmbeddedReturnsCopies(t *testing.T) {
 	a, err := LoadEmbedded()
 	if err != nil {
@@ -144,17 +146,20 @@ func TestLoadEmbeddedReturnsCopies(t *testing.T) {
 	}
 	b, _ := LoadEmbedded()
 	n := b.Count()
-	a.Disable("SPR-EXEC-001")
+	if n == 0 {
+		t.Fatal("no embedded rules")
+	}
+	id := b.Rules()[0].ID
+	a.Disable(id)
 	if b.Count() != n || a.Count() != n-1 {
 		t.Fatalf("copies share state: a=%d b=%d", a.Count(), b.Count())
 	}
 	if a.Hash() == b.Hash() {
 		t.Error("disabling a rule must change the hash")
 	}
-	for _, info := range b.Rules() {
-		if info.Pack != "selftest" {
-			t.Errorf("rule %s from pack %s", info.ID, info.Pack)
-		}
+	c, _ := LoadEmbedded()
+	if c.Count() != n || c.Hash() != b.Hash() {
+		t.Error("a later load sees an earlier copy's change")
 	}
 }
 
@@ -167,21 +172,49 @@ func TestACLProblem(t *testing.T) {
 		aces  []aceInfo
 		bad   bool
 	}{
-		{"admins only", sidAdministrators, false, []aceInfo{{true, false, 0x1f01ff, sidSystem}, {true, false, 0x1f01ff, sidAdministrators}, {true, false, 0x1200a9, "S-1-5-32-545"}}, false},
-		{"self owned", self, false, []aceInfo{{true, false, 0x1f01ff, self}}, false},
-		{"users can write", sidAdministrators, false, []aceInfo{{true, false, 0x1301bf, "S-1-5-32-545"}}, true},
-		{"everyone generic write", sidSystem, false, []aceInfo{{true, false, 0x40000000, "S-1-1-0"}}, true},
-		{"inherit-only users write", sidAdministrators, false, []aceInfo{{true, true, 0x1f01ff, "S-1-5-32-545"}}, false},
-		{"deny ace ignored", sidAdministrators, false, []aceInfo{{false, false, 0x1f01ff, "S-1-1-0"}}, false},
-		{"creator owner", sidAdministrators, false, []aceInfo{{true, false, 0x1f01ff, sidCreatorOwner}}, false},
+		{"admins only", sidAdministrators, false, []aceInfo{{allow: true, inheritOnly: false, mask: 0x1f01ff, sid: sidSystem}, {allow: true, inheritOnly: false, mask: 0x1f01ff, sid: sidAdministrators}, {allow: true, inheritOnly: false, mask: 0x1200a9, sid: "S-1-5-32-545"}}, false},
+		{"self owned", self, false, []aceInfo{{allow: true, inheritOnly: false, mask: 0x1f01ff, sid: self}}, false},
+		{"users can write", sidAdministrators, false, []aceInfo{{allow: true, inheritOnly: false, mask: 0x1301bf, sid: "S-1-5-32-545"}}, true},
+		{"everyone generic write", sidSystem, false, []aceInfo{{allow: true, inheritOnly: false, mask: 0x40000000, sid: "S-1-1-0"}}, true},
+		{"inherit-only users write", sidAdministrators, false, []aceInfo{{allow: true, inheritOnly: true, mask: 0x1f01ff, sid: "S-1-5-32-545"}}, false},
+		{"deny ace ignored", sidAdministrators, false, []aceInfo{{allow: false, inheritOnly: false, mask: 0x1f01ff, sid: "S-1-1-0"}}, false},
+		{"creator owner", sidAdministrators, false, []aceInfo{{allow: true, inheritOnly: false, mask: 0x1f01ff, sid: sidCreatorOwner}}, false},
 		{"foreign owner", "S-1-5-21-9-9-9-1234", false, nil, true},
 		{"null dacl", sidAdministrators, true, nil, true},
-		{"trustedinstaller", sidTrustedInst, false, []aceInfo{{true, false, 0x1f01ff, sidTrustedInst}}, false},
+		{"trustedinstaller", sidTrustedInst, false, []aceInfo{{allow: true, inheritOnly: false, mask: 0x1f01ff, sid: sidTrustedInst}}, false},
+		// Conditional (callback) and object allow entries grant like the
+		// basic one; an entry type the check does not know fails closed.
+		{"callback allow users write", sidAdministrators, false, []aceInfo{{allow: true, mask: 0x2, sid: "S-1-5-32-545", typ: aceAllowedCallback}}, true},
+		{"object allow users write", sidAdministrators, false, []aceInfo{{allow: true, mask: 0x2, sid: "S-1-5-32-545", typ: aceAllowedObject}}, true},
+		{"unreadable trustee", sidAdministrators, false, []aceInfo{{allow: true, mask: 0x2, sid: "", typ: aceAllowedCallbackObject}}, true},
+		{"unknown ace type", sidAdministrators, false, []aceInfo{{unknown: true, mask: 0x1, typ: aceAllowedCompound}}, true},
+		{"unknown inherit-only ace", sidAdministrators, false, []aceInfo{{unknown: true, inheritOnly: true, mask: 0x1, typ: 0x42}}, false},
 	}
 	for _, c := range cases {
 		got := aclProblem(c.owner, c.nil, c.aces, self) != ""
 		if got != c.bad {
 			t.Errorf("%s: problem=%v want %v (%q)", c.name, got, c.bad, aclProblem(c.owner, c.nil, c.aces, self))
+		}
+	}
+}
+
+func TestClassifyACE(t *testing.T) {
+	for typ, want := range map[uint8]int{
+		aceAllowed: aceGrant, aceAllowedObject: aceGrant, aceAllowedCallback: aceGrant, aceAllowedCallbackObject: aceGrant,
+		aceDenied: aceNoGrant, aceDeniedCallback: aceNoGrant, aceDeniedObject: aceNoGrant, aceDeniedCallbackObject: aceNoGrant,
+		aceSystemAudit: aceNoGrant, aceSystemMandatoryLabel: aceNoGrant,
+		aceAllowedCompound: aceUnknown, 0x16: aceUnknown, 0xff: aceUnknown,
+	} {
+		if got := classifyACE(typ); got != want {
+			t.Errorf("classifyACE(%#x) = %d, want %d", typ, got, want)
+		}
+	}
+	if !objectACE(aceAllowedObject) || !objectACE(aceAllowedCallbackObject) || objectACE(aceAllowedCallback) {
+		t.Error("objectACE")
+	}
+	for flags, want := range map[uint32]int{0: 12, 1: 28, 2: 28, 3: 44} {
+		if got := objectSIDOffset(flags); got != want {
+			t.Errorf("objectSIDOffset(%d) = %d, want %d", flags, got, want)
 		}
 	}
 }

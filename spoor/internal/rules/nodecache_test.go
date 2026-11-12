@@ -128,17 +128,21 @@ func TestCacheStaleDigest(t *testing.T) {
 
 // Every truncation and every single-byte corruption must be rejected or
 // decode into trees that the loader then judges; nothing may panic or hang.
+// The corpus is small and fixed (every file role, most of the rule
+// language) so the exhaustive loops stay quadratic in a few kilobytes, not
+// in the size of whatever packs ship.
 func TestCacheCorruption(t *testing.T) {
-	files := map[string][]byte{}
-	for k, v := range embeddedFiles(t) {
-		files[k] = v
+	files := map[string][]byte{
+		"packs/bench.yaml":  []byte("pack: bench\nversion: \"1\"\nrules:\n" + benchRules(10)),
+		"lists.yaml":        []byte("lists:\n  trusted: [sh.rustup.rs, \"*.brew.sh\", \"pre*\"]\n"),
+		"suppressions.yaml": []byte("suppressions:\n  - {rule: SPR-BEN-*, match: {shell.hosts: \"*.corp.example\"}, expires: 2030-01-02, reason: lab hosts, tags: [lab]}\n"),
 	}
 	c, err := EncodeCache(files)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := sourceDigest(files)
-	deadline := time.Now().Add(20 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for n := 0; n < len(c); n++ {
 		if _, err := decodeCache(c[:n], want); err == nil {
 			t.Fatalf("truncation at %d accepted", n)

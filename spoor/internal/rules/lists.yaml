@@ -270,3 +270,11 @@ lists:
     - "::1"
     - 0.0.0.0
     - host.docker.internal
+
+  # Host classes whose content does not set untrusted_input
+  # (SPR-FLOW-001). Every host of the result must be in one of these
+  # classes. Package registries are listed because counting them made the
+  # flag near-constant; remove the entry to treat registry READMEs as
+  # untrusted.
+  trusted_content_host_classes:
+    - package_registry

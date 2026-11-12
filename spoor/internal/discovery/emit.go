@@ -136,12 +136,18 @@ func (s *scanner) finish(fullScan bool) *Result {
 }
 
 // removed reports assets of Prev that this scan did not see. Only a
-// complete scan may conclude that something is gone: after a deadline, a
-// refused home or a read error the absence proves nothing, so no removal
-// is reported and the ledger says why.
+// complete scan may conclude that something is gone: after a deadline or
+// an exhausted budget, a refused home, a read error, a refused or skipped
+// read (a config that became a symbolic link, a directory that resolves
+// outside its root, a file over its cap, another user's file) or a cap
+// that cut an enumeration short (MaxProjects, a sample of transcripts, a
+// truncated listing), the absence proves nothing. Prev holds asset ids
+// only, so an unread location cannot be matched to the assets it declared
+// last time: any such gap suppresses every removal, and the ledger says
+// why.
 func (s *scanner) removed(seen map[string]bool, led Ledger) []*event.Event {
-	if led.Truncated || led.Errors > 0 || s.homeDenied {
-		s.led.note("removals not reported: the scan was not complete")
+	if why := incompleteReason(led, s.homeDenied); why != "" {
+		s.led.note("removals not reported: the scan was not complete (" + why + ")")
 		return nil
 	}
 	var out []*event.Event
@@ -192,4 +198,25 @@ func (s *scanner) newEvent(a *event.Asset, uc *userCtx, content string) *event.E
 	}
 	ev.Asset = a
 	return ev
+}
+
+// incompleteReason says why a scan cannot prove absence, or "" when it can.
+func incompleteReason(led Ledger, homeDenied bool) string {
+	var why []string
+	if led.Truncated {
+		why = append(why, "truncated")
+	}
+	if homeDenied {
+		why = append(why, "a home was not accessible")
+	}
+	if led.Errors > 0 {
+		why = append(why, itoa(led.Errors)+" errors")
+	}
+	if led.Denied > 0 {
+		why = append(why, itoa(led.Denied)+" denied")
+	}
+	if led.Skipped > 0 {
+		why = append(why, itoa(led.Skipped)+" skipped or capped")
+	}
+	return strings.Join(why, ", ")
 }

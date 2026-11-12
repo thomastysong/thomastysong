@@ -111,6 +111,14 @@ func (g *ledger) denied()  { g.add(&g.l.Denied, 1) }
 func (g *ledger) skipped() { g.add(&g.l.Skipped, 1) }
 func (g *ledger) errored() { g.add(&g.l.Errors, 1) }
 
+// capped records a bound that cut a listing, an enumeration or a sample
+// short. What lies past it was not inspected, so it counts as skipped: the
+// scan is not complete and reports no removals.
+func (g *ledger) capped(note string) {
+	g.skipped()
+	g.note(note)
+}
+
 func (g *ledger) truncate(note string) {
 	g.mu.Lock()
 	g.l.Truncated = true

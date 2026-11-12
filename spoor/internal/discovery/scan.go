@@ -53,6 +53,10 @@ type scanner struct {
 	projectHits map[string]map[string]bool
 	homeDenied  bool
 	docBytes    int64
+	// listCache holds system directory listings made to decode Claude Code
+	// project names, shared by every user's decodes (nil: listing failed).
+	listCache     map[string][]dentry
+	listCacheSize int
 	// adminUID owns trustworthy managed files: "0" (root). Tests running
 	// unprivileged substitute their own uid, since they cannot create
 	// root-owned fixtures.

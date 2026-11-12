@@ -1,0 +1,4033 @@
+{
+  "date": "2026-11-12",
+  "corpus": "snapshot of /root/.claude/projects taken 2026-11-12T04:28:51Z (before tuning)",
+  "rules_version": "agent-integrity@2026.11.0,coverage@2026.11.0,credential@2026.11.0,defense-evasion@2026.11.0,destructive@2026.11.0,execution@2026.11.0,exfiltration@2026.11.0,offensive@2026.11.0,persistence@2026.11.0,posture@2026.11.0,process@2026.11.0,sequence@2026.11.0,supply-chain@2026.11.0",
+  "rules_hash": "f36036e1d1775b9169812036816e3fb02c1895e4cdd6686e674004132276000a",
+  "rules_count": 134,
+  "stats": {
+    "files": 94,
+    "files_unreadable": 0,
+    "sessions": 1,
+    "threads": 94,
+    "events": 10771,
+    "tool_calls": 5337,
+    "shell_commands": 4046,
+    "prompts": 30,
+    "tool_kinds": {
+      "file_edit": 151,
+      "file_list": 10,
+      "file_read": 360,
+      "file_write": 475,
+      "mcp": 9,
+      "other": 87,
+      "shell": 4046,
+      "subagent": 25,
+      "web_fetch": 24,
+      "web_search": 150
+    },
+    "first_event": "2026-11-11T16:37:11Z",
+    "last_event": "2026-11-12T04:28:50Z"
+  },
+  "rules": [
+    {
+      "id": "SPR-AGENT-001",
+      "title": "Agent writes a hook, auto-run task or always-applied rule",
+      "class": "finding",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-AGENT-002",
+      "title": "Agent adds an MCP server to its configuration",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-AGENT-003",
+      "title": "Agent widens its own permissions",
+      "class": "finding",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-AGENT-004",
+      "title": "Agent configuration points the model endpoint elsewhere",
+      "class": "finding",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-AGENT-005",
+      "title": "Model endpoint overridden on a command line",
+      "class": "signal",
+      "severity": "low",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-AGENT-006",
+      "title": "Invisible Unicode written into an instruction, skill or configuration file",
+      "class": "finding",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-AGENT-007",
+      "title": "Instruction-override text written into an instruction or skill file",
+      "class": "finding",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-AGENT-008",
+      "title": "Agent CLI started with approvals disabled from inside a session",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-AGENT-009",
+      "title": "Git configuration written with a command-running key",
+      "class": "finding",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-AGENT-010",
+      "title": "Session started in a downloads directory",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-AGENT-011",
+      "title": "Session running with approvals bypassed",
+      "class": "signal",
+      "severity": "low",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-AGENT-012",
+      "title": "Another agent's session logs read",
+      "class": "signal",
+      "severity": "low",
+      "hits": 18,
+      "threads": 5,
+      "per_1k_tool_calls": 3.372681281618887,
+      "hit_rate": {
+        "k": 18,
+        "n": 5337,
+        "p": 0.003372681281618887,
+        "lo": 0.0021345014619514138,
+        "hi": 0.005325270397573412
+      },
+      "thread_rate": {
+        "k": 5,
+        "n": 94,
+        "p": 0.05319148936170213,
+        "lo": 0.022931748685590003,
+        "hi": 0.11853648970259889
+      },
+      "labels": {
+        "unlabelled": 8
+      },
+      "samples": [
+        {
+          "event_id": "01a1cb93-6914-7730-ba14-695b14c9b94f",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-a4af15354bba947e3.jsonl",
+          "ts": "2026-11-11T17:06:37Z",
+          "tool": "Bash",
+          "summary": "target.command=IMG=mirror.gcr.io/library/redis:7 docker rm -f rtk8s-ws >/dev/null 2>&1 docker run -d --name rtk8s-ws --network host --entrypoint /bin/bash $IMG -c ' mkdir -p ~/.claude/projects/x /home/dev/.claude/projects/y /etc/claude-code [...]"
+        },
+        {
+          "event_id": "01a1cb9b-b52a-7584-b516-f5a3f8e39658",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-a4af15354bba947e3.jsonl",
+          "ts": "2026-11-11T17:15:41Z",
+          "tool": "Bash",
+          "summary": "target.command=IMG=mirror.gcr.io/library/redis:7 echo \"host root direct: $( (head -c 30 /proc/1/environ | tr '\\0' ' ') 2>&1 | head -1) | status: $(grep -E '^(Uid|CapEff)' /proc/1/status | tr '\\n\\t' ' ') dumpable-ish: $(ls -ld /proc/1/enviro [...]"
+        },
+        {
+          "event_id": "01a1cdb1-f8f1-7b33-a2e9-9ec5fe40982a",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11.jsonl",
+          "ts": "2026-11-12T02:59:15Z",
+          "tool": "Bash",
+          "summary": "target.command=sleep 90; d=~/.claude/projects/-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_6820f971-f65; ls -la $d; for f in $d/agent-*.jsonl; do echo \"$f lines=$(wc -l < $f)\"; tail -c 600 $f | tr '\\n' ' ' | grep - [...]"
+        },
+        {
+          "event_id": "01a1cdca-81b6-7314-a3bf-85b9e45e46bd",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11.jsonl",
+          "ts": "2026-11-12T03:26:03Z",
+          "tool": "Bash",
+          "summary": "target.command=cat ~/.claude/projects/-home-user/142ab6a6-828d-5c94-9577-a504570fae11/workflows/scripts/spoor-build-wf_1d5e15da-c57.js"
+        },
+        {
+          "event_id": "01a1cddb-3014-7a62-81e8-b830e73dd6d0",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11.jsonl",
+          "ts": "2026-11-12T03:44:16Z",
+          "tool": "Bash",
+          "summary": "target.command=W=~/.claude/projects/-home-user/142ab6a6-828d-5c94-9577-a504570fae11/workflows; ls -la $W | grep -E \"eac76c7b|92cf33f2|6820f971|5731baeb\"; D=~/.claude/projects/-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflo [...]"
+        },
+        {
+          "event_id": "01a1cdde-2051-76d1-a453-97a4dd207a91",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11.jsonl",
+          "ts": "2026-11-12T03:47:28Z",
+          "tool": "Monitor",
+          "summary": "target.command=D=~/.claude/projects/-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows; declare -A seen; for w in wf_64c587e1-2e3 wf_44a712c0-30a; do seen[$w]=0; done while true; do for w in wf_64c587e1-2e3 wf_44a712c0-30a; [...]"
+        },
+        {
+          "event_id": "01a1cdde-9a64-70fd-8f25-3ab1be362f03",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/agent-a737128f817cd1fbb.jsonl",
+          "ts": "2026-11-12T03:48:00Z",
+          "tool": "Bash",
+          "summary": "target.command=grep -o '\"missed_attacks\":\\[[^]]*\\]' ~/.claude/projects/-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_c7283e39-218/journal.jsonl | head -3 | cut -c1-3000"
+        },
+        {
+          "event_id": "01a1cdf2-5d9f-761b-96d4-5bde58583db1",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11.jsonl",
+          "ts": "2026-11-12T04:09:35Z",
+          "tool": "Monitor",
+          "summary": "target.command=D=~/.claude/projects/-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows; declare -A seen; for w in wf_b68c23e7-c2d wf_0b5a579e-60d; do seen[$w]=0; done while true; do for w in wf_b68c23e7-c2d wf_0b5a579e-60d; [...]"
+        }
+      ]
+    },
+    {
+      "id": "SPR-AGENT-013",
+      "title": "Instruction file read from a downloads directory",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-COV-001",
+      "title": "Installed agent without spoor's hooks",
+      "class": "finding",
+      "severity": "low",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-COV-002",
+      "title": "Agent hooks disabled or spoor's hook entry modified",
+      "class": "finding",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-COV-003",
+      "title": "Agent session logs not where spoor reads them",
+      "class": "signal",
+      "severity": "low",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-COV-004",
+      "title": "Agent run with a flag that skips hook trust",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-COV-005",
+      "title": "Agent run without a session log",
+      "class": "signal",
+      "severity": "low",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-COV-006",
+      "title": "Managed configuration path or state directory moved",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-COV-007",
+      "title": "Managed policy missing or hooks not locked to managed",
+      "class": "signal",
+      "severity": "info",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-CRED-001",
+      "title": "Credential file read after untrusted content",
+      "class": "finding",
+      "severity": "high",
+      "hits": 6,
+      "threads": 3,
+      "per_1k_tool_calls": 1.1242270938729624,
+      "hit_rate": {
+        "k": 6,
+        "n": 5337,
+        "p": 0.0011242270938729624,
+        "lo": 0.0005153420151960698,
+        "hi": 0.0024507559195275086
+      },
+      "thread_rate": {
+        "k": 3,
+        "n": 94,
+        "p": 0.031914893617021274,
+        "lo": 0.010912627468307706,
+        "hi": 0.08967314608122352
+      },
+      "labels": {
+        "unlabelled": 6
+      },
+      "samples": [
+        {
+          "event_id": "01a1cb93-6914-7730-ba14-695b14c9b94f",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-a4af15354bba947e3.jsonl",
+          "ts": "2026-11-11T17:06:37Z",
+          "tool": "Bash",
+          "summary": "session.flags=untrusted_input; shell.read_classes=agent_transcript, mcp_config, outside_cwd, proc_environ, system_dir; target.command=IMG=mirror.gcr.io/library/redis:7 docker rm -f rtk8s-ws >/dev/null 2>&1 docker run -d --name rtk8s-ws --ne [...]"
+        },
+        {
+          "event_id": "01a1cb94-fd77-7722-9864-38068a45bea9",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-a4af15354bba947e3.jsonl",
+          "ts": "2026-11-11T17:08:21Z",
+          "tool": "Bash",
+          "summary": "session.flags=secret_read, untrusted_input; shell.read_classes=outside_cwd, proc_environ, system_dir; target.command=S=$S; E=$S/redteam/k8s-exp; IMG=mirror.gcr.io/library [...]"
+        },
+        {
+          "event_id": "01a1cb9b-b52a-7584-b516-f5a3f8e39658",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-a4af15354bba947e3.jsonl",
+          "ts": "2026-11-11T17:15:41Z",
+          "tool": "Bash",
+          "summary": "session.flags=secret_read, untrusted_input; shell.read_classes=agent_transcript, outside_cwd, proc_environ, system_dir; target.command=IMG=mirror.gcr.io/library/redis:7 echo \"host root direct: $( (head -c 30 /proc/1/environ | tr '\\0' ' ') 2 [...]"
+        },
+        {
+          "event_id": "01a1cba6-2e3c-74b5-8395-005204af71f1",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-aca9bb795f0f4528c.jsonl",
+          "ts": "2026-11-11T17:27:08Z",
+          "tool": "Bash",
+          "summary": "session.flags=untrusted_input; shell.read_classes=outside_cwd, proc_environ, system_dir; target.command=cd $S/redteam/verify-containers-k8s && IMG=mirror.gcr.io/library/r [...]"
+        },
+        {
+          "event_id": "01a1cbab-0727-7675-a891-1eed1e371b6b",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-aca9bb795f0f4528c.jsonl",
+          "ts": "2026-11-11T17:32:25Z",
+          "tool": "Bash",
+          "summary": "session.flags=secret_read, untrusted_input; shell.read_classes=outside_cwd, proc_environ, system_dir; target.command=cd $S/redteam/verify-containers-k8s && IMG=mirror.gcr [...]"
+        },
+        {
+          "event_id": "01a1cbbd-31c0-7c83-84d2-ca6ded7a3e0c",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_8758a1a0-646/agent-a3e851cd9e1ea67ed.jsonl",
+          "ts": "2026-11-11T17:52:16Z",
+          "tool": "Bash",
+          "summary": "session.flags=untrusted_input; target.command=cd /home/user/thomastysong/spoor/internal/hookio && python3 -I - <<'EOF' p='hostile_test.go' s=open(p).read() a=s.index('func TestURLHostExtraction(t *testing.T) {') b=s.index('// Free text from [...]"
+        }
+      ]
+    },
+    {
+      "id": "SPR-CRED-002",
+      "title": "Private key or stored credential read by an agent tool",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 1,
+      "threads": 1,
+      "per_1k_tool_calls": 0.18737118231216038,
+      "hit_rate": {
+        "k": 1,
+        "n": 5337,
+        "p": 0.00018737118231216038,
+        "lo": 3.3076380313440076e-05,
+        "hi": 0.0010606574190762863
+      },
+      "thread_rate": {
+        "k": 1,
+        "n": 94,
+        "p": 0.010638297872340425,
+        "lo": 0.0018803957480879353,
+        "hi": 0.05782291296278563
+      },
+      "labels": {
+        "unlabelled": 1
+      },
+      "samples": [
+        {
+          "event_id": "01a1cb86-812f-75d2-9078-fa3519a66d35",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_623aebb5-6a7/agent-a9cdacce8f86f8816.jsonl",
+          "ts": "2026-11-11T16:52:32Z",
+          "tool": "Read",
+          "summary": "path.classes=token_file; target.path=/home/user/claud3/agentshield/configs/secrets_patterns.yaml"
+        }
+      ]
+    },
+    {
+      "id": "SPR-CRED-003",
+      "title": "Environment file, shell history or cluster credentials read",
+      "class": "signal",
+      "severity": "low",
+      "hits": 35,
+      "threads": 18,
+      "per_1k_tool_calls": 6.557991380925614,
+      "hit_rate": {
+        "k": 35,
+        "n": 5337,
+        "p": 0.006557991380925614,
+        "lo": 0.004719292079560536,
+        "hi": 0.009106517840099387
+      },
+      "thread_rate": {
+        "k": 18,
+        "n": 94,
+        "p": 0.19148936170212766,
+        "lo": 0.12470143047788709,
+        "hi": 0.28250282936157667
+      },
+      "labels": {
+        "unlabelled": 8
+      },
+      "samples": [
+        {
+          "event_id": "01a1cb80-3f2f-7f56-a6cd-fc9e1d534d11",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_09e55532-3d4/agent-a4c15b39a29d12f5d.jsonl",
+          "ts": "2026-11-11T16:45:42Z",
+          "tool": "Bash",
+          "summary": "shell.read_classes=ci_config, dockerfile, home_root, iac, kube_config, package_manifest, vcs_hook; target.command=cd /home/user/fleetdm/fleet/it-and-security && cat README.md | head -60; ls fleets; wc -l default.yml fleets/*.yml; cat defaul [...]"
+        },
+        {
+          "event_id": "01a1cbae-884f-7091-904d-150c4d818070",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_b2fe4a61-23a/agent-aa6ee45074aebaf7b.jsonl",
+          "ts": "2026-11-11T17:36:15Z",
+          "tool": "Bash",
+          "summary": "shell.read_classes=ci_config, dockerfile, iac, kube_config, lockfile, package_manifest, vcs_hook; target.command=ls catalog internal/catalog internal/catalog/* | head -30; grep -rn \"^\\s*- id:\\|^ id:\\|\\\"id\\\":\" catalog/*.y*ml internal/catalog [...]"
+        },
+        {
+          "event_id": "01a1cbc0-44c6-7169-b056-1ae822493ff5",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_38267680-55f/agent-ace070fa17fe44faa.jsonl",
+          "ts": "2026-11-11T17:55:37Z",
+          "tool": "Bash",
+          "summary": "shell.read_classes=ci_config, dockerfile, iac, kube_config, lockfile, package_manifest, vcs_hook; target.command=grep -n \"dialect:\" internal/catalog/data/*.yaml; grep -n \"^ - id: \\(cursor\\|claude-code\\|codex\\|copilot-cli\\|gemini-cli\\|vscode [...]"
+        },
+        {
+          "event_id": "01a1cdb3-075f-7a1c-bc03-4ee45d19b068",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_eac76c7b-8ba/agent-a6ac9bf8550fa447a.jsonl",
+          "ts": "2026-11-12T03:00:24Z",
+          "tool": "Bash",
+          "summary": "shell.read_classes=ci_config, dockerfile, iac, kube_config, lockfile, package_manifest, vcs_hook; target.command=cd /home/user/thomastysong/spoor; cat > $S/hookdump_test. [...]"
+        },
+        {
+          "event_id": "01a1cdc8-834b-7c9a-9b2f-656cb7dfe133",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11.jsonl",
+          "ts": "2026-11-12T03:23:52Z",
+          "tool": "Bash",
+          "summary": "shell.read_classes=ci_config, dockerfile, iac, kube_config, lockfile, package_manifest, vcs_hook; target.command=cd /home/user/thomastysong/spoor; grep -n \"path:\" deploy/fluent-bit/*.yaml deploy/fluent-bit/no-binary/*.yaml"
+        },
+        {
+          "event_id": "01a1cdce-0212-767d-ba5a-16402e7ed27c",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_92cf33f2-03c/agent-aff4235422053a870.jsonl",
+          "ts": "2026-11-12T03:29:52Z",
+          "tool": "Bash",
+          "summary": "shell.read_classes=ci_config, dockerfile, iac, kube_config, lockfile, package_manifest, vcs_hook; target.command=grep -n \"pipx:\\|uv:\\|pip:\\|pypi:\" internal/catalog/data/*.yaml | head; grep -n \"brew:gemini\\|desktop_ids: \\[cursor\\]\\|id: aider [...]"
+        },
+        {
+          "event_id": "01a1cdd8-3be8-763f-b141-56035be4507b",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11.jsonl",
+          "ts": "2026-11-12T03:41:02Z",
+          "tool": "Bash",
+          "summary": "shell.read_classes=agent_memory, agent_skill, ci_config, dockerfile, iac, kube_config, lockfile, package_manifest, vcs_hook; target.command=cd /home/user/thomastysong/spoor; grep -n -i \"line\\|16 *<<\\|16384\" internal/config/config.go | head  [...]"
+        },
+        {
+          "event_id": "01a1cdf2-a39a-7f3c-b7c0-690eb7c6f1c3",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_b68c23e7-c2d/agent-afef7c85aaa698c67.jsonl",
+          "ts": "2026-11-12T04:09:53Z",
+          "tool": "Bash",
+          "summary": "shell.read_classes=ci_config, dockerfile, iac, kube_config, lockfile, package_manifest, vcs_hook; target.command=cd /home/user/thomastysong/spoor; grep -rn \"first_seen\\|novelty\" internal/features/*.go internal/rules/packs/*.yaml | head -30; [...]"
+        }
+      ]
+    },
+    {
+      "id": "SPR-CRED-004",
+      "title": "Cloud instance metadata service contacted",
+      "class": "finding",
+      "severity": "high",
+      "hits": 1,
+      "threads": 1,
+      "per_1k_tool_calls": 0.18737118231216038,
+      "hit_rate": {
+        "k": 1,
+        "n": 5337,
+        "p": 0.00018737118231216038,
+        "lo": 3.3076380313440076e-05,
+        "hi": 0.0010606574190762863
+      },
+      "thread_rate": {
+        "k": 1,
+        "n": 94,
+        "p": 0.010638297872340425,
+        "lo": 0.0018803957480879353,
+        "hi": 0.05782291296278563
+      },
+      "labels": {
+        "unlabelled": 1
+      },
+      "samples": [
+        {
+          "event_id": "01a1cbbd-31c0-7c83-84d2-ca6ded7a3e0c",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_8758a1a0-646/agent-a3e851cd9e1ea67ed.jsonl",
+          "ts": "2026-11-11T17:52:16Z",
+          "tool": "Bash",
+          "summary": "net.host=example.com, 2001:db8::1, 169.254.169.254, evil.example, auth.example.com, h%d.example, example.org; target.command=cd /home/user/thomastysong/spoor/internal/hookio && python3 -I - <<'EOF' p='hostile_test.go' s=open(p).read() a=s.i [...]"
+        }
+      ]
+    },
+    {
+      "id": "SPR-CRED-005",
+      "title": "Secret manager value or access token printed",
+      "class": "signal",
+      "severity": "medium",
+      "hits": 2,
+      "threads": 2,
+      "per_1k_tool_calls": 0.37474236462432076,
+      "hit_rate": {
+        "k": 2,
+        "n": 5337,
+        "p": 0.00037474236462432077,
+        "lo": 0.00010277388908413662,
+        "hi": 0.00136543273737236
+      },
+      "thread_rate": {
+        "k": 2,
+        "n": 94,
+        "p": 0.02127659574468085,
+        "lo": 0.005854336239172753,
+        "hi": 0.07429020489102965
+      },
+      "labels": {
+        "unlabelled": 2
+      },
+      "samples": [
+        {
+          "event_id": "01a1cb93-ce89-7096-8536-1df6efc75dcc",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_c7283e39-218/agent-a05857f3ab1502633.jsonl",
+          "ts": "2026-11-11T17:07:03Z",
+          "tool": "Bash",
+          "summary": "shell.cred_access=token_print; target.command=S=$S W=$S/rt-fleetop; mkdir -p $W/bin cp /proc/24720/exe $W/bin/osqueryd && chmod 755 $W/bin/osqueryd && ls -la $W/bin/osque [...]"
+        },
+        {
+          "event_id": "01a1cb99-cbb0-7f72-b095-b316f299ee12",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9cbc00f8-b78/agent-a90eb231208222eb9.jsonl",
+          "ts": "2026-11-11T17:13:36Z",
+          "tool": "Bash",
+          "summary": "shell.cred_access=token_print; target.command=S=$S; cd $S/redteam/verify-skeptical-buyer; TOKEN=$(grep -E '^\\s*token:'[REDACTED:generic_secret:a2320816]'{print $2}'); ech [...]"
+        }
+      ]
+    },
+    {
+      "id": "SPR-CRED-006",
+      "title": "Environment variables dumped to a network destination",
+      "class": "finding",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-CRED-007",
+      "title": "Another process's environment read through /proc",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 7,
+      "threads": 3,
+      "per_1k_tool_calls": 1.3115982761851228,
+      "hit_rate": {
+        "k": 7,
+        "n": 5337,
+        "p": 0.0013115982761851227,
+        "lo": 0.0006354904480578379,
+        "hi": 0.002705080313732511
+      },
+      "thread_rate": {
+        "k": 3,
+        "n": 94,
+        "p": 0.031914893617021274,
+        "lo": 0.010912627468307706,
+        "hi": 0.08967314608122352
+      },
+      "labels": {
+        "unlabelled": 7
+      },
+      "samples": [
+        {
+          "event_id": "01a1cb93-6914-7730-ba14-695b14c9b94f",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-a4af15354bba947e3.jsonl",
+          "ts": "2026-11-11T17:06:37Z",
+          "tool": "Bash",
+          "summary": "shell.reads=/etc/machine-id, /proc/1/cgroup, /proc/$P/status, /proc/$P/environ, /proc/$P/cgroup, /proc/$DP~/home/dev/.claude/projects/y/s.jsonl, /proc/$RP~~/.mcp.json; target.command=IMG=mirror.gcr.io/library/redis:7 docker rm -f rtk8s-ws > [...]"
+        },
+        {
+          "event_id": "01a1cb94-fd77-7722-9864-38068a45bea9",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-a4af15354bba947e3.jsonl",
+          "ts": "2026-11-11T17:08:21Z",
+          "tool": "Bash",
+          "summary": "shell.reads=/proc/$C1/stat, /proc/$(...)/comm, /proc/$C1/environ, /proc/self/cgroup, /proc/$RP/cgroup, /proc/$NP/cgroup, /sys/class/dmi/id/product_uuid, /proc/sys/kernel/random/boot_id, /etc/machine-id; target.command=S=$S [...]"
+        },
+        {
+          "event_id": "01a1cb9b-b52a-7584-b516-f5a3f8e39658",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-a4af15354bba947e3.jsonl",
+          "ts": "2026-11-11T17:15:41Z",
+          "tool": "Bash",
+          "summary": "shell.reads=/proc/1/environ, /proc/1/status, ~/.claude/projects/x/leak4.jsonl; target.command=IMG=mirror.gcr.io/library/redis:7 echo \"host root direct: $( (head -c 30 /proc/1/environ | tr '\\0' ' ') 2>&1 | head -1) | status: $(grep -E '^(Uid [...]"
+        },
+        {
+          "event_id": "01a1cba6-2e3c-74b5-8395-005204af71f1",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-aca9bb795f0f4528c.jsonl",
+          "ts": "2026-11-11T17:27:08Z",
+          "tool": "Bash",
+          "summary": "shell.reads=/proc/%s/environ; target.command=cd $S/redteam/verify-containers-k8s && IMG=mirror.gcr.io/library/redis:7 python3 - <<'EOF' import re s = open(\"tailer.py\").re [...]"
+        },
+        {
+          "event_id": "01a1cbab-0727-7675-a891-1eed1e371b6b",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-aca9bb795f0f4528c.jsonl",
+          "ts": "2026-11-11T17:32:25Z",
+          "tool": "Bash",
+          "summary": "shell.reads=/proc/1/environ, /proc/$NP/cgroup; target.command=cd $S/redteam/verify-containers-k8s && IMG=mirror.gcr.io/library/redis:7 python3 - <<'EOF' import os, time p [...]"
+        },
+        {
+          "event_id": "01a1cdd5-5988-7ab8-8075-ecc11b5d9ebe",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_eac76c7b-8ba/agent-ae83485d2c4953fa8.jsonl",
+          "ts": "2026-11-12T03:37:53Z",
+          "tool": "Bash",
+          "summary": "shell.reads=/proc/self/environ; target.command=wc -c /proc/self/environ; tr '\\0' '\\n' < /proc/self/environ | wc -l"
+        },
+        {
+          "event_id": "01a1cdd5-5cb6-76cf-82e6-084966194ddf",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_eac76c7b-8ba/agent-ae83485d2c4953fa8.jsonl",
+          "ts": "2026-11-12T03:37:54Z",
+          "tool": "Bash",
+          "summary": "shell.reads=/proc/self/environ; target.command=tr '\\0' '\\n' < /proc/self/environ | awk '{print length($0)}' | sort -n | tail -3"
+        }
+      ]
+    },
+    {
+      "id": "SPR-CRED-008",
+      "title": "AI agent credential store read",
+      "class": "finding",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-CRED-009",
+      "title": "Keychain, browser credential store or wallet accessed",
+      "class": "finding",
+      "severity": "high",
+      "hits": 2,
+      "threads": 2,
+      "per_1k_tool_calls": 0.37474236462432076,
+      "hit_rate": {
+        "k": 2,
+        "n": 5337,
+        "p": 0.00037474236462432077,
+        "lo": 0.00010277388908413662,
+        "hi": 0.00136543273737236
+      },
+      "thread_rate": {
+        "k": 2,
+        "n": 94,
+        "p": 0.02127659574468085,
+        "lo": 0.005854336239172753,
+        "hi": 0.07429020489102965
+      },
+      "labels": {
+        "unlabelled": 2
+      },
+      "samples": [
+        {
+          "event_id": "01a1cdd2-a8fe-74c1-8138-00a43fd9cc8b",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_eac76c7b-8ba/agent-a72b4cd8858fb2463.jsonl",
+          "ts": "2026-11-12T03:34:57Z",
+          "tool": "Bash",
+          "summary": "target.command=cd /home/user/thomastysong/spoor/internal/catalog && ls; grep -rn -i \"hooks\" *.yaml *.json 2>/dev/null | head -60; grep -rn \"func Expand\\|func Unexpanded\" -A 30 *.go | head -100"
+        },
+        {
+          "event_id": "01a1cddb-3014-7a62-81e8-b830e73dd6d0",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11.jsonl",
+          "ts": "2026-11-12T03:44:16Z",
+          "tool": "Bash",
+          "summary": "target.command=W=~/.claude/projects/-home-user/142ab6a6-828d-5c94-9577-a504570fae11/workflows; ls -la $W | grep -E \"eac76c7b|92cf33f2|6820f971|5731baeb\"; D=~/.claude/projects/-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflo [...]"
+        }
+      ]
+    },
+    {
+      "id": "SPR-CRED-010",
+      "title": "Credential pasted into a prompt",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-CRED-011",
+      "title": "Credential written into an agent or MCP configuration file",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-CRED-012",
+      "title": "Credential literal on a command line",
+      "class": "signal",
+      "severity": "low",
+      "hits": 42,
+      "threads": 19,
+      "per_1k_tool_calls": 7.869589657110736,
+      "hit_rate": {
+        "k": 42,
+        "n": 5337,
+        "p": 0.007869589657110737,
+        "lo": 0.005827513223180227,
+        "hi": 0.010619606485947092
+      },
+      "thread_rate": {
+        "k": 19,
+        "n": 94,
+        "p": 0.20212765957446807,
+        "lo": 0.13339481989218804,
+        "hi": 0.2942506723666045
+      },
+      "labels": {
+        "unlabelled": 8
+      },
+      "samples": [
+        {
+          "event_id": "01a1cb80-fd42-797d-a13f-37a38ae97ed6",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_7d1396f5-8b2/agent-ab7d13add04eec878.jsonl",
+          "ts": "2026-11-11T16:46:30Z",
+          "tool": "Bash",
+          "summary": "shell.secret_kinds=basic_auth_url"
+        },
+        {
+          "event_id": "01a1cba7-7ca2-79be-96c1-85587a52f68e",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-a2639706f942f61ff.jsonl",
+          "ts": "2026-11-11T17:28:33Z",
+          "tool": "Bash",
+          "summary": "shell.secret_kinds=basic_auth_url, bearer_header, database_url_with_password, generic_secret, password"
+        },
+        {
+          "event_id": "01a1cbb9-a0e6-72aa-9852-5289a7d3dc1a",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_8758a1a0-646/agent-a9629bf66cf2dbd85.jsonl",
+          "ts": "2026-11-11T17:48:22Z",
+          "tool": "Bash",
+          "summary": "shell.secret_kinds=basic_auth_url"
+        },
+        {
+          "event_id": "01a1cbc4-526b-7bf4-b4b9-ab52b4c7b997",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_81321001-875/agent-a6dc2f4fa112e786b.jsonl",
+          "ts": "2026-11-11T18:00:03Z",
+          "tool": "Bash",
+          "summary": "shell.secret_kinds=basic_auth_url"
+        },
+        {
+          "event_id": "01a1cdaf-515c-736c-b152-6675c5a4df91",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11.jsonl",
+          "ts": "2026-11-12T02:56:21Z",
+          "tool": "Bash",
+          "summary": "shell.secret_kinds=basic_auth_url, database_url_with_password, generic_secret, password"
+        },
+        {
+          "event_id": "01a1cdc0-0285-7f4f-a851-9a54db40b17d",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_92cf33f2-03c/agent-ae1ed043ff4648226.jsonl",
+          "ts": "2026-11-12T03:14:35Z",
+          "tool": "Bash",
+          "summary": "shell.secret_kinds=basic_auth_url, database_url_with_password, generic_secret, password, private_key_block"
+        },
+        {
+          "event_id": "01a1cdd0-763d-79e6-9482-4db91ec6715c",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_6820f971-f65/agent-a5b7f22cc06f030f2.jsonl",
+          "ts": "2026-11-12T03:32:33Z",
+          "tool": "Bash",
+          "summary": "shell.secret_kinds=aws_access_key_id, openai_api_key"
+        },
+        {
+          "event_id": "01a1cde7-55c7-76ee-b13e-75c4076e0073",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_64c587e1-2e3/agent-ab87ef352aa847280.jsonl",
+          "ts": "2026-11-12T03:57:32Z",
+          "tool": "Bash",
+          "summary": "shell.secret_kinds=basic_auth_url, database_url_with_password, generic_secret, password"
+        }
+      ]
+    },
+    {
+      "id": "SPR-CRED-013",
+      "title": "Kubernetes secrets listed across namespaces",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-DESTR-001",
+      "title": "Recursive delete of the filesystem root or a home directory",
+      "class": "alert",
+      "severity": "critical",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-DESTR-002",
+      "title": "Disk wiped, filesystem created or shadow copies deleted",
+      "class": "alert",
+      "severity": "critical",
+      "hits": 2,
+      "threads": 2,
+      "per_1k_tool_calls": 0.37474236462432076,
+      "hit_rate": {
+        "k": 2,
+        "n": 5337,
+        "p": 0.00037474236462432077,
+        "lo": 0.00010277388908413662,
+        "hi": 0.00136543273737236
+      },
+      "thread_rate": {
+        "k": 2,
+        "n": 94,
+        "p": 0.02127659574468085,
+        "lo": 0.005854336239172753,
+        "hi": 0.07429020489102965
+      },
+      "labels": {
+        "unlabelled": 2
+      },
+      "samples": [
+        {
+          "event_id": "01a1cb99-bb9a-76b4-b56d-dc7478377041",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-a4af15354bba947e3.jsonl",
+          "ts": "2026-11-11T17:13:32Z",
+          "tool": "Bash",
+          "summary": "target.command=S=$S; E=$S/redteam/k8s-exp; IMG=mirror.gcr.io/library/redis:7 cd $E && dd if=/dev/zero of=$E/vol.img bs=1M count=16 status=none && mkfs.ext4 -q -F $E/vol.i [...]"
+        },
+        {
+          "event_id": "01a1cba8-2e8a-76a7-8c28-918a42ea7f1b",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-aca9bb795f0f4528c.jsonl",
+          "ts": "2026-11-11T17:29:19Z",
+          "tool": "Bash",
+          "summary": "target.command=cd $S/redteam/verify-containers-k8s && IMG=mirror.gcr.io/library/redis:7 mkdir -p vol-mnt && truncate -s 16M vol.img && mkfs.ext4 -q -F vol.img && LOOP=$(l [...]"
+        }
+      ]
+    },
+    {
+      "id": "SPR-DESTR-003",
+      "title": "Infrastructure or data store destroyed",
+      "class": "finding",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-DESTR-004",
+      "title": "Shared git history force-pushed or rewritten",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-DESTR-005",
+      "title": "Burst of destructive commands",
+      "class": "finding",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-DESTR-006",
+      "title": "Recursive delete in a system directory",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 5,
+      "threads": 5,
+      "per_1k_tool_calls": 0.936855911560802,
+      "hit_rate": {
+        "k": 5,
+        "n": 5337,
+        "p": 0.000936855911560802,
+        "lo": 0.0004002331490471664,
+        "hi": 0.0021913919586096418
+      },
+      "thread_rate": {
+        "k": 5,
+        "n": 94,
+        "p": 0.05319148936170213,
+        "lo": 0.022931748685590003,
+        "hi": 0.11853648970259889
+      },
+      "labels": {
+        "unlabelled": 5
+      },
+      "samples": [
+        {
+          "event_id": "01a1cb97-6843-7dd7-8452-500bd002c5f0",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_c7283e39-218/agent-aeca0c9c94dd7ccf0.jsonl",
+          "ts": "2026-11-11T17:10:59Z",
+          "tool": "Bash",
+          "summary": "shell.deletes=/run/rtpfs, e3/c, e3/c/spool/activity-000001.ndjson; target.command=S=$S; cd $S/rtp # ---------- E1b: ENOSPC partial writes with concurrent appenders mkdir  [...]"
+        },
+        {
+          "event_id": "01a1cb9a-523f-784f-9b66-f8cc154d5f98",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9cbc00f8-b78/agent-ad4462c9373195f1c.jsonl",
+          "ts": "2026-11-11T17:14:10Z",
+          "tool": "Bash",
+          "summary": "shell.deletes=e1/big.ndjson, e3/osqueryd, e3/rtaltprobe.ext, e3/db*, /run/rtalt; target.command=S=$S; D=$S/redteam/alt-arch; cd $D; du -sh e1 e2 e3 docs 2>/dev/null; rm - [...]"
+        },
+        {
+          "event_id": "01a1cb9a-8994-7ddf-9aea-8065c418057e",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-a4af15354bba947e3.jsonl",
+          "ts": "2026-11-11T17:14:25Z",
+          "tool": "Bash",
+          "summary": "shell.deletes=/run/rtk8s; target.command=cd /home/user/fluent/fluent-bit-docs 2>/dev/null && { grep -rn -i -E \"buffer_max_size|skip_long_lines\" pipeline/inputs/tail.md | cut -c1-260 | head -5; grep -rn -i -E \"multiline.parser.*cri|partial|1 [...]"
+        },
+        {
+          "event_id": "01a1cba5-4a17-7dad-875a-a5795d8f84cd",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-a2639706f942f61ff.jsonl",
+          "ts": "2026-11-11T17:26:09Z",
+          "tool": "Bash",
+          "summary": "shell.deletes=/run/pssv; target.command=S=$S; V=$S/redteam/verify-privacy-sensor-security; mkdir -p $V/peer && cd $V/peer && cat > go.mod <<'EOF' module peer go 1.24 EOF  [...]"
+        },
+        {
+          "event_id": "01a1cbaf-277d-7886-a500-aafecf1c7d5e",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_a6f676a5-ba5/agent-ac4a3a82b57ed7af6.jsonl",
+          "ts": "2026-11-11T17:36:56Z",
+          "tool": "Bash",
+          "summary": "shell.deletes=/run/vpp; target.command=grep -n \"func UserHomeDir\" -A22 /usr/local/go1.24.7/src/os/file.go | grep -n \"windows\\|USERPROFILE\\|HOME\" ; rm -rf /run/vpp; ls /run | tr '\\n' ' '"
+        }
+      ]
+    },
+    {
+      "id": "SPR-DESTR-007",
+      "title": "Permissions opened recursively",
+      "class": "signal",
+      "severity": "low",
+      "hits": 13,
+      "threads": 2,
+      "per_1k_tool_calls": 2.435825370058085,
+      "hit_rate": {
+        "k": 13,
+        "n": 5337,
+        "p": 0.0024358253700580853,
+        "lo": 0.0014241040711330875,
+        "hi": 0.004163303653057886
+      },
+      "thread_rate": {
+        "k": 2,
+        "n": 94,
+        "p": 0.02127659574468085,
+        "lo": 0.005854336239172753,
+        "hi": 0.07429020489102965
+      },
+      "labels": {
+        "unlabelled": 8
+      },
+      "samples": [
+        {
+          "event_id": "01a1cb81-e279-76e1-9d4f-3cfe6bc50a01",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_09e55532-3d4/agent-a81999a4d6d9c5ce5.jsonl",
+          "ts": "2026-11-11T16:47:29Z",
+          "tool": "Bash",
+          "summary": "target.command=W=$S/fb/t1; mkdir -p $W/logs $W/state $W/out; chmod -R 777 $W; cat > $W/fluent-bit.yaml <<'EOF' service: flush: 1 grace: 2 log_level: info http_server: on  [...]"
+        },
+        {
+          "event_id": "01a1cb82-a330-7baa-a672-bd58176cde94",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_09e55532-3d4/agent-a81999a4d6d9c5ce5.jsonl",
+          "ts": "2026-11-11T16:48:18Z",
+          "tool": "Bash",
+          "summary": "target.command=W=$S/fb/t2; mkdir -p $W/state $W/sock; chmod -R 777 $W; cat > $W/fluent-bit.yaml <<'EOF' service: flush: 1 grace: 1 log_level: info storage.path: /work/sta [...]"
+        },
+        {
+          "event_id": "01a1cb85-f6aa-7b2f-ad40-ad794d5a770f",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_09e55532-3d4/agent-a81999a4d6d9c5ce5.jsonl",
+          "ts": "2026-11-11T16:51:56Z",
+          "tool": "Bash",
+          "summary": "target.command=S=$S/fb; W=$S/t4; mkdir -p $W/logs $W/osq $W/state $W/out; chmod -R 777 $W; cat > $W/fluent-bit.yaml <<'EOF' env: AW_LOG_DIR: /work/logs AW_STATE: /work/st [...]"
+        },
+        {
+          "event_id": "01a1cb86-74a3-7437-ac56-2cde137bfe58",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_09e55532-3d4/agent-a81999a4d6d9c5ce5.jsonl",
+          "ts": "2026-11-11T16:52:28Z",
+          "tool": "Bash",
+          "summary": "target.command=S=$S/fb; docker rm -f fbt4 >/dev/null 2>&1 run_variant() { # $1=name $2=per_record(true|false|omit) $3=default outputs yaml list local W=$S/t5_$1; rm -rf $ [...]"
+        },
+        {
+          "event_id": "01a1cb87-7ad6-7bcd-aecf-2289ce70d592",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_09e55532-3d4/agent-a81999a4d6d9c5ce5.jsonl",
+          "ts": "2026-11-11T16:53:36Z",
+          "tool": "Bash",
+          "summary": "target.command=S=$S/fb; W=$S/t7; rm -rf $W; mkdir -p $W/logs $W/state $W/out; chmod -R 777 $W cat > $W/prod.yaml <<'EOF' # agentwatch -> Fluent Bit 5.x reference pipeline [...]"
+        },
+        {
+          "event_id": "01a1cb8a-c206-78b9-888a-deb3697fb73a",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_09e55532-3d4/agent-a81999a4d6d9c5ce5.jsonl",
+          "ts": "2026-11-11T16:57:10Z",
+          "tool": "Bash",
+          "summary": "target.command=S=$S/fb; R=$S/research/fluentbit.md; W=$S/t9; rm -rf $W; mkdir -p $W/secrets; printf  [...]"
+        },
+        {
+          "event_id": "01a1cdc5-1465-7ecb-b1de-59d2ce5ede5a",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11.jsonl",
+          "ts": "2026-11-12T03:20:07Z",
+          "tool": "Bash",
+          "summary": "target.command=S=$S; W=$S/fbosq; rm -rf $W; mkdir -p $W/cfg $W/logs $W/state $W/out; cp $S/fleetstack/logs/osqueryd.results.log $W/logs/; cp /home/user/thomastysong/spoor [...]"
+        },
+        {
+          "event_id": "01a1cdc8-1c1f-7708-8baa-1f038057e93c",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11.jsonl",
+          "ts": "2026-11-12T03:23:26Z",
+          "tool": "Bash",
+          "summary": "target.command=cd /home/user/thomastysong/spoor; sed -i \"s/rule: '\\$record_type ^(event|finding|enforcement|indicator)\\$ numbat.\\$record_type false'/rule: '\\$record_type ^(event|finding|enforcement|indicator|scan_summary|diagnostic)\\$ numba [...]"
+        }
+      ]
+    },
+    {
+      "id": "SPR-EVADE-001",
+      "title": "Security tool stopped or killed",
+      "class": "finding",
+      "severity": "high",
+      "hits": 7,
+      "threads": 4,
+      "per_1k_tool_calls": 1.3115982761851228,
+      "hit_rate": {
+        "k": 7,
+        "n": 5337,
+        "p": 0.0013115982761851227,
+        "lo": 0.0006354904480578379,
+        "hi": 0.002705080313732511
+      },
+      "thread_rate": {
+        "k": 4,
+        "n": 94,
+        "p": 0.0425531914893617,
+        "lo": 0.016670548150042715,
+        "hi": 0.10435645781881736
+      },
+      "labels": {
+        "unlabelled": 7
+      },
+      "samples": [
+        {
+          "event_id": "01a1cb86-f5e5-779c-a617-3dd339c84aa8",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11.jsonl",
+          "ts": "2026-11-11T16:53:02Z",
+          "tool": "Bash",
+          "summary": "shell.defense_evasion=stop_security_tool; target.command=S=$S; mkdir -p $S/exttest && cd $S/exttest && cat > go.mod <<'EOF' module example.com/exttest go 1.24 EOF cat > m [...]"
+        },
+        {
+          "event_id": "01a1cb87-9190-787a-8202-4a41ac168f21",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11.jsonl",
+          "ts": "2026-11-11T16:53:41Z",
+          "tool": "Bash",
+          "summary": "shell.defense_evasion=stop_security_tool; target.command=S=$S; mkdir -p /run/osqt && sed -i \"s#^--extensions_socket=.*#--extensions_socket=/run/osqt/osquery.em#\" $S/fleet [...]"
+        },
+        {
+          "event_id": "01a1cb9b-b407-7e0b-b894-42b33e7a9bf1",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_c7283e39-218/agent-a05857f3ab1502633.jsonl",
+          "ts": "2026-11-11T17:15:41Z",
+          "tool": "Bash",
+          "summary": "shell.defense_evasion=stop_security_tool; target.command=S=$S W=$S/rt-fleetop kill $(cat $W/osqueryd.pid) 2>/dev/null; sleep 3; pkill -f \"rt-fleetop/extbin/rtfo.ext\"; pki [...]"
+        },
+        {
+          "event_id": "01a1cb9f-ece0-75ea-b433-cc4ef4b29cbd",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_c7283e39-218/agent-a05857f3ab1502633.jsonl",
+          "ts": "2026-11-11T17:20:18Z",
+          "tool": "Bash",
+          "summary": "shell.defense_evasion=stop_security_tool; target.command=S=$S W=$S/rt-fleetop; TOKEN=$(cat $W/token); API=https://localhost:8412/api/v1/fleet; OSQ=$W/bin/osqueryd echo \"- [...]"
+        },
+        {
+          "event_id": "01a1cba2-8d5c-735b-848d-ed2cdec21eef",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9cbc00f8-b78/agent-ae589b8fc7c28a2de.jsonl",
+          "ts": "2026-11-11T17:23:10Z",
+          "tool": "Bash",
+          "summary": "shell.defense_evasion=stop_security_tool; target.command=S=$S; V=$S/redteam/verify-alt-architectures; OSQ=$S/dl/osquery/opt/osquery/bin/osqueryd pkill -f \"verify-alt-arch [...]"
+        },
+        {
+          "event_id": "01a1cbab-2575-751c-a5c5-f47cb6bd770f",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_c7283e39-218/agent-aa203b4bc327c72f3.jsonl",
+          "ts": "2026-11-11T17:32:33Z",
+          "tool": "Bash",
+          "summary": "shell.defense_evasion=stop_security_tool; target.command=S=$S; V=$S/redteam/verify-fleet-operator; OSQ=/opt/spoor-test/osquery/opt/osquery/bin/osqueryd; CA=$S/fleetstack/ [...]"
+        },
+        {
+          "event_id": "01a1cdda-74c3-74c6-961c-70ac39bdea9a",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11.jsonl",
+          "ts": "2026-11-12T03:43:28Z",
+          "tool": "Bash",
+          "summary": "shell.defense_evasion=stop_security_tool; target.command=S=$S; cd $S/fleetstack && . ./fleet.env && (env -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy nohup $ [...]"
+        }
+      ]
+    },
+    {
+      "id": "SPR-EVADE-002",
+      "title": "Sensor files deleted or modified",
+      "class": "alert",
+      "severity": "critical",
+      "hits": 8,
+      "threads": 6,
+      "per_1k_tool_calls": 1.498969458497283,
+      "hit_rate": {
+        "k": 8,
+        "n": 5337,
+        "p": 0.001498969458497283,
+        "lo": 0.0007597541079228029,
+        "hi": 0.0029552894809343165
+      },
+      "thread_rate": {
+        "k": 6,
+        "n": 94,
+        "p": 0.06382978723404255,
+        "lo": 0.029579735297574024,
+        "hi": 0.13232973550994373
+      },
+      "labels": {
+        "unlabelled": 8
+      },
+      "samples": [
+        {
+          "event_id": "01a1cb96-6fcc-74ca-9bdc-166254dd4a87",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_c7283e39-218/agent-aeca0c9c94dd7ccf0.jsonl",
+          "ts": "2026-11-11T17:09:56Z",
+          "tool": "Bash",
+          "summary": "shell.deletes=e2/$v; shell.writes=$d/fb.yaml; target.command=S=$S; cd $S/rtp # ---------- E2 perms mk2() { d=$1; mkdir -p $d/home/alice/.local/state/spoor $d/state $d/out [...]"
+        },
+        {
+          "event_id": "01a1cb9c-658d-704c-8b40-4670384ba1a8",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11.jsonl",
+          "ts": "2026-11-11T17:16:26Z",
+          "tool": "Bash",
+          "summary": "shell.deletes=fleetctl.tgz; shell.writes=/opt/spoor-test/fleet/fleet_v4.94.1_linux/fleet, /opt/spoor-test/osquery/opt/osquery/bin/osqueryd, fleetctl.tgz, $S/dl; target.co [...]"
+        },
+        {
+          "event_id": "01a1cb9d-c4ac-7116-bd06-29ab5539c65b",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_a6f676a5-ba5/agent-aba6392ed5fd9d96a.jsonl",
+          "ts": "2026-11-11T17:17:56Z",
+          "tool": "Bash",
+          "summary": "shell.writes=hookstub/main.go, bin/spoor; target.command=W=$S/redteam/pp-work/probes; cd $W; mkdir -p hookstub \"bin/Program Files/spoor\" cat > hookstub/main.go <<'EOF' pa [...]"
+        },
+        {
+          "event_id": "01a1cba1-de01-7e68-b42a-e101e9db5ded",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-aca9bb795f0f4528c.jsonl",
+          "ts": "2026-11-11T17:22:25Z",
+          "tool": "Bash",
+          "summary": "shell.writes=sensor-fcap.bin; target.command=cd $S/redteam/verify-containers-k8s && IMG=mirror.gcr.io/library/redis:7 RP=$(pgrep -f \"sleep 86411\"); DP=$(pgrep -f \"sleep 8 [...]"
+        },
+        {
+          "event_id": "01a1cba2-5c6c-7e7c-bfcd-bcb66314068b",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-aca9bb795f0f4528c.jsonl",
+          "ts": "2026-11-11T17:22:57Z",
+          "tool": "Bash",
+          "summary": "shell.writes=safeopen/caps.go, sensor-fcap.bin; target.command=cd $S/redteam/verify-containers-k8s && IMG=mirror.gcr.io/library/redis:7 cat > safeopen/caps.go <<'EOF' pac [...]"
+        },
+        {
+          "event_id": "01a1cba8-7761-7731-a5dd-16bc4965a41e",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_a6f676a5-ba5/agent-ac4a3a82b57ed7af6.jsonl",
+          "ts": "2026-11-11T17:29:37Z",
+          "tool": "Bash",
+          "summary": "shell.deletes=$S/redteam/verify-platform-parity/spool.ndjson; shell.writes=$S/redteam/verify-platfor [...]"
+        },
+        {
+          "event_id": "01a1cba9-3d87-70b4-8bb5-fff8cf69ffd9",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_c7283e39-218/agent-a24a6e08ddc9097bb.jsonl",
+          "ts": "2026-11-11T17:30:28Z",
+          "tool": "Bash",
+          "summary": "shell.writes=$d/fb.yaml, p7/$v/sink.pid; target.command=cd $S/redteam/verify-pipeline-operator && V=$PWD mk7(){ d=$1; mkdir -p $d/home/alice/.local/state/spoor $d/state $ [...]"
+        },
+        {
+          "event_id": "01a1cdcd-0e7e-707e-8e0e-0ef2a3ccd5ea",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11.jsonl",
+          "ts": "2026-11-12T03:28:50Z",
+          "tool": "Bash",
+          "summary": "shell.writes=systemd/spoor.service, $S/pkgtest~/usr/bin/spoor, $S/pkgtest~/etc/systemd/system/; targ [...]"
+        }
+      ]
+    },
+    {
+      "id": "SPR-EVADE-003",
+      "title": "Managed agent policy written or removed",
+      "class": "alert",
+      "severity": "critical",
+      "hits": 3,
+      "threads": 2,
+      "per_1k_tool_calls": 0.5621135469364812,
+      "hit_rate": {
+        "k": 3,
+        "n": 5337,
+        "p": 0.0005621135469364812,
+        "lo": 0.00019118733271745146,
+        "hi": 0.001651492120805816
+      },
+      "thread_rate": {
+        "k": 2,
+        "n": 94,
+        "p": 0.02127659574468085,
+        "lo": 0.005854336239172753,
+        "hi": 0.07429020489102965
+      },
+      "labels": {
+        "unlabelled": 3
+      },
+      "samples": [
+        {
+          "event_id": "01a1cb94-a891-7694-9535-ce739dc2a5eb",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-a4af15354bba947e3.jsonl",
+          "ts": "2026-11-11T17:07:59Z",
+          "tool": "Bash",
+          "summary": "shell.writes=/proc/$RP~/etc/claude-code/managed-settings.json, /host/proc/$RP~/tmp/w2, /proc/$RP~/tmp/w3, /proc/$DP~/home/dev/.claude/projects/y/s.jsonl, $S/redteam/k8s-e [...]"
+        },
+        {
+          "event_id": "01a1cba4-acb8-7286-9e6d-452d305623b0",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9cbc00f8-b78/agent-ae589b8fc7c28a2de.jsonl",
+          "ts": "2026-11-11T17:25:29Z",
+          "tool": "Bash",
+          "summary": "shell.writes=$S/redteam/verify-alt-architectures/bare/tool/stub.py, $S/redteam/verify-alt-architectu [...]"
+        },
+        {
+          "event_id": "01a1cba5-41bb-71b0-8c3f-5c078dcae4a1",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9cbc00f8-b78/agent-ae589b8fc7c28a2de.jsonl",
+          "ts": "2026-11-11T17:26:07Z",
+          "tool": "Bash",
+          "summary": "shell.writes=$S/redteam/verify-alt-architectures/fb/otel.lua, $S/redteam/verify-alt-architectures/fb [...]"
+        }
+      ]
+    },
+    {
+      "id": "SPR-EVADE-004",
+      "title": "Agent hook configuration edited from the shell",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 1,
+      "threads": 1,
+      "per_1k_tool_calls": 0.18737118231216038,
+      "hit_rate": {
+        "k": 1,
+        "n": 5337,
+        "p": 0.00018737118231216038,
+        "lo": 3.3076380313440076e-05,
+        "hi": 0.0010606574190762863
+      },
+      "thread_rate": {
+        "k": 1,
+        "n": 94,
+        "p": 0.010638297872340425,
+        "lo": 0.0018803957480879353,
+        "hi": 0.05782291296278563
+      },
+      "labels": {
+        "unlabelled": 1
+      },
+      "samples": [
+        {
+          "event_id": "01a1cba4-b377-73bf-9116-25e161323777",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-a2639706f942f61ff.jsonl",
+          "ts": "2026-11-11T17:25:31Z",
+          "tool": "Bash",
+          "summary": "shell.deletes=$S/redteam/verify-privacy-sensor-security/procroot/croot; shell.writes=sleeper/main.go, sleeper/go.mod, reader/go.mod, reader/main.go, $S [...]"
+        }
+      ]
+    },
+    {
+      "id": "SPR-EVADE-005",
+      "title": "Operating-system security control disabled",
+      "class": "finding",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-EVADE-006",
+      "title": "Shell history or system logs cleared",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-EVADE-007",
+      "title": "Sandbox switched off for a tool call",
+      "class": "signal",
+      "severity": "medium",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-EVADE-008",
+      "title": "Agent configuration written to disable hooks or the sandbox",
+      "class": "finding",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-EVADE-009",
+      "title": "Control file path spelled to evade matching",
+      "class": "alert",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-EVADE-010",
+      "title": "Git hooks skipped",
+      "class": "signal",
+      "severity": "low",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-EVADE-011",
+      "title": "Agent session log deleted or rewritten",
+      "class": "finding",
+      "severity": "high",
+      "hits": 1,
+      "threads": 1,
+      "per_1k_tool_calls": 0.18737118231216038,
+      "hit_rate": {
+        "k": 1,
+        "n": 5337,
+        "p": 0.00018737118231216038,
+        "lo": 3.3076380313440076e-05,
+        "hi": 0.0010606574190762863
+      },
+      "thread_rate": {
+        "k": 1,
+        "n": 94,
+        "p": 0.010638297872340425,
+        "lo": 0.0018803957480879353,
+        "hi": 0.05782291296278563
+      },
+      "labels": {
+        "unlabelled": 1
+      },
+      "samples": [
+        {
+          "event_id": "01a1cb94-a891-7694-9535-ce739dc2a5eb",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-a4af15354bba947e3.jsonl",
+          "ts": "2026-11-11T17:07:59Z",
+          "tool": "Bash",
+          "summary": "shell.writes=/proc/$RP~/etc/claude-code/managed-settings.json, /host/proc/$RP~/tmp/w2, /proc/$RP~/tmp/w3, /proc/$DP~/home/dev/.claude/projects/y/s.jsonl, $S/redteam/k8s-e [...]"
+        }
+      ]
+    },
+    {
+      "id": "SPR-EVADE-012",
+      "title": "Symbolic link planted to a sensitive file",
+      "class": "finding",
+      "severity": "high",
+      "hits": 1,
+      "threads": 1,
+      "per_1k_tool_calls": 0.18737118231216038,
+      "hit_rate": {
+        "k": 1,
+        "n": 5337,
+        "p": 0.00018737118231216038,
+        "lo": 3.3076380313440076e-05,
+        "hi": 0.0010606574190762863
+      },
+      "thread_rate": {
+        "k": 1,
+        "n": 94,
+        "p": 0.010638297872340425,
+        "lo": 0.0018803957480879353,
+        "hi": 0.05782291296278563
+      },
+      "labels": {
+        "unlabelled": 1
+      },
+      "samples": [
+        {
+          "event_id": "01a1cba4-b377-73bf-9116-25e161323777",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-a2639706f942f61ff.jsonl",
+          "ts": "2026-11-11T17:25:31Z",
+          "tool": "Bash",
+          "summary": "target.command=S=$S; V=$S/redteam/verify-privacy-sensor-security; mkdir -p $V/procroot/sleeper $V/procroot/reader && cd $V/procroot cat > sleeper/main.go <<'EOF' package  [...]"
+        }
+      ]
+    },
+    {
+      "id": "SPR-EXEC-001",
+      "title": "Remote script piped into an interpreter",
+      "class": "finding",
+      "severity": "high",
+      "hits": 1,
+      "threads": 1,
+      "per_1k_tool_calls": 0.18737118231216038,
+      "hit_rate": {
+        "k": 1,
+        "n": 5337,
+        "p": 0.00018737118231216038,
+        "lo": 3.3076380313440076e-05,
+        "hi": 0.0010606574190762863
+      },
+      "thread_rate": {
+        "k": 1,
+        "n": 94,
+        "p": 0.010638297872340425,
+        "lo": 0.0018803957480879353,
+        "hi": 0.05782291296278563
+      },
+      "labels": {
+        "unlabelled": 1
+      },
+      "samples": [
+        {
+          "event_id": "01a1cb8b-171a-7630-a1d3-e538e0e1a742",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_7d1396f5-8b2/agent-a80dc99afbdc50d3e.jsonl",
+          "ts": "2026-11-11T16:57:32Z",
+          "tool": "Bash",
+          "summary": "shell.interpreters=python3; target.command=cd /home/user/uber/adr/Detection && python3 -I - <<'EOF' import json, ast, re, collections, pathlib recs=[json.loads(l) for l in open('benchmark/adr_bench_20251017_151604.jsonl')] ok=bad=trunc=0; n [...]"
+        }
+      ]
+    },
+    {
+      "id": "SPR-EXEC-002",
+      "title": "Encoded payload decoded and executed",
+      "class": "finding",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-EXEC-003",
+      "title": "Shell construct that defeats approval parsers",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-EXEC-004",
+      "title": "Execution-sink environment variable set on a command",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 1,
+      "threads": 1,
+      "per_1k_tool_calls": 0.18737118231216038,
+      "hit_rate": {
+        "k": 1,
+        "n": 5337,
+        "p": 0.00018737118231216038,
+        "lo": 3.3076380313440076e-05,
+        "hi": 0.0010606574190762863
+      },
+      "thread_rate": {
+        "k": 1,
+        "n": 94,
+        "p": 0.010638297872340425,
+        "lo": 0.0018803957480879353,
+        "hi": 0.05782291296278563
+      },
+      "labels": {
+        "unlabelled": 1
+      },
+      "samples": [
+        {
+          "event_id": "01a1cba8-7761-7731-a5dd-16bc4965a41e",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_a6f676a5-ba5/agent-ac4a3a82b57ed7af6.jsonl",
+          "ts": "2026-11-11T17:29:37Z",
+          "tool": "Bash",
+          "summary": "shell.env_assign=S, V, SPOOL, HOME, BASH_ENV, ENV; target.command=S=$S; V=$S/redteam/verify-platform-parity; mkdir -p \"$V/bin/Program Files/spoor\"; cp $V/bin/spoorstub \"$ [...]"
+        }
+      ]
+    },
+    {
+      "id": "SPR-EXEC-005",
+      "title": "Program option that runs an arbitrary command",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-EXEC-006",
+      "title": "Binary started through /proc/self/root or the dynamic loader",
+      "class": "finding",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-EXEC-007",
+      "title": "Command whose effect a static parse cannot see",
+      "class": "signal",
+      "severity": "low",
+      "hits": 9,
+      "threads": 7,
+      "per_1k_tool_calls": 1.6863406408094435,
+      "hit_rate": {
+        "k": 9,
+        "n": 5337,
+        "p": 0.0016863406408094434,
+        "lo": 0.0008874610262488872,
+        "hi": 0.0032020553896750033
+      },
+      "thread_rate": {
+        "k": 7,
+        "n": 94,
+        "p": 0.07446808510638298,
+        "lo": 0.03653858086656638,
+        "hi": 0.14581212236028018
+      },
+      "labels": {
+        "unlabelled": 8
+      },
+      "samples": [
+        {
+          "event_id": "01a1cb82-3492-7129-89b2-4d4902204ffe",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11.jsonl",
+          "ts": "2026-11-11T16:47:50Z",
+          "tool": "Bash",
+          "summary": "shell.opaque=dynamic_command; target.command=S=$S; mkdir -p $S/dl/osquery $S/tools && cd $S/dl && curl -sSL --max-time 300 -o osquery.tar.gz https://github.com/osquery/os [...]"
+        },
+        {
+          "event_id": "01a1cb82-e2b8-79e5-b9fe-f5ff4349404c",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11.jsonl",
+          "ts": "2026-11-11T16:48:35Z",
+          "tool": "Bash",
+          "summary": "shell.opaque=dynamic_command; target.command=S=$S; cd $S/dl && mkdir -p fleet && tar -xzf fleet_v4.94.1_linux.tar.gz -C fleet && tar -xzf fleetctl_v4.94.1_linux_amd64.tar [...]"
+        },
+        {
+          "event_id": "01a1cb96-6df0-70a1-9062-f95084008869",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-a4af15354bba947e3.jsonl",
+          "ts": "2026-11-11T17:09:55Z",
+          "tool": "Bash",
+          "summary": "shell.opaque=dynamic_command; target.command=cd $S/redteam/k8s-exp curl -sS -m 15 -f https://raw.githubusercontent.com/containerd/containerd/release/1.7/pkg/cri/server/co [...]"
+        },
+        {
+          "event_id": "01a1cb97-c5e7-7ec1-ad59-32e2e39332c1",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-a025703904052f497.jsonl",
+          "ts": "2026-11-11T17:11:23Z",
+          "tool": "Bash",
+          "summary": "shell.opaque=inline_code, dynamic_command; target.command=S=$S; W=$S/redteam/pss-work OSQ=$(pgrep -af \"osqueryd --flagfile\" | head -1 | awk '{print $2}'); echo \"running:  [...]"
+        },
+        {
+          "event_id": "01a1cb9e-0c9c-7b2e-9448-f584290b4446",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_a6f676a5-ba5/agent-aba6392ed5fd9d96a.jsonl",
+          "ts": "2026-11-11T17:18:15Z",
+          "tool": "Bash",
+          "summary": "shell.opaque=heredoc_interpreter, dynamic_command; target.command=W=$S/redteam/pp-work/probes; cd $W; export SPOOL=$W/bin/spool2.ndjson; rm -f $SPOOL echo '### 1. POSIX s [...]"
+        },
+        {
+          "event_id": "01a1cba0-f34e-7e3c-850f-5cf1cf986d5a",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-aca9bb795f0f4528c.jsonl",
+          "ts": "2026-11-11T17:21:25Z",
+          "tool": "Bash",
+          "summary": "shell.opaque=dynamic_command; target.command=cd $S/redteam/verify-containers-k8s && IMG=mirror.gcr.io/library/redis:7 DOCKERD=$(pgrep -x dockerd | head -1) docker rm -f v [...]"
+        },
+        {
+          "event_id": "01a1cba1-de01-7e68-b42a-e101e9db5ded",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-aca9bb795f0f4528c.jsonl",
+          "ts": "2026-11-11T17:22:25Z",
+          "tool": "Bash",
+          "summary": "shell.opaque=dynamic_command; target.command=cd $S/redteam/verify-containers-k8s && IMG=mirror.gcr.io/library/redis:7 RP=$(pgrep -f \"sleep 86411\"); DP=$(pgrep -f \"sleep 8 [...]"
+        },
+        {
+          "event_id": "01a1cba8-7761-7731-a5dd-16bc4965a41e",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_a6f676a5-ba5/agent-ac4a3a82b57ed7af6.jsonl",
+          "ts": "2026-11-11T17:29:37Z",
+          "tool": "Bash",
+          "summary": "shell.opaque=dynamic_command; target.command=S=$S; V=$S/redteam/verify-platform-parity; mkdir -p \"$V/bin/Program Files/spoor\"; cp $V/bin/spoorstub \"$V/bin/Program Files/s [...]"
+        }
+      ]
+    },
+    {
+      "id": "SPR-EXEC-008",
+      "title": "Remote script from a throwaway or anonymous host piped into an interpreter",
+      "class": "alert",
+      "severity": "critical",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-EXEC-009",
+      "title": "Python run after a file named like a standard-library module was written",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-EXFIL-001",
+      "title": "Credential read earlier in the session leaves in an outbound request",
+      "class": "alert",
+      "severity": "critical",
+      "hits": 42,
+      "threads": 11,
+      "per_1k_tool_calls": 7.869589657110736,
+      "hit_rate": {
+        "k": 42,
+        "n": 5337,
+        "p": 0.007869589657110737,
+        "lo": 0.005827513223180227,
+        "hi": 0.010619606485947092
+      },
+      "thread_rate": {
+        "k": 11,
+        "n": 94,
+        "p": 0.11702127659574468,
+        "lo": 0.06661362828276755,
+        "hi": 0.19750200462139433
+      },
+      "labels": {
+        "unlabelled": 8
+      },
+      "samples": [
+        {
+          "event_id": "01a1cb96-c98b-782f-bd10-7c2f6018e109",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_c7283e39-218/agent-aeca0c9c94dd7ccf0.jsonl",
+          "ts": "2026-11-11T17:10:19Z",
+          "tool": "Bash",
+          "summary": "net.host=raw.githubusercontent.com; session.secret_flow_kinds=env_value; target.command=S=$S; cd $S/rtp curl -sS --max-time 20 https://raw.githubusercontent.com/fluent/fl [...]"
+        },
+        {
+          "event_id": "01a1cbb3-2811-7efc-b1f6-83f49e7bdb9a",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_7515ee3a-ce5/agent-a8a7180bbc340179a.jsonl",
+          "ts": "2026-11-11T17:41:18Z",
+          "tool": "Bash",
+          "summary": "net.host=raw.githubusercontent.com; session.secret_flow_kinds=env_value; target.command=S=$S; V=$S/redteam/verify-detection-quality; mkdir -p $V/codexsrc && cd $V/codexsr [...]"
+        },
+        {
+          "event_id": "01a1cbb6-63a3-7678-aded-45310db85879",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_38267680-55f/agent-ace070fa17fe44faa.jsonl",
+          "ts": "2026-11-11T17:44:50Z",
+          "tool": "Bash",
+          "summary": "net.host=$1, raw.githubusercontent.com; session.secret_flow_kinds=env_value; target.command=cd $S/hookinstall-dl && fetch() { curl -sS -L --max-time 40 -o \"$2\" -w \"%{http [...]"
+        },
+        {
+          "event_id": "01a1cbba-8454-745a-a739-1eb777bba55a",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_38267680-55f/agent-ace070fa17fe44faa.jsonl",
+          "ts": "2026-11-11T17:49:20Z",
+          "tool": "Bash",
+          "summary": "net.host=$1; session.secret_flow_kinds=env_value; target.command=cd $S/hookinstall-dl && sed -n 80,125p numbat-README.md; fetch() { curl -sS -L --max-time 40 -o \"$2\" -w \" [...]"
+        },
+        {
+          "event_id": "01a1cbbe-d720-7a62-8392-ae86b4796615",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_7b2b8b10-93e/agent-ab600e1c832bc3a10.jsonl",
+          "ts": "2026-11-11T17:54:04Z",
+          "tool": "Bash",
+          "summary": "net.host=raw.githubusercontent.com; session.secret_flow_kinds=env_value; target.command=S=$S/platform-work/xnu; cd $S; grep -n \"uuid\" bsd_kern_kern_xxx.c | head -5; for f [...]"
+        },
+        {
+          "event_id": "01a1cbc9-1f28-7fcd-bf6b-104d5f097a80",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_8758a1a0-646/agent-aee7567049e637691.jsonl",
+          "ts": "2026-11-11T18:05:17Z",
+          "tool": "Bash",
+          "summary": "net.host=raw.githubusercontent.com; session.secret_flow_kinds=env_value; target.command=cd $S/rv-hookio && curl -sS -m 40 -o copilot-hooks-reference.md -w \"%{http_code}\\n [...]"
+        },
+        {
+          "event_id": "01a1cdb5-22f9-709e-971d-a072053de340",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_eac76c7b-8ba/agent-a6ac9bf8550fa447a.jsonl",
+          "ts": "2026-11-12T03:02:42Z",
+          "tool": "Bash",
+          "summary": "net.host=raw.githubusercontent.com; session.secret_flow_kinds=env_value; target.command=cd $S/hookinstall-docs; curl -sS -o copilot-hooks-reference.md -w \"%{http_code}\\n\" [...]"
+        },
+        {
+          "event_id": "01a1cdb7-3c26-785f-94a0-bb5d545e11c9",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11.jsonl",
+          "ts": "2026-11-12T03:05:00Z",
+          "tool": "Bash",
+          "summary": "net.host=127.0.0.1; session.secret_flow_kinds=env_value; target.command=docker start fleet-mysql fleet-redis; seq 1 40; docker exec fleet-mysql mysqladmin -h127.0.0.1 -P3316 -ufleet -p[REDACTED:password:[REDACTED:password:e6c3fb2e]] ping; m [...]"
+        }
+      ]
+    },
+    {
+      "id": "SPR-EXFIL-002",
+      "title": "Data sent to a paste site, file share or request-capture host",
+      "class": "finding",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-EXFIL-003",
+      "title": "Exfiltration or tunnel host contacted",
+      "class": "signal",
+      "severity": "low",
+      "hits": 2,
+      "threads": 2,
+      "per_1k_tool_calls": 0.37474236462432076,
+      "hit_rate": {
+        "k": 2,
+        "n": 5337,
+        "p": 0.00037474236462432077,
+        "lo": 0.00010277388908413662,
+        "hi": 0.00136543273737236
+      },
+      "thread_rate": {
+        "k": 2,
+        "n": 94,
+        "p": 0.02127659574468085,
+        "lo": 0.005854336239172753,
+        "hi": 0.07429020489102965
+      },
+      "labels": {
+        "unlabelled": 2
+      },
+      "samples": [
+        {
+          "event_id": "01a1cbaf-cd5d-7bd0-a2f3-09ee0e103d55",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_8758a1a0-646/agent-a3e851cd9e1ea67ed.jsonl",
+          "ts": "2026-11-11T17:37:38Z",
+          "tool": "Bash",
+          "summary": "net.host=db.internal.example, example.com, mcp.example.com, pastebin.com, x.example; net.host_classes=paste_site"
+        },
+        {
+          "event_id": "01a1cbb0-7f0f-7930-9d00-37c3ad2a4cfd",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_7515ee3a-ce5/agent-a8a7180bbc340179a.jsonl",
+          "ts": "2026-11-11T17:38:24Z",
+          "tool": "Bash",
+          "summary": "net.host=api.internal, webhook.site, evil.example, x.example; net.host_classes=webhook_sink"
+        }
+      ]
+    },
+    {
+      "id": "SPR-EXFIL-004",
+      "title": "DNS lookup with data in the hostname",
+      "class": "finding",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-EXFIL-005",
+      "title": "Local file or stream uploaded to an unapproved host",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-EXFIL-006",
+      "title": "Copy to a remote host or bucket",
+      "class": "signal",
+      "severity": "low",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-EXFIL-007",
+      "title": "Push to a git remote added in the same command or session",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-EXFIL-008",
+      "title": "Repository or gist made public",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-EXFIL-009",
+      "title": "Package published to a public registry",
+      "class": "signal",
+      "severity": "medium",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-EXFIL-010",
+      "title": "Tool result asks for a data-carrying image or link",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 11,
+      "threads": 8,
+      "per_1k_tool_calls": 2.061083005433764,
+      "hit_rate": {
+        "k": 11,
+        "n": 5337,
+        "p": 0.002061083005433764,
+        "lo": 0.0011512913236883882,
+        "hi": 0.003687170746369043
+      },
+      "thread_rate": {
+        "k": 8,
+        "n": 94,
+        "p": 0.0851063829787234,
+        "lo": 0.04375548837127667,
+        "hi": 0.15903644727489874
+      },
+      "labels": {
+        "unlabelled": 8
+      },
+      "samples": [
+        {
+          "event_id": "01a1cb78-aacc-7995-a7d0-fe9f97b53e32",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11.jsonl",
+          "ts": "2026-11-11T16:37:25Z",
+          "tool": "Bash",
+          "summary": "output.markers=markdown_image_exfil; tool.name=Bash"
+        },
+        {
+          "event_id": "01a1cb99-eb82-738c-a9c8-77985148a256",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_7515ee3a-ce5/agent-aab36373290f36fcf.jsonl",
+          "ts": "2026-11-11T17:13:44Z",
+          "tool": "Read",
+          "summary": "output.markers=markdown_image_exfil; tool.name=Read"
+        },
+        {
+          "event_id": "01a1cb9b-1ddf-7184-8b76-d69c703d541e",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_1d5e15da-c57/agent-a8a787a214e7b431b.jsonl",
+          "ts": "2026-11-11T17:15:03Z",
+          "tool": "Read",
+          "summary": "output.markers=markdown_image_exfil; tool.name=Read"
+        },
+        {
+          "event_id": "01a1cb9b-3515-7f18-af1c-89754a785e74",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_1d5e15da-c57/agent-adbe3f95f0b29a670.jsonl",
+          "ts": "2026-11-11T17:15:08Z",
+          "tool": "Read",
+          "summary": "output.markers=markdown_image_exfil; tool.name=Read"
+        },
+        {
+          "event_id": "01a1cbca-3dc7-72ee-ab9d-2145d111793d",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_1d5e15da-c57/agent-adbe3f95f0b29a670.jsonl",
+          "ts": "2026-11-11T18:06:31Z",
+          "tool": "Bash",
+          "summary": "output.markers=ignore_previous, markdown_image_exfil, role_tag_injection; tool.name=Bash"
+        },
+        {
+          "event_id": "01a1cdb2-ed90-7b06-b760-f063932d237c",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_92cf33f2-03c/agent-ae1ed043ff4648226.jsonl",
+          "ts": "2026-11-12T03:00:17Z",
+          "tool": "Bash",
+          "summary": "output.markers=base64_blob_instruction, do_not_tell_user, exfil_instruction, hidden_html_comment_instruction, ignore_previous, markdown_image_exfil, role_tag_injection, system_prompt_override; tool.name=Bash"
+        },
+        {
+          "event_id": "01a1cdd8-a15f-72c0-beab-d8001934a8a6",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/agent-a737128f817cd1fbb.jsonl",
+          "ts": "2026-11-12T03:41:28Z",
+          "tool": "Read",
+          "summary": "output.markers=markdown_image_exfil; tool.name=Read"
+        },
+        {
+          "event_id": "01a1cdf0-5ef7-7ebf-8b12-5c5fb3c01dc6",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11.jsonl",
+          "ts": "2026-11-12T04:07:24Z",
+          "tool": "Bash",
+          "summary": "output.markers=ignore_previous, markdown_image_exfil, role_tag_injection; tool.name=Bash"
+        }
+      ]
+    },
+    {
+      "id": "SPR-EXFIL-011",
+      "title": "Literal AI provider key sent to the provider's API",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-EXFIL-012",
+      "title": "MCP tool call carries a credential",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-OFFSEC-001",
+      "title": "Offensive security tool run from an agent session",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-OFFSEC-002",
+      "title": "Reverse shell",
+      "class": "alert",
+      "severity": "critical",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-OFFSEC-003",
+      "title": "Local service exposed through a tunnel",
+      "class": "signal",
+      "severity": "low",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-OFFSEC-004",
+      "title": "Pivoting relay or anonymiser started",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-OFFSEC-005",
+      "title": "Container started with host-level privileges",
+      "class": "signal",
+      "severity": "low",
+      "hits": 11,
+      "threads": 2,
+      "per_1k_tool_calls": 2.061083005433764,
+      "hit_rate": {
+        "k": 11,
+        "n": 5337,
+        "p": 0.002061083005433764,
+        "lo": 0.0011512913236883882,
+        "hi": 0.003687170746369043
+      },
+      "thread_rate": {
+        "k": 2,
+        "n": 94,
+        "p": 0.02127659574468085,
+        "lo": 0.005854336239172753,
+        "hi": 0.07429020489102965
+      },
+      "labels": {
+        "unlabelled": 8
+      },
+      "samples": [
+        {
+          "event_id": "01a1cb94-a891-7694-9535-ce739dc2a5eb",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-a4af15354bba947e3.jsonl",
+          "ts": "2026-11-11T17:07:59Z",
+          "tool": "Bash",
+          "summary": "shell.privilege=docker_privileged, cap_add; target.command=S=$S; E=$S/redteam/k8s-exp; IMG=mirror.gcr.io/library/redis:7 RP=$(pgrep -f \"sleep 86401\"); DP=$(pgrep -f \"slee [...]"
+        },
+        {
+          "event_id": "01a1cb94-fd77-7722-9864-38068a45bea9",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-a4af15354bba947e3.jsonl",
+          "ts": "2026-11-11T17:08:21Z",
+          "tool": "Bash",
+          "summary": "shell.privilege=docker_privileged; target.command=S=$S; E=$S/redteam/k8s-exp; IMG=mirror.gcr.io/library/redis:7 RP=$(pgrep -f \"sleep 86401\"); DP=$(pgrep -f \"sleep 86402\") [...]"
+        },
+        {
+          "event_id": "01a1cb9b-5e2d-7d2b-a95d-f84b8e98201f",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-a4af15354bba947e3.jsonl",
+          "ts": "2026-11-11T17:15:19Z",
+          "tool": "Bash",
+          "summary": "shell.privilege=cap_add, docker_privileged; target.command=IMG=mirror.gcr.io/library/redis:7 docker rm -f rtk8s-ws2 >/dev/null 2>&1 docker run -d --name rtk8s-ws2 --network host --entrypoint /bin/bash $IMG -c ' mkdir -p ~/.claude/projects/x [...]"
+        },
+        {
+          "event_id": "01a1cba0-5e79-7c17-b87a-11519e75c59c",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-aca9bb795f0f4528c.jsonl",
+          "ts": "2026-11-11T17:20:47Z",
+          "tool": "Bash",
+          "summary": "shell.privilege=cap_add, docker_privileged; target.command=cd $S/redteam/verify-containers-k8s && IMG=mirror.gcr.io/library/redis:7 DOCKERD=$(pgrep -x dockerd | head -1); [...]"
+        },
+        {
+          "event_id": "01a1cba0-f34e-7e3c-850f-5cf1cf986d5a",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-aca9bb795f0f4528c.jsonl",
+          "ts": "2026-11-11T17:21:25Z",
+          "tool": "Bash",
+          "summary": "shell.privilege=cap_add, docker_privileged; target.command=cd $S/redteam/verify-containers-k8s && IMG=mirror.gcr.io/library/redis:7 DOCKERD=$(pgrep -x dockerd | head -1)  [...]"
+        },
+        {
+          "event_id": "01a1cba1-de01-7e68-b42a-e101e9db5ded",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-aca9bb795f0f4528c.jsonl",
+          "ts": "2026-11-11T17:22:25Z",
+          "tool": "Bash",
+          "summary": "shell.privilege=cap_add, docker_privileged; target.command=cd $S/redteam/verify-containers-k8s && IMG=mirror.gcr.io/library/redis:7 RP=$(pgrep -f \"sleep 86411\"); DP=$(pgr [...]"
+        },
+        {
+          "event_id": "01a1cbab-0727-7675-a891-1eed1e371b6b",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-aca9bb795f0f4528c.jsonl",
+          "ts": "2026-11-11T17:32:25Z",
+          "tool": "Bash",
+          "summary": "shell.privilege=cap_add, docker_privileged; target.command=cd $S/redteam/verify-containers-k8s && IMG=mirror.gcr.io/library/redis:7 python3 - <<'EOF' import os, time pid  [...]"
+        },
+        {
+          "event_id": "01a1cbab-3b3e-7f44-932f-61d5610afdd8",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-aca9bb795f0f4528c.jsonl",
+          "ts": "2026-11-11T17:32:39Z",
+          "tool": "Bash",
+          "summary": "shell.privilege=cap_add, docker_privileged; target.command=cd $S/redteam/verify-containers-k8s && IMG=mirror.gcr.io/library/redis:7 DEV=$(findmnt -n -o SOURCE /); MAJ=$(( [...]"
+        }
+      ]
+    },
+    {
+      "id": "SPR-OFFSEC-006",
+      "title": "Host root or host PID namespace entered from a container command",
+      "class": "finding",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-OFFSEC-007",
+      "title": "Credential dumping tool or LSASS dump",
+      "class": "alert",
+      "severity": "critical",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-OFFSEC-008",
+      "title": "Burst of reconnaissance commands",
+      "class": "signal",
+      "severity": "low",
+      "hits": 8,
+      "threads": 6,
+      "per_1k_tool_calls": 1.498969458497283,
+      "hit_rate": {
+        "k": 8,
+        "n": 5337,
+        "p": 0.001498969458497283,
+        "lo": 0.0007597541079228029,
+        "hi": 0.0029552894809343165
+      },
+      "thread_rate": {
+        "k": 6,
+        "n": 94,
+        "p": 0.06382978723404255,
+        "lo": 0.029579735297574024,
+        "hi": 0.13232973550994373
+      },
+      "labels": {
+        "unlabelled": 8
+      },
+      "samples": [
+        {
+          "event_id": "01a1cb92-22d7-7084-bc79-9c13d3ee62c8",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9cbc00f8-b78/agent-ad4462c9373195f1c.jsonl",
+          "ts": "2026-11-11T17:05:14Z",
+          "tool": "Bash",
+          "summary": "shell.recon=ps; target.command=S=$S; ls $S/tools $S/fleetstack 2>/dev/null | head -40; ps aux | grep -E \"osqueryd|fleet serve|fluent\" | grep -v grep | head -8; docker ps  [...]"
+        },
+        {
+          "event_id": "01a1cb94-7d9d-7229-af88-d5f7df13331d",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9cbc00f8-b78/agent-ad4462c9373195f1c.jsonl",
+          "ts": "2026-11-11T17:07:48Z",
+          "tool": "Bash",
+          "summary": "shell.recon=id; target.command=S=$S; D=$S/redteam/alt-arch/e3; mkdir -p $D /run/rtalt; cp /proc/24720/exe $D/osqueryd && chmod +x $D/osqueryd; O=$D/osqueryd; cd $D; $O -S [...]"
+        },
+        {
+          "event_id": "01a1cb9a-4dee-7cad-9af2-899b16f243cc",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_c7283e39-218/agent-a05857f3ab1502633.jsonl",
+          "ts": "2026-11-11T17:14:09Z",
+          "tool": "Bash",
+          "summary": "shell.recon=ps; target.command=S=$S W=$S/rt-fleetop; date +%T PIDS=$(echo $(pgrep -f 'rt-fleetop/bin/osqueryd') $(pgrep -f rtfo.ext) | tr ' ' ',') ps -o pid,ppid,ni,rss,p [...]"
+        },
+        {
+          "event_id": "01a1cb9e-ef8a-7448-9a67-7748f9178403",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-aca9bb795f0f4528c.jsonl",
+          "ts": "2026-11-11T17:19:13Z",
+          "tool": "Bash",
+          "summary": "shell.recon=id, uname; target.command=cd $S/redteam && cat k8s-exp/probe.sh; echo ----; cat k8s-exp/poller.sh; echo ----; cat k8s-exp/p1.out k8s-exp/p2.out k8s-exp/p3.out [...]"
+        },
+        {
+          "event_id": "01a1cba3-3148-7059-a458-14cb5ff81278",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_c7283e39-218/agent-aa203b4bc327c72f3.jsonl",
+          "ts": "2026-11-11T17:23:52Z",
+          "tool": "Bash",
+          "summary": "shell.recon=ps; target.command=S=$S; ls -la $S/rt-fleetop $S/rt-fleetop/* 2>/dev/null | head -80; ls -la /opt/spoor-test/ /opt/spoor-test/* | head -50; ps aux | grep -E \" [...]"
+        },
+        {
+          "event_id": "01a1cba5-e9b2-7048-bb2c-cc454d3eb442",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_9e039058-eba/agent-a2639706f942f61ff.jsonl",
+          "ts": "2026-11-11T17:26:50Z",
+          "tool": "Bash",
+          "summary": "shell.recon=find_secrets; target.command=S=$S; V=$S/redteam/verify-privacy-sensor-security; mkdir -p $V/ds && cd $V/ds && python3 -m venv venv >/dev/null 2>&1 && timeout  [...]"
+        },
+        {
+          "event_id": "01a1cbab-2575-751c-a5c5-f47cb6bd770f",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_c7283e39-218/agent-aa203b4bc327c72f3.jsonl",
+          "ts": "2026-11-11T17:32:33Z",
+          "tool": "Bash",
+          "summary": "shell.recon=ps; target.command=S=$S; V=$S/redteam/verify-fleet-operator; OSQ=/opt/spoor-test/osquery/opt/osquery/bin/osqueryd; CA=$S/fleetstack/server.crt mkdir -p $V/ext [...]"
+        },
+        {
+          "event_id": "01a1cbb6-5a37-7d7b-aab1-93cb73dcefc3",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_38267680-55f/agent-a2559242fc5f04154.jsonl",
+          "ts": "2026-11-11T17:44:47Z",
+          "tool": "Bash",
+          "summary": "shell.recon=ps, uname, id; target.command=ps -eo pid,ppid,user,etime,args | grep -i -E \"osquery|auditd|fleet|spoor\" | grep -v grep | cut -c1-300; uname -r; id; cat /proc/sys/kernel/random/boot_id; ls /run | head -40; which auditctl bwrap un [...]"
+        }
+      ]
+    },
+    {
+      "id": "SPR-PERS-001",
+      "title": "Shell startup file modified",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 2,
+      "threads": 2,
+      "per_1k_tool_calls": 0.37474236462432076,
+      "hit_rate": {
+        "k": 2,
+        "n": 5337,
+        "p": 0.00037474236462432077,
+        "lo": 0.00010277388908413662,
+        "hi": 0.00136543273737236
+      },
+      "thread_rate": {
+        "k": 2,
+        "n": 94,
+        "p": 0.02127659574468085,
+        "lo": 0.005854336239172753,
+        "hi": 0.07429020489102965
+      },
+      "labels": {
+        "unlabelled": 2
+      },
+      "samples": [
+        {
+          "event_id": "01a1cb9e-0c9c-7b2e-9448-f584290b4446",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_a6f676a5-ba5/agent-aba6392ed5fd9d96a.jsonl",
+          "ts": "2026-11-11T17:18:15Z",
+          "tool": "Bash",
+          "summary": "shell.writes=$S/redteam/pp-work/probes/bin/fakesh, $S/redteam/pp-work/probes/fakehome/.bash_profile; [...]"
+        },
+        {
+          "event_id": "01a1cba8-7761-7731-a5dd-16bc4965a41e",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_a6f676a5-ba5/agent-ac4a3a82b57ed7af6.jsonl",
+          "ts": "2026-11-11T17:29:37Z",
+          "tool": "Bash",
+          "summary": "shell.writes=$S/redteam/verify-platform-parity/bin/Program Files/spoor/spoor, $S/redteam/verify-plat [...]"
+        }
+      ]
+    },
+    {
+      "id": "SPR-PERS-002",
+      "title": "SSH authorized_keys modified",
+      "class": "alert",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-PERS-003",
+      "title": "Scheduled job, service or login item registered",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 1,
+      "threads": 1,
+      "per_1k_tool_calls": 0.18737118231216038,
+      "hit_rate": {
+        "k": 1,
+        "n": 5337,
+        "p": 0.00018737118231216038,
+        "lo": 3.3076380313440076e-05,
+        "hi": 0.0010606574190762863
+      },
+      "thread_rate": {
+        "k": 1,
+        "n": 94,
+        "p": 0.010638297872340425,
+        "lo": 0.0018803957480879353,
+        "hi": 0.05782291296278563
+      },
+      "labels": {
+        "unlabelled": 1
+      },
+      "samples": [
+        {
+          "event_id": "01a1cdcd-0e7e-707e-8e0e-0ef2a3ccd5ea",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11.jsonl",
+          "ts": "2026-11-12T03:28:50Z",
+          "tool": "Bash",
+          "summary": "shell.persistence=systemd; target.command=mkdir -p /home/user/thomastysong/spoor/packaging/{systemd,launchd,windows} && cd /home/user/thomastysong/spoor/packaging && cat > systemd/spoor.service <<'EOF' # spoor daemon (Linux). Installed by t [...]"
+        }
+      ]
+    },
+    {
+      "id": "SPR-PERS-004",
+      "title": "Git hook installed or removed",
+      "class": "signal",
+      "severity": "low",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-PERS-005",
+      "title": "Python startup hook written",
+      "class": "finding",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-PERS-006",
+      "title": "Sudoers or setuid change",
+      "class": "finding",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-PERS-007",
+      "title": "Package manager pointed at a different registry",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-POST-001",
+      "title": "Agent hook fetches or decodes code",
+      "class": "finding",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-POST-002",
+      "title": "Project hook runs a script from the repository",
+      "class": "finding",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-POST-003",
+      "title": "Repository auto-run launcher",
+      "class": "finding",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-POST-004",
+      "title": "Configuration escalates agent permissions",
+      "class": "finding",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-POST-005",
+      "title": "Model endpoint overridden in configuration",
+      "class": "finding",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-POST-006",
+      "title": "IDE executable path points into the workspace",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-POST-007",
+      "title": "Command-running key in a repository git config",
+      "class": "finding",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-POST-008",
+      "title": "MCP server launched from an untrusted location",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-POST-009",
+      "title": "Credential written inline in an MCP declaration",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-POST-010",
+      "title": "MCP server fetched and run unpinned at every launch",
+      "class": "signal",
+      "severity": "low",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-POST-011",
+      "title": "MCP server reached over plaintext HTTP",
+      "class": "finding",
+      "severity": "low",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-POST-012",
+      "title": "MCP server container with host privileges",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-POST-013",
+      "title": "Managed agent policy writable by non-administrators",
+      "class": "finding",
+      "severity": "critical",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-POST-014",
+      "title": "Invisible Unicode in an instruction, skill or command file",
+      "class": "finding",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-POST-015",
+      "title": "Instruction or skill file carries a dropper or injection text",
+      "class": "finding",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-POST-016",
+      "title": "Instruction file downloaded from the internet",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-POST-017",
+      "title": "CI workflow runs an AI agent on untrusted triggers",
+      "class": "finding",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-POST-018",
+      "title": "Approvals off by default in agent settings",
+      "class": "finding",
+      "severity": "low",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-POST-019",
+      "title": "Agent version with a known execution or exfiltration fix missing",
+      "class": "finding",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-POST-020",
+      "title": "MCP server or skill definition changed",
+      "class": "signal",
+      "severity": "low",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-POST-021",
+      "title": "Agent service listens beyond loopback",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-PROC-001",
+      "title": "Headless agent with approvals disabled launched by a package install script",
+      "class": "alert",
+      "severity": "critical",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-PROC-002",
+      "title": "Agent CLI launched by a package install script",
+      "class": "finding",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-PROC-003",
+      "title": "Agent running with approvals disabled",
+      "class": "signal",
+      "severity": "low",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-PROC-004",
+      "title": "Agent started by another agent with approvals disabled",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-PROC-005",
+      "title": "Agent launched by a browser or URL handler with inline configuration",
+      "class": "alert",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-PROC-006",
+      "title": "Agent CLI started with inline settings JSON",
+      "class": "signal",
+      "severity": "low",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-SEQ-001",
+      "title": "Untrusted input, credential read and egress in one thread",
+      "class": "signal",
+      "severity": "medium",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-SEQ-002",
+      "title": "Auto-run configuration written after untrusted input",
+      "class": "finding",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-SEQ-003",
+      "title": "Evasion attempt after a refused tool call",
+      "class": "finding",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-SEQ-004",
+      "title": "Bulk credential reads followed by egress",
+      "class": "finding",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-SEQ-005",
+      "title": "Instruction or memory file written after untrusted input",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-SEQ-006",
+      "title": "Sensitive action after instruction-override text in a tool result",
+      "class": "finding",
+      "severity": "high",
+      "hits": 1,
+      "threads": 1,
+      "per_1k_tool_calls": 0.18737118231216038,
+      "hit_rate": {
+        "k": 1,
+        "n": 5337,
+        "p": 0.00018737118231216038,
+        "lo": 3.3076380313440076e-05,
+        "hi": 0.0010606574190762863
+      },
+      "thread_rate": {
+        "k": 1,
+        "n": 94,
+        "p": 0.010638297872340425,
+        "lo": 0.0018803957480879353,
+        "hi": 0.05782291296278563
+      },
+      "labels": {
+        "unlabelled": 1
+      },
+      "samples": [
+        {
+          "event_id": "01a1cb8b-171a-7630-a1d3-e538e0e1a742",
+          "thread": "-home-user/142ab6a6-828d-5c94-9577-a504570fae11/subagents/workflows/wf_7d1396f5-8b2/agent-a80dc99afbdc50d3e.jsonl",
+          "ts": "2026-11-11T16:57:32Z",
+          "tool": "Bash",
+          "summary": "session.flags=injection_seen, untrusted_input; target.command=cd /home/user/uber/adr/Detection && python3 -I - <<'EOF' import json, ast, re, collections, pathlib recs=[json.loads(l) for l in open('benchmark/adr_bench_20251017_151604.jsonl') [...]"
+        }
+      ]
+    },
+    {
+      "id": "SPR-SEQ-007",
+      "title": "Push after agent control files were written in another repository",
+      "class": "finding",
+      "severity": "high",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-SUPPLY-001",
+      "title": "Worm indicator file or name",
+      "class": "alert",
+      "severity": "critical",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-SUPPLY-002",
+      "title": "Package from an incident report installed",
+      "class": "alert",
+      "severity": "critical",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-SUPPLY-003",
+      "title": "Install from an unapproved registry or index",
+      "class": "finding",
+      "severity": "medium",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-SUPPLY-004",
+      "title": "Package installed straight from a URL or git repository",
+      "class": "signal",
+      "severity": "low",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    },
+    {
+      "id": "SPR-SUPPLY-005",
+      "title": "Package fetched and run in one step",
+      "class": "signal",
+      "severity": "info",
+      "hits": 0,
+      "threads": 0,
+      "per_1k_tool_calls": 0,
+      "hit_rate": {
+        "k": 0,
+        "n": 5337,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.0007192609723229557
+      },
+      "thread_rate": {
+        "k": 0,
+        "n": 94,
+        "p": 0,
+        "lo": 0,
+        "hi": 0.03926207629154474
+      }
+    }
+  ],
+  "threads_with_hit_by_class": {
+    "alert": {
+      "k": 16,
+      "n": 94,
+      "p": 0.1702127659574468,
+      "lo": 0.10757621191020425,
+      "hi": 0.2587455830906018
+    },
+    "finding": {
+      "k": 23,
+      "n": 94,
+      "p": 0.24468085106382978,
+      "lo": 0.16893461096432763,
+      "hi": 0.34047581097178026
+    },
+    "signal": {
+      "k": 45,
+      "n": 94,
+      "p": 0.4787234042553192,
+      "lo": 0.3805716814684006,
+      "hi": 0.5785458536929418
+    }
+  },
+  "engine": {
+    "detections": 244,
+    "evals": 10771,
+    "imports": 0,
+    "imports_rejected": 0,
+    "lists_missing": 0,
+    "matches": 1454,
+    "panics": 0,
+    "sessions": 1,
+    "sessions_evicted": 0,
+    "suppressed": 0,
+    "suppressed_operator": 0,
+    "timeouts": 0
+  },
+  "limits": [
+    "One workload: Claude Code agents building and red-teaming this project on one Linux machine, as root, in a sandbox. Shell is most of the tool calls; there is no frontend, data-science or Windows work in it.",
+    "Agent threads (one transcript file each: a main session and its subagents) are the unit for 'threads hit'; they share one root session, so they are not independent developers.",
+    "Hits per 1,000 tool calls use tool.pre events as the denominator. Wilson intervals treat tool calls as independent trials, which they are not inside one thread; read them as a lower bound on the uncertainty.",
+    "The corpus contains deliberate red-team experiments (privileged containers, stopping osqueryd, writing managed settings into overlays, downloading research material). Those hits are labelled red_team: true positives without malice.",
+    "Zero hits for a rule here bounds its benign rate only for this workload. It says nothing about prevalence and cannot stand in for a benign fleet of real developers.",
+    "Events come from transcripts only: the process monitor, inventory scans and hooks were not part of the replay, so OS-plane and posture rules are not exercised here."
+  ]
+}

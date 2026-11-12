@@ -118,7 +118,11 @@ func (s *scanner) handlersIn(f hookFile, uc *userCtx, project string) ([]hookHan
 	if d.err != nil || d.doc == nil {
 		return nil, d.meta, false
 	}
-	return extractHooks(d.doc, f.fallback), d.meta, true
+	hs := extractHooks(d.doc, f.fallback)
+	if len(hs) >= maxHandlers {
+		s.led.capped("hook handlers truncated: " + homeRelNote(l))
+	}
+	return hs, d.meta, true
 }
 
 // hookSyntax picks how a hook file is read: a config syntax by extension,

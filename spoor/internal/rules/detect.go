@@ -265,6 +265,17 @@ func (e *Engine) renderEvidence(f string, fields map[string]any) string {
 	return cutString(red, maxEvidenceValue)
 }
 
+// Bounds of evidence rendering. The rendered value is cut to
+// maxEvidenceValue bytes, so the work done to produce it must not grow with
+// a hostile command line: a long command, one whose parse is incomplete or
+// one that needs many redactions is rendered from its redacted argument
+// vectors (bounded) instead of being rewritten in place.
+const (
+	maxEvidenceCommand = 4096                 // longest command line rewritten in place
+	maxEvidenceRedact  = 64                   // redacted arguments replaced in place
+	maxEvidenceBuild   = 4 * maxEvidenceValue // bytes built before the final cut
+)
+
 // evidenceValue renders one evidence field before free-text redaction.
 // classify.Redact recognises a secret by its shape; a password given as a
 // flag value ("mysql -pHunter2", "curl -u admin:pw", "--token x") has none,
@@ -277,29 +288,32 @@ func evidenceValue(field string, fields map[string]any) string {
 		s, _ := v.(string)
 		return redactCommand(s, fields)
 	case "shell.argv":
-		if _, ok := v.([]string); !ok {
+		l, ok := v.([]string)
+		if !ok {
 			return ""
 		}
-		var parts []string
-		for _, argv := range redactedCommands(fields) {
-			parts = append(parts, argv[1:]...)
+		if cmds, _ := fields["shell.cmds"].([]map[string]any); len(cmds) > 0 {
+			return renderCommands(cmds, ", ", false)
 		}
-		if parts == nil {
-			// No parsed commands to anchor on: redact the flat list.
-			parts = classify.RedactArgs(append([]string{""}, v.([]string)...))[1:]
-		}
-		return strings.Join(parts, ", ")
+		// No parsed commands to anchor on: redact the flat list.
+		return joinBounded(classify.RedactArgs(append([]string{""}, l...))[1:], ", ")
 	case "process.args":
 		l, _ := v.([]string)
-		return strings.Join(classify.RedactArgs(l), " ")
+		return joinBounded(classify.RedactArgs(l), " ")
 	case "target.url", "shell.urls", "net.url":
 		switch t := v.(type) {
 		case string:
 			return classify.RedactURL(t, true)
 		case []string:
-			out := make([]string, len(t))
-			for i, u := range t {
-				out[i] = classify.RedactURL(u, true)
+			out := make([]string, 0, len(t))
+			n := 0
+			for _, u := range t {
+				if n > maxEvidenceBuild {
+					break
+				}
+				r := classify.RedactURL(u, true)
+				out = append(out, r)
+				n += len(r) + 2
 			}
 			return strings.Join(out, ", ")
 		}
@@ -307,51 +321,96 @@ func evidenceValue(field string, fields map[string]any) string {
 	return fieldString(v, ", ")
 }
 
-// redactedCommands returns the classify.RedactArgs form of every parsed
-// command's argv, program first.
-func redactedCommands(fields map[string]any) [][]string {
-	cmds, _ := fields["shell.cmds"].([]map[string]any)
-	out := make([][]string, 0, len(cmds))
-	for _, c := range cmds {
+// joinBounded joins parts with sep, stopping once maxEvidenceBuild bytes are
+// written (the caller cuts the result further).
+func joinBounded(parts []string, sep string) string {
+	var b strings.Builder
+	for i, p := range parts {
+		if b.Len() > maxEvidenceBuild {
+			break
+		}
+		if i > 0 {
+			b.WriteString(sep)
+		}
+		b.WriteString(cutString(p, maxEvidenceBuild))
+	}
+	return b.String()
+}
+
+// renderCommands renders the parsed commands from their classify.RedactArgs
+// form, at most maxEvidenceBuild bytes: as "prog arg arg; prog ..." when
+// withProg is true, else as the arguments alone joined by sep.
+func renderCommands(cmds []map[string]any, sep string, withProg bool) string {
+	var b strings.Builder
+	n := 0 // values written since the last "; "
+	for ci, c := range cmds {
+		if b.Len() > maxEvidenceBuild {
+			break
+		}
 		path, _ := c["path"].(string)
 		args, _ := c["args"].([]string)
-		out = append(out, classify.RedactArgs(append([]string{path}, args...)))
+		red := classify.RedactArgs(append([]string{path}, args...))
+		if withProg {
+			if ci > 0 {
+				b.WriteString("; ")
+			}
+			n = 0
+		} else {
+			red = red[1:]
+		}
+		for _, a := range red {
+			if b.Len() > maxEvidenceBuild {
+				break
+			}
+			if n > 0 {
+				b.WriteString(sep)
+			}
+			b.WriteString(cutString(a, maxEvidenceBuild))
+			n++
+		}
 	}
-	return out
+	return b.String()
 }
 
 // redactCommand replaces, in the command line as written, every argument
-// that classify.RedactArgs redacts in the parsed commands. When an argument
-// cannot be found verbatim (the parser removed quotes or escapes around
-// it), the command is rendered from the redacted argument vectors instead:
-// losing the original layout is better than keeping a credential.
+// that classify.RedactArgs redacts in the parsed commands. The command is
+// rendered from the redacted argument vectors instead (losing the original
+// layout is better than keeping a credential) when an argument cannot be
+// found verbatim (the parser removed quotes or escapes around it), when the
+// parsed commands are incomplete (shell.truncated, or shell.cmds named in
+// content.truncated_fields: an argument the parse lost cannot be redacted),
+// or when the command is too long or needs too many redactions to rewrite
+// in bounded time.
 func redactCommand(s string, fields map[string]any) string {
 	if s == "" {
 		return ""
 	}
 	cmds, _ := fields["shell.cmds"].([]map[string]any)
+	if len(cmds) == 0 {
+		return s
+	}
+	partial, _ := fields["shell.truncated"].(bool)
+	if partial || incomplete(fields, "shell.cmds") || len(s) > maxEvidenceCommand {
+		return renderCommands(cmds, " ", true)
+	}
 	out := s
-	rebuilt := make([]string, 0, len(cmds))
-	exact := true
+	redacted := 0
 	for _, c := range cmds {
 		path, _ := c["path"].(string)
 		args, _ := c["args"].([]string)
 		argv := append([]string{path}, args...)
 		red := classify.RedactArgs(argv)
-		rebuilt = append(rebuilt, strings.Join(red, " "))
 		for i := 1; i < len(argv); i++ {
 			if red[i] == argv[i] || argv[i] == "" {
 				continue
 			}
+			redacted++
 			var n int
 			out, n = replaceTokens(out, argv[i], red[i])
-			if n == 0 {
-				exact = false
+			if n == 0 || redacted > maxEvidenceRedact {
+				return renderCommands(cmds, " ", true)
 			}
 		}
-	}
-	if !exact {
-		return strings.Join(rebuilt, "; ")
 	}
 	return out
 }

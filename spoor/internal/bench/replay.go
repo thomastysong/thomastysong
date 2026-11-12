@@ -294,10 +294,7 @@ func (r *Runner) Replay(ctx context.Context, o ReplayOptions) (*ReplayReport, er
 		if a != nil {
 			row.Hits = len(a.hits)
 			row.Threads = len(a.threads)
-			row.Samples, row.Labels = sampleHits(id, a.hits, byEventID, labels, o.Samples)
-			for i := range row.Samples {
-				row.Samples[i].Summary = applyAliases(row.Samples[i].Summary, o.Aliases)
-			}
+			row.Samples, row.Labels = sampleHits(id, a.hits, byEventID, labels, o.Samples, o.Aliases)
 		}
 		if st.ToolCalls > 0 {
 			row.Per1k = 1000 * float64(row.Hits) / float64(st.ToolCalls)
@@ -372,7 +369,7 @@ func relTo(roots []string, p string) string {
 
 // sampleHits keeps every labelled hit (up to a cap) and n evenly spaced
 // unlabelled ones, and counts labels over the kept samples.
-func sampleHits(rule string, hits []hitRef, byID map[string]replayEvent, labels map[string]Label, n int) ([]ReplaySample, map[string]int) {
+func sampleHits(rule string, hits []hitRef, byID map[string]replayEvent, labels map[string]Label, n int, aliases []Alias) ([]ReplaySample, map[string]int) {
 	var out []ReplaySample
 	counts := map[string]int{}
 	keep := map[int]bool{}
@@ -398,14 +395,14 @@ func sampleHits(rule string, hits []hitRef, byID map[string]replayEvent, labels 
 	idx := sortedInts(keep)
 	for _, i := range idx {
 		h := hits[i]
-		s := ReplaySample{EventID: h.hit.EventID, Thread: h.thread, Summary: summarize(h.hit.Evidence)}
+		s := ReplaySample{EventID: h.hit.EventID, Thread: h.thread, Summary: summarize(h.hit.Evidence, aliases)}
 		if re, ok := byID[h.hit.EventID]; ok {
 			s.TS = re.ev.TS.UTC().Format(time.RFC3339)
 			if re.ev.Tool != nil {
 				s.Tool = re.ev.Tool.Name
 			}
 			if s.Summary == "" {
-				s.Summary = summarizeEvent(re.ev)
+				s.Summary = summarizeEvent(re.ev, aliases)
 			}
 		}
 		if l, ok := labels[labelKey(rule, h.hit.EventID)]; ok {
@@ -429,8 +426,8 @@ func sortedInts(m map[int]bool) []int {
 }
 
 // summarize renders the engine's (already redacted) evidence for review,
-// redacted once more and cut, on one line.
-func summarize(ev map[string]string) string {
+// redacted once more, with aliases applied, cut, on one line.
+func summarize(ev map[string]string, aliases []Alias) string {
 	if len(ev) == 0 {
 		return ""
 	}
@@ -439,17 +436,17 @@ func summarize(ev map[string]string) string {
 	for _, k := range keys {
 		parts = append(parts, k+"="+ev[k])
 	}
-	return cleanText(strings.Join(parts, "; "))
+	return cleanText(applyAliases(strings.Join(parts, "; "), aliases))
 }
 
-func summarizeEvent(ev *event.Event) string {
+func summarizeEvent(ev *event.Event, aliases []Alias) string {
 	switch {
 	case ev.Target == nil:
 		return ""
 	case ev.Target.Path != "":
-		return cleanText("target.path=" + ev.Target.Path)
+		return cleanText(applyAliases("target.path="+ev.Target.Path, aliases))
 	case ev.Target.URL != "":
-		return cleanText("target.url=" + classify.RedactURL(ev.Target.URL, false))
+		return cleanText(applyAliases("target.url="+classify.RedactURL(ev.Target.URL, false), aliases))
 	case ev.Target.Host != "":
 		return cleanText("target.host=" + ev.Target.Host)
 	}

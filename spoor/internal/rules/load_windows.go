@@ -135,19 +135,52 @@ func checkHandle(h windows.Handle, name string, dir bool) error {
 			if err := windows.GetAce(dacl, i, &ace); err != nil {
 				return fmt.Errorf("rules: DACL of %s: %w", name, err)
 			}
-			sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
-			aces = append(aces, aceInfo{
-				allow:       ace.Header.AceType == windows.ACCESS_ALLOWED_ACE_TYPE,
+			info := aceInfo{
 				inheritOnly: ace.Header.AceFlags&windows.INHERIT_ONLY_ACE != 0,
 				mask:        uint32(ace.Mask),
-				sid:         sid.String(),
-			})
+				typ:         ace.Header.AceType,
+			}
+			switch classifyACE(ace.Header.AceType) {
+			case aceGrant:
+				info.allow = true
+				info.sid = aceTrustee(ace)
+			case aceUnknown:
+				info.unknown = true
+			}
+			aces = append(aces, info)
 		}
 	}
 	if p := aclProblem(owner.String(), dacl == nil, aces, selfSID()); p != "" {
 		return fmt.Errorf("%w: %s %s", ErrInsecureDir, name, p)
 	}
 	return nil
+}
+
+// aceTrustee returns the trustee SID of an access-allowed ACE of any form
+// (basic, callback, object, callback object), or "" when the entry is too
+// short to hold one; aclProblem treats "" as an untrusted trustee.
+func aceTrustee(ace *windows.ACCESS_ALLOWED_ACE) string {
+	size := int(ace.Header.AceSize)
+	base := unsafe.Pointer(ace)
+	off := int(unsafe.Offsetof(ace.SidStart))
+	if objectACE(ace.Header.AceType) {
+		if off+4 > size {
+			return ""
+		}
+		off = objectSIDOffset(*(*uint32)(unsafe.Add(base, off)))
+	}
+	if off+8 > size {
+		return ""
+	}
+	sid := unsafe.Add(base, off)
+	if off+8+4*int(*(*uint8)(unsafe.Add(sid, 1))) > size {
+		return ""
+	}
+	s := (*windows.SID)(sid)
+	if !s.IsValid() {
+		return ""
+	}
+	return s.String()
 }
 
 func selfSID() string {

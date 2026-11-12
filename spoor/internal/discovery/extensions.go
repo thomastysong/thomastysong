@@ -88,6 +88,7 @@ func (s *scanner) scanVSCodeDir(dir, editor string, uc *userCtx) {
 		}
 		n++
 		if n > maxExtPerEditor {
+			s.led.capped("editor extensions truncated: " + homeRelOf(dir, uc))
 			break
 		}
 		edir := joinLogical(dir, e.name)

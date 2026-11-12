@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 
@@ -107,6 +108,15 @@ func (s *scanner) scanSkillsDir(dir, parent string, scope event.Scope, uc *userC
 		if skillMD == "" {
 			continue
 		}
+		// A skill is reported only once its SKILL.md has been opened through
+		// the owner check: a name seen in a listing, or a file that merely
+		// exists, may be another user's. An oversized SKILL.md passed that
+		// check before its size was refused.
+		l := s.locFor(skillMD, uc, project)
+		data, _, rerr := s.g.readFile(l, ownerFor(l, uc), maxConfigBytes)
+		if rerr != nil && !errors.Is(rerr, errTooLarge) {
+			continue
+		}
 		a := &event.Asset{
 			Kind:   event.AssetSkill,
 			Name:   safeText(e.name, 256),
@@ -123,8 +133,7 @@ func (s *scanner) scanSkillsDir(dir, parent string, scope event.Scope, uc *userC
 			a.Detail["hash"] = "none:" + reason
 			s.led.note("no folder hash for skill " + homeRelOf(sdir, uc) + ": " + reason)
 		}
-		l := s.locFor(skillMD, uc, project)
-		if data, _, err := s.g.readFile(l, ownerFor(l, uc), maxConfigBytes); err == nil {
+		if rerr == nil {
 			flags := textFlags(string(data))
 			if n := frontmatterName(string(data)); n != "" {
 				a.Detail["declared_name"] = safeText(n, 128)
@@ -192,7 +201,7 @@ func (s *scanner) scanTextSite(p string, kind event.AssetKind, parent string, sc
 				case e.kind == kindRegular && isMarkdownLike(e.name):
 					count++
 					if count > maxContentFiles {
-						s.led.note("more than " + strconv.Itoa(maxContentFiles) + " files under " + homeRelOf(p, uc) + "; rest not reported")
+						s.led.capped("more than " + strconv.Itoa(maxContentFiles) + " files under " + homeRelOf(p, uc) + "; rest not reported")
 						return
 					}
 					s.addTextAsset(child, rel, kind, parent, scope, uc, project, plugin)

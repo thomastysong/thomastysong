@@ -12,11 +12,12 @@ rules:
       Marker rule. A tool returned content that a third party can author (a
       web page, a search result, an MCP result, an issue body, a file under
       node_modules, Downloads or a temp directory, a shell download).
-      Package registries are excluded by the feature itself; documentation
-      and the organisation's own code hosts are excluded through
-      trusted_content_hosts, because counting them made the flag
+      Documentation and the organisation's own code hosts are exempt
+      through trusted_content_hosts and package registries through
+      trusted_content_host_classes, because counting them made the flag
       near-constant on benign sessions (68% of threads in the red team's
-      measurement).
+      measurement). The feature marks every web fetch untrusted; the
+      exemptions are visible lists an operator can change.
     kind: activity
     class: signal
     severity: info
@@ -32,7 +33,9 @@ rules:
     match:
       output.untrusted: true
     allow:
-      net.host|in_list: trusted_content_hosts
+      any:
+        - net.host|in_list: trusted_content_hosts
+        - net.host_classes|in_list: trusted_content_host_classes
     flags:
       set: [untrusted_input]
       ttl: 30m

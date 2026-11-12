@@ -37,6 +37,12 @@ func TestTraits(t *testing.T) {
 		{"gemini-cli", []string{"gemini", "--output-format", "json"}, nil, true, false, false, false},
 		{"gemini-cli", []string{"gemini"}, nil, false, false, false, false},
 		{"copilot-cli", []string{"copilot", "-p", "x", "--allow-all-tools"}, nil, true, false, false, false},
+		{"copilot-cli", []string{"copilot", "--prompt=no"}, nil, true, false, false, false}, // the prompt is the value, not a boolean
+		{"copilot-cli", []string{"copilot", "--prompt", "0"}, nil, true, false, false, false},
+		{"copilot-cli", []string{"copilot", "--acp"}, nil, false, false, false, false},
+		{"gemini-cli", []string{"gemini", "--prompt=false"}, nil, true, false, false, false},
+		{"gemini-cli", []string{"gemini", "--", "-p"}, nil, false, false, false, false},
+		{"claude-code", []string{"claude", "--print=false"}, nil, false, false, false, false},
 		{"cursor-agent", []string{"cursor-agent", "--print", "x"}, nil, true, false, false, false},
 		{"kiro-cli", []string{"q", "chat", "--trust-all-tools", "--no-interactive"}, nil, true, false, false, false},
 		{"opencode", []string{"opencode", "-p", "x"}, nil, false, false, false, false}, // no table entry

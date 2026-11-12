@@ -9,7 +9,8 @@ import (
 // no transcript. The catalog records risky flags but not these modes, so the
 // table lives here; every entry names where it comes from.
 type agentTraits struct {
-	headlessFlags []string            // exact tokens (also "--flag=<value>")
+	headlessFlags []string            // boolean flags: exact tokens, or "--flag=<value>" unless the value is false
+	headlessValue []string            // flags that take the prompt: present with any value
 	headlessSub   []string            // first plain positional argument
 	headlessKV    map[string][]string // flag -> values that imply headless
 	bareFlags     []string
@@ -49,18 +50,20 @@ var traitsByAgent = map[string]agentTraits{
 		valueFlags: []string{"-c", "--config", "-m", "--model", "-p", "--profile", "-C", "--cd", "-s", "--sandbox",
 			"-a", "--ask-for-approval", "-i", "--image", "--enable", "--disable", "--local-provider", "--add-dir"},
 	},
-	// research/agent-surfaces-a.md section 5 (gemini-cli docs/cli/headless.md):
-	// "-p or non-TTY, --output-format json|stream-json". A non-TTY run
-	// without those flags cannot be seen from the command line.
-	// UNVERIFIED: the long spelling --prompt.
+	// research/agent-surfaces-a.md section 5 and gemini-cli
+	// docs/cli/headless.md (re-read 2026-11-12): "the -p (or --prompt)
+	// flag", "--output-format json|stream-json". A non-TTY run without
+	// those flags cannot be seen from the command line.
 	"gemini-cli": {
-		headlessFlags: []string{"-p", "--prompt"},
+		headlessValue: []string{"-p", "--prompt"},
 		headlessKV:    map[string][]string{"--output-format": {"json", "stream-json"}},
 	},
-	// research/agent-surfaces-a.md section 4: managed settings "apply in
-	// interactive, -p, --acp and --server modes". UNVERIFIED: --prompt.
+	// github/docs copilot-cli-reference/cli-command-reference.md (re-read
+	// 2026-11-12): "-p PROMPT, --prompt=PROMPT  Execute a prompt
+	// programmatically". --acp (an editor-driven protocol server) is not
+	// counted as headless.
 	"copilot-cli": {
-		headlessFlags: []string{"-p", "--prompt"},
+		headlessValue: []string{"-p", "--prompt"},
 	},
 	// UNVERIFIED (cursor.com unreachable during research): -p/--print.
 	"cursor-agent": {
@@ -138,6 +141,11 @@ func flagValue(args []string, flag string) (string, bool) {
 func (t agentTraits) headless(ops []string) bool {
 	if hasFlag(ops, t.headlessFlags) {
 		return true
+	}
+	for _, f := range t.headlessValue {
+		if _, ok := flagValue(ops, f); ok || contains(ops, f) {
+			return true
+		}
 	}
 	for flag, vals := range t.headlessKV {
 		if v, ok := flagValue(ops, flag); ok && contains(vals, v) {

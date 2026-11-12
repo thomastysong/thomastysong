@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/apache/thrift v0.23.0
 	github.com/klauspost/compress v1.20.4
 	github.com/osquery/osquery-go v0.0.0-20260630173615-eb39ad3443df
 	golang.org/x/sys v0.50.0
@@ -15,7 +16,6 @@ require (
 
 require (
 	github.com/Microsoft/go-winio v0.6.2 // indirect
-	github.com/apache/thrift v0.23.0 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/go-logr/logr v1.2.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect

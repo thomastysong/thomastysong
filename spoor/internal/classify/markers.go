@@ -1,11 +1,15 @@
 package classify
 
-import "strings"
+import (
+	"strings"
+	"sync"
+)
 
 // Redaction markers already in a string are opaque. A marker is
 // "[REDACTED:<kind>:<fp>]" (this package), "[REDACTED:<kind>:hmac=<fp>]" (the
 // privacy tier's keyed rewrite) or "[REDACTED:<kind>]" (fingerprint
-// removed), with <kind> 1-64 of [a-z0-9_] and <fp> 8 lower-case hex digits.
+// removed), with <kind> one of the kind names spoor writes (markerKinds) and
+// <fp> 8 lower-case hex digits.
 //
 // Pattern detection never looks inside or across one: Redact scans the text
 // between markers piece by piece. Otherwise a marker's own words are taken
@@ -14,8 +18,16 @@ import "strings"
 // and a second pass writes a marker inside the first one.
 //
 // The format is strict on purpose. Text an attacker controls can contain
-// "[REDACTED:" too, and whatever a marker encloses is never scanned, so it
-// must not be able to enclose anything but a kind name and a digest.
+// "[REDACTED:" too, and whatever a marker encloses is never scanned and is
+// kept where a password is expected, so it must not be able to enclose
+// anything but a kind name from a closed list and a digest. A kind is
+// therefore matched against that list, not against a character class: with
+// "any 1-64 of [a-z0-9_]" a lower-case token ("[REDACTED:<40 hex>]") was a
+// marker. What a marker can still carry is 32 bits of digest, which is what
+// a fingerprint is.
+//
+// Text that looks like a marker but is not one (an unknown kind, a broken
+// digest) is ordinary text: it is scanned, and structural rules redact it.
 
 const markerOpen = "[REDACTED:"
 
@@ -33,7 +45,7 @@ func markerLen(s string) int {
 	for k < len(s) && k-start < markerKindMax && isMarkerKindByte(s[k]) {
 		k++
 	}
-	if k == start || k >= len(s) {
+	if k == start || k >= len(s) || !markerKind(s[start:k]) {
 		return 0
 	}
 	switch s[k] {
@@ -117,6 +129,80 @@ func markAroundMarkers(kind, v string) string {
 		b.WriteString(markerFor(kind, v[pos:]))
 	}
 	return b.String()
+}
+
+var (
+	markerKindOnce sync.Once
+	markerKindIdx  map[string]struct{}
+)
+
+// externalMarkerKinds are the kinds other spoor packages write into markers
+// (classify.Marker or their own "[REDACTED:<kind>]" text), beside the kinds
+// of SecretKinds: the privacy tier's encoded_secret, unresolved_secret,
+// command and redaction_failure; the engine's secret_flow; the MCP
+// declaration reader's per-position kinds. A kind missing here only costs
+// opacity (a later pass may scan the marker's text), never a leak, so the
+// list errs towards short.
+var externalMarkerKinds = []string{
+	kindRedactionFailureLabel,
+	"encoded_secret", "unresolved_secret", "command", "redaction_failure",
+	"secret_flow",
+	"userinfo", "query", "path", "assignment", "header", "env", "arg", "opaque", "secret",
+}
+
+// markerKind reports whether k is a kind name spoor writes into markers.
+func markerKind(k string) bool {
+	markerKindOnce.Do(func() {
+		kinds := SecretKinds()
+		m := make(map[string]struct{}, len(kinds)+len(externalMarkerKinds))
+		for _, k := range kinds {
+			m[k] = struct{}{}
+		}
+		for _, k := range externalMarkerKinds {
+			m[k] = struct{}{}
+		}
+		markerKindIdx = m
+	})
+	_, ok := markerKindIdx[k]
+	return ok
+}
+
+// truncOpen starts a truncation marker, "[TRUNCATED:<n>B]".
+const truncOpen = "[TRUNCATED:"
+
+// truncationLen returns the length of the truncation marker at the start of
+// s, or 0.
+func truncationLen(s string) int {
+	if !strings.HasPrefix(s, truncOpen) {
+		return 0
+	}
+	k := len(truncOpen)
+	for k < len(s) && k-len(truncOpen) < 20 && isDigit(s[k]) {
+		k++
+	}
+	if k == len(truncOpen) || k+1 >= len(s) || s[k] != 'B' || s[k+1] != ']' {
+		return 0
+	}
+	return k + 2
+}
+
+// onlyMarkers reports whether v is one or more redaction or truncation
+// markers and nothing else: already redacted, with nothing left to hide.
+func onlyMarkers(v string) bool {
+	if v == "" {
+		return false
+	}
+	for pos := 0; pos < len(v); {
+		n := markerLen(v[pos:])
+		if n == 0 {
+			n = truncationLen(v[pos:])
+		}
+		if n == 0 {
+			return false
+		}
+		pos += n
+	}
+	return true
 }
 
 func isMarkerKindByte(c byte) bool {

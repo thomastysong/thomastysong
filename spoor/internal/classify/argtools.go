@@ -21,9 +21,14 @@ const (
 	modeUserPass  // user:password (curl -u)
 	modeUserPct   // user%password (Samba -U)
 	modeUserComma // user,password (lftp -u)
-	modePassArg   // openssl pass:PASSWORD (env:, file:, fd:, stdin are references)
+	modePassArg   // openssl pass:PASSWORD (env:, file:, fd:, stdin are references; anything else is the password)
 	modeHeader    // "Name: value" HTTP header
 	modeData      // request body: form pairs or JSON
+	// The flag takes an ordinary argument (sshpass -P prompt, sudo -u
+	// user): the value is no secret by position and, above all, no
+	// operand, so it neither ends an optsFirst program's options nor
+	// takes the program position.
+	modeArg
 )
 
 // passwordMode reports modes whose value is a password chosen by a person:
@@ -49,6 +54,12 @@ type toolSpec struct {
 	// starts the command it runs ("sshpass -p PW ssh -p 22 host": the
 	// second -p is ssh's port, not a password).
 	optsFirst bool
+	// wraps: the program runs the command named by its operands ("sudo -u
+	// oracle sqlplus ..."), so that command is still in program position;
+	// lead is the number of operands it takes first (timeout's duration,
+	// chroot's directory).
+	wraps bool
+	lead  int
 }
 
 func (t *toolSpec) mode(flag string) flagMode {
@@ -94,7 +105,9 @@ func buildToolSpecs() map[string]*toolSpec {
 	// RAR: -p<pwd> encrypts data, -hp<pwd> data and headers. "-p" alone
 	// prompts and "-p-" means no password (keepPasswordValue keeps "-").
 	def(&toolSpec{flags: map[string]flagMode{"-p": modeAttached, "-hp": modeAttached}}, "rar", "unrar", "winrar")
-	def(&toolSpec{flags: map[string]flagMode{"-p": modeAttachedOrNext}, optsFirst: true}, "sshpass")
+	// sshpass -P prompt, -d fd and -f file take a value; it must not be read
+	// as the command sshpass runs, or -p after it is taken for ssh's port.
+	def(&toolSpec{flags: map[string]flagMode{"-p": modeAttachedOrNext, "-P": modeArg, "-d": modeArg, "-f": modeArg}, optsFirst: true}, "sshpass")
 	def(&toolSpec{flags: map[string]flagMode{"-P": modeAttachedOrNext}}, "sqlcmd", "bcp", "osql")
 	// ssh-keygen: -N new passphrase, -P old passphrase (-p is "change").
 	def(&toolSpec{flags: map[string]flagMode{"-N": modeAttachedOrNext, "-P": modeAttachedOrNext}}, "ssh-keygen")
@@ -119,7 +132,56 @@ func buildToolSpecs() map[string]*toolSpec {
 	// re-read for this build); the Samba form is kept for compatibility.
 	def(&toolSpec{flags: map[string]flagMode{"-U": modeUserPct, "--user": modeUserPct, "-p": modeNextPass}}, "smbmap")
 	def(&toolSpec{flags: map[string]flagMode{"-u": modeUserComma}}, "lftp")
+	// sqlplus [options] [logon] [@script]: the options that take a value,
+	// so the logon is the first operand. Options are case-insensitive.
+	def(&toolSpec{flags: argFlags("-m", "-markup", "-r", "-restrict", "-c", "-compatibility"), fold: true}, "sqlplus")
+	defWrappers(t)
 	return t
+}
+
+// argFlags maps each flag to modeArg.
+func argFlags(flags ...string) map[string]flagMode {
+	m := make(map[string]flagMode, len(flags))
+	for _, f := range flags {
+		m[f] = modeArg
+	}
+	return m
+}
+
+// defWrappers adds the programs that run another command ("sudo -u oracle
+// sqlplus scott/PW@db", "rlwrap sqlplus ...", "env ORACLE_SID=x sqlplus
+// ..."). Rules that hold only for a program in command position (the
+// sqlplus logon) need to see through them, and their value-taking options
+// must not be taken for the command.
+func defWrappers(t map[string]*toolSpec) {
+	wrap := func(lead int, flags map[string]flagMode, programs ...string) {
+		spec := &toolSpec{flags: flags, optsFirst: true, wraps: true, lead: lead}
+		for _, p := range programs {
+			t[p] = spec
+		}
+	}
+	// sudo's -h is both --help and --host, so it is left out.
+	wrap(0, argFlags("-u", "-g", "-C", "-D", "-p", "-R", "-r", "-t", "-T", "-U", "--user", "--group",
+		"--close-from", "--chdir", "--prompt", "--chroot", "--role", "--type", "--command-timeout",
+		"--other-user", "--host"), "sudo")
+	wrap(0, argFlags("-u", "-C"), "doas")
+	wrap(0, argFlags("-u", "-g", "-G", "--user", "--group", "--supp-group"), "runuser")
+	wrap(0, argFlags("-u", "--unset", "-C", "--chdir"), "env")
+	wrap(0, argFlags("-n", "--adjustment"), "nice")
+	wrap(0, argFlags("-c", "-n", "-p", "-P", "-u", "--class", "--classdata", "--pid", "--pgid", "--uid"), "ionice")
+	wrap(0, argFlags("-i", "-o", "-e", "--input", "--output", "--error"), "stdbuf")
+	wrap(0, argFlags("-o", "-f", "--output", "--format"), "time")
+	wrap(0, argFlags("-o", "-e", "-p", "-s", "-u", "-E"), "strace")
+	wrap(0, argFlags("-I", "-n", "-P", "-d", "-a", "-E", "-L", "-s", "--max-args", "--max-procs",
+		"--delimiter", "--arg-file", "--eof", "--max-lines", "--max-chars"), "xargs")
+	wrap(0, argFlags("-n", "--interval"), "watch")
+	// rlwrap's -a, -i, -p and -r take no value or a glued one; these take
+	// the next argument.
+	wrap(0, argFlags("-b", "-C", "-D", "-e", "-f", "-g", "-H", "-l", "-O", "-q", "-s", "-S", "-t", "-w", "-z"), "rlwrap")
+	wrap(1, argFlags("-s", "--signal", "-k", "--kill-after"), "timeout")
+	wrap(1, argFlags("--userspec", "--groups"), "chroot")
+	wrap(0, argFlags("-a"), "exec")
+	wrap(0, nil, "nohup", "setsid", "unbuffer", "command", "builtin", "cmd")
 }
 
 // gluable reports a tool flag whose value may be glued to it: a short
@@ -188,11 +250,11 @@ func passSource(v string) bool {
 
 // keepPasswordValue reports a value in a password position that is not a
 // literal password: nothing, a prompt request ("*", "-"), a password
-// source, a variable or @file reference, or a redaction marker. Unlike
+// source, a variable or @file reference, or redaction markers alone. Unlike
 // keepAsWritten it keeps no dotted words, paths or URLs: where the grammar
 // says the argument IS the password, "my.pass.word" is the password.
 func keepPasswordValue(v string) bool {
-	if v == "" || v == "*" || passSource(v) || isMarker(v) {
+	if v == "" || v == "*" || passSource(v) || onlyMarkers(v) {
 		return true
 	}
 	switch v[0] {
@@ -202,6 +264,39 @@ func keepPasswordValue(v string) bool {
 		return len(v) > 2 && v[len(v)-1] == '%' && !strings.ContainsAny(v, " \t")
 	case '@':
 		return len(v) > 1 && (v[1] == '/' || v[1] == '.' || v[1] == '~')
+	}
+	return false
+}
+
+// keepNamedPasswordValue is keepPasswordValue for a flag that is a password
+// only by its NAME (--db-pass, --auth-user-pass, /password). There a value
+// shaped like a file path is the file that holds the credentials (openvpn
+// --auth-user-pass /etc/openvpn/creds.txt, --password /run/secrets/db):
+// the path is what a responder needs, and a password of two or more path
+// components is not a realistic case. Where a program's grammar puts the
+// password (mysql -p, sshpass -p) a path is still redacted.
+func keepNamedPasswordValue(v string) bool {
+	return keepPasswordValue(v) || filePathValue(v)
+}
+
+// filePathValue reports a value shaped like a file name: an absolute path of
+// two or more components, a ./ ../ ~/ relative path, or a drive path, with
+// no white space.
+func filePathValue(v string) bool {
+	if len(v) < 3 || len(v) > 4096 || strings.ContainsAny(v, " \t\r\n") {
+		return false
+	}
+	for _, p := range []string{"./", "../", "~/", `.\`, `..\`, `~\`} {
+		if strings.HasPrefix(v, p) && len(v) > len(p) {
+			return true
+		}
+	}
+	switch {
+	case v[0] == '/':
+		i := strings.IndexByte(v[1:], '/')
+		return i > 0 && i+2 < len(v)
+	case v[1] == ':' && (v[2] == '\\' || v[2] == '/') && (v[0]|0x20 >= 'a' && v[0]|0x20 <= 'z'):
+		return len(v) > 3
 	}
 	return false
 }
@@ -218,19 +313,27 @@ func userPass(a string) int {
 }
 
 // redactSQLPlusLogon redacts the password of "user/password[@connect]".
+// Oracle encloses a password holding special characters in double quotes
+// (scott/"Pa@ss"@orcl): it then runs to the closing quote, not to the first
+// "@". The connect string is kept here; RedactArgs passes it through Redact
+// with the rest of the argument.
 func redactSQLPlusLogon(a string) (string, bool) {
 	j := userPass(a)
 	if j == 0 {
 		return a, false
 	}
 	pw, tail := a[j:], ""
-	if at := strings.IndexByte(pw, '@'); at >= 0 {
+	if pw[0] == '"' {
+		if q := strings.IndexByte(pw[1:], '"'); q >= 0 {
+			pw, tail = pw[:q+2], pw[q+2:]
+		}
+	} else if at := strings.IndexByte(pw, '@'); at >= 0 {
 		pw, tail = pw[:at], pw[at:]
 	}
 	if keepPasswordValue(pw) {
 		return a, false
 	}
-	return a[:j] + markerFor(KindPassword, pw) + tail, true
+	return a[:j] + markAroundMarkers(KindPassword, pw) + tail, true
 }
 
 // vaultBoolFlags are vault CLI flags that take no value, so an operand after

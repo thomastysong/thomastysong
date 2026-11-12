@@ -60,39 +60,66 @@ func FindSecrets(s string) (hits []SecretHit) {
 // findSecrets scans the text between redaction markers piece by piece, so no
 // pattern can match inside a marker or span one (see markers.go). Hit
 // offsets refer to s.
+//
+// Private key blocks are the exception to piecewise scanning. A block is
+// reported whole, so a marker inside one (an earlier pass redacted a line of
+// it) must not separate BEGIN from the key body: no single piece would hold
+// both, and the body would be emitted. Blocks are therefore found in the
+// whole string, with markers counted as part of the body, and the hit is cut
+// around the markers so that it still spans none.
 func findSecrets(s string) []SecretHit {
 	if !strings.Contains(s, markerOpen) {
-		return findSecretsIn(s)
+		return finalizeHits(s, scanPrivateKeys(s, rawSecretsIn(s, nil)))
 	}
-	var hits []SecretHit
+	var raw []rawHit
 	eachUnmarked(s, func(off int, run string) {
-		for _, h := range findSecretsIn(run) {
-			h.Start += off
-			h.End += off
-			hits = append(hits, h)
+		first := len(raw)
+		raw = rawSecretsIn(run, raw)
+		for k := first; k < len(raw); k++ {
+			raw[k].start += off
+			raw[k].end += off
 		}
 	})
-	return hits
+	for _, h := range scanPrivateKeys(s, nil) {
+		raw = appendAroundMarkers(s, h, raw)
+	}
+	return finalizeHits(s, raw)
 }
 
-// findSecretsIn scans text that holds no redaction marker.
-func findSecretsIn(s string) []SecretHit {
+// rawSecretsIn appends the candidates of every detector but the private key
+// scan to raw; s holds no redaction marker.
+func rawSecretsIn(s string, raw []rawHit) []rawHit {
 	if len(s) < minSecretScan {
-		return nil
+		return raw
 	}
 	low := asciiLower(s)
-	var raw []rawHit
 	for i, d := range detectors {
 		if d.wanted(s, low) {
 			raw = d.scan(s, raw, i)
 		}
 	}
-	raw = scanPrivateKeys(s, raw)
 	raw = scanURLCreds(s, raw)
 	raw = scanAuthHeaders(s, low, raw)
 	raw = scanCookies(s, low, raw)
 	raw = scanAssignments(s, low, raw)
-	return finalizeHits(s, raw)
+	return raw
+}
+
+// appendAroundMarkers appends the parts of h that lie outside redaction
+// markers, each with h's kind.
+func appendAroundMarkers(s string, h rawHit, raw []rawHit) []rawHit {
+	pos := h.start
+	for pos < h.end {
+		a, b := nextMarker(s, pos)
+		if a < 0 || a >= h.end {
+			a, b = h.end, h.end
+		}
+		if a > pos {
+			raw = append(raw, rawHit{pos, a, h.kind, h.prio})
+		}
+		pos = b
+	}
+	return raw
 }
 
 func (d *detector) scan(s string, raw []rawHit, prio int) []rawHit {
@@ -169,6 +196,10 @@ func scanPrivateKeys(s string, raw []rawHit) []rawHit {
 					i++
 					continue
 				}
+				if n := markerLen(s[i:limit]); n > 0 {
+					i += n // a marker inside the body (see findSecrets)
+					continue
+				}
 				if c == '\\' && i+1 < limit && (s[i+1] == 'n' || s[i+1] == 'r') {
 					i += 2 // JSON-escaped newline inside a quoted key
 					continue
@@ -188,7 +219,8 @@ func scanPrivateKeys(s string, raw []rawHit) []rawHit {
 	return raw
 }
 
-// keyMaterial counts base64 alphabet bytes, ignoring escaped newlines.
+// keyMaterial counts base64 alphabet bytes, ignoring escaped newlines and
+// redaction markers (whose letters are not key material).
 func keyMaterial(body string) int {
 	n := 0
 	for i := 0; i < len(body); i++ {
@@ -196,6 +228,12 @@ func keyMaterial(body string) int {
 		if c == '\\' && i+1 < len(body) && (body[i+1] == 'n' || body[i+1] == 'r') {
 			i++
 			continue
+		}
+		if c == '[' {
+			if m := markerLen(body[i:]); m > 0 {
+				i += m - 1
+				continue
+			}
 		}
 		if isAlnum(c) || c == '+' || c == '/' {
 			n++
@@ -222,11 +260,9 @@ func scanURLCreds(s string, raw []rawHit) []rawHit {
 		if dbSchemes.has(scheme) {
 			kind = KindDatabaseURL
 		}
+		// findSecrets hands this text with no marker in it; userinfo that
+		// only says "REDACTED" is a placeholder (isPlaceholder).
 		user := s[loc[4]:loc[5]]
-		if strings.Contains(s[loc[4]:max(loc[5], loc[7])], "REDACTED") {
-			// Already a redaction marker from an earlier pass.
-			continue
-		}
 		if loc[6] >= 0 && loc[7] > loc[6] {
 			pass := s[loc[6]:loc[7]]
 			lp := asciiLower(pass)

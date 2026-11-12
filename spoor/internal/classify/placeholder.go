@@ -44,11 +44,9 @@ func isPlaceholder(v string) bool {
 	if placeholderExact.has(lv) {
 		return true
 	}
-	// Text this package already redacted must not be redacted again, or a
-	// second pass nests markers ("[REDACTED:[REDACTED:...").
-	if strings.Contains(v, "[REDACTED") || strings.Contains(v, "REDACTED:") {
-		return true
-	}
+	// Values this package already redacted are skipped by the callers: they
+	// scan only the text between markers (markers.go). A value that merely
+	// says "redacted" is a placeholder through placeholderContains.
 	if wrapped(v) {
 		return true
 	}
@@ -79,9 +77,17 @@ func isPlaceholderToken(body string) bool {
 // wrapped reports template syntax around the whole value: <token>, [token],
 // {token}, {{ token }}, ${VAR}, $(cmd), %VAR%, __TOKEN__, @@TOKEN@@, and
 // spoor's own redaction and truncation markers.
+//
+// A value holding marker text counts only when it is nothing but markers.
+// Values that merely start with "[REDACTED:" (or end in "]" after one) are
+// kept verbatim by the structural rules that call this, so the loose test
+// shipped "[REDACTED:password:1a2b3c4d]<token>" and "[REDACTED:<token>".
 func wrapped(v string) bool {
 	if len(v) < 2 {
 		return false
+	}
+	if strings.Contains(v, markerOpen) || strings.Contains(v, truncOpen) {
+		return onlyMarkers(v)
 	}
 	first, last := v[0], v[len(v)-1]
 	switch {
@@ -96,8 +102,6 @@ func wrapped(v string) bool {
 	case strings.HasPrefix(v, "__") && strings.HasSuffix(v, "__") && len(v) > 4:
 		return true
 	case strings.HasPrefix(v, "@@") && strings.HasSuffix(v, "@@") && len(v) > 4:
-		return true
-	case strings.HasPrefix(v, "[REDACTED:") || strings.HasPrefix(v, "[TRUNCATED:"):
 		return true
 	}
 	return false

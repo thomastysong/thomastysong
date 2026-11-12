@@ -1,6 +1,7 @@
 package fleetgen
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -445,5 +446,135 @@ r=$(live "SELECT 1"); echo "later: $r"
 		if !strings.Contains(string(out), w) {
 			t.Errorf("output lacks %q:\n%s", w, out)
 		}
+	}
+}
+
+// TestVerifyShBinaryScenarios: with SPOOR_BIN, verify.sh signs and installs a
+// rules bundle with the binary (once), and builds the "healthy" and "hook"
+// databases with it: a fresh database, `scan --state`, then `run` (stopped
+// by SIGTERM); for "hook" a Claude Code PreToolUse payload that pipes a
+// downloaded script into sh goes through `spoor hook` while `run` is up.
+// Without these the binary's healthy database could never pass the bundle
+// policy (no bundle, no trusted key) and no scenario had a real detection.
+func TestVerifyShBinaryScenarios(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("bash")
+	}
+	for _, tool := range []string{"bash", "jq"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("no %s", tool)
+		}
+	}
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "data"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fake := filepath.Join(dir, "spoor")
+	// A fake spoor: logs every call, writes what bundle keygen/create/pull
+	// would, and for run stays up (marker file) until SIGTERM.
+	if err := os.WriteFile(fake, []byte(`#!/bin/sh
+log="$FAKE_DIR/calls"
+echo "$*" >>"$log"
+out= prev=
+for a in "$@"; do [ "$prev" = --out ] && out=$a; prev=$a; done
+case "$1 $2" in
+"bundle keygen") echo key >"$out.key"; echo FAKEPUB >"$out.pub" ;;
+"bundle create") echo tgz >"$out" ;;
+"bundle pull") mkdir -p "$WORK/data/bundle" && echo '{"version":1}' >"$WORK/data/bundle/current" ;;
+esac
+case "$1" in
+run)
+	touch "$FAKE_DIR/running"
+	trap 'rm -f "$FAKE_DIR/running"; echo "run stopped by TERM" >>"$log"; exit 0' TERM
+	i=0; while [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+	rm -f "$FAKE_DIR/running"; echo "run ended without TERM" >>"$log" ;;
+hook)
+	if [ -f "$FAKE_DIR/running" ]; then echo "hook while run is up" >>"$log"; fi
+	cat >"$FAKE_DIR/payload" ;;
+scan)
+	if [ -e "$WORK/data/state.db" ]; then echo "scan found the old database" >>"$log"; fi ;;
+esac
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// sleep waits for the fake daemon instead of fixed seconds; timeout
+	// stops it after a moment instead of 20 s.
+	script := `SPOOR_VERIFY_LIB=1 source "$VERIFY"
+sleep() { for _ in $(seq 1 100); do [ -f "$FAKE_DIR/running" ] && return 0; command sleep 0.05; done; }
+timeout() { shift; "$@" & local p=$!; command sleep 0.3; kill -TERM "$p"; wait "$p"; }
+bin_bundle
+bin_bundle
+for sc in healthy hook; do
+	echo old >"$DB"; echo old >"$DB-wal"
+	build_db "$sc"
+done
+echo "daemon pid after: [$DAEMON_PID]"
+for sc in healthy hook planted stale removed; do echo "source $sc: $(db_source "$sc")"; done
+`
+	cmd := exec.Command("bash", "-c", script)
+	cmd.Env = append(os.Environ(), "VERIFY="+filepath.Join(deployDir(t), "verify.sh"), "SPOOR_BIN="+fake,
+		"FAKE_DIR="+dir, "WORK="+dir, "POLL=0")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("verify.sh functions failed: %v\n%s", err, out)
+	}
+	for _, w := range []string{"daemon pid after: []",
+		"source healthy: the spoor binary", "source hook: the spoor binary", "source planted: the harness",
+		"source stale: the harness", "source removed: nowhere, removed"} {
+		if !strings.Contains(string(out), w) {
+			t.Errorf("output lacks %q:\n%s", w, out)
+		}
+	}
+	calls, err := os.ReadFile(filepath.Join(dir, "calls"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := filepath.Join(dir, "spoor.yaml")
+	want := []string{
+		"bundle keygen --out " + filepath.Join(dir, "bundle", "key"),
+		"bundle create --src " + filepath.Join(dir, "bundle", "src") + " --version 1 --key " +
+			filepath.Join(dir, "bundle", "key.key") + " --out " + filepath.Join(dir, "bundle", "rules-1.tar.gz") +
+			" --note deploy/fleet/verify.sh",
+		"bundle pull --file " + filepath.Join(dir, "bundle", "rules-1.tar.gz") + " --config " + cfg,
+		// healthy
+		"scan --state --config " + cfg,
+		"run --config " + cfg,
+		"run stopped by TERM",
+		// hook
+		"scan --state --config " + cfg,
+		"run --config " + cfg,
+		"hook --agent claude-code --config " + cfg,
+		"hook while run is up",
+		"run stopped by TERM",
+	}
+	if got := strings.Split(strings.TrimSpace(string(calls)), "\n"); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("calls of the binary:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if b, _ := os.ReadFile(cfg); string(b) != "data_dir: "+filepath.Join(dir, "data")+"\nbundle:\n  public_keys:\n    - FAKEPUB\n" {
+		t.Errorf("spoor.yaml:\n%s", b)
+	}
+	packs, _ := filepath.Glob(filepath.Join(dir, "bundle", "src", "rules", "*.yaml"))
+	if _, err := os.Stat(filepath.Join(dir, "bundle", "src", "lists.yaml")); err != nil || len(packs) == 0 {
+		t.Errorf("bundle source: %d rule packs, lists.yaml: %v", len(packs), err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "payload"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p struct {
+		Session   string `json:"session_id"`
+		Event     string `json:"hook_event_name"`
+		Tool      string `json:"tool_name"`
+		ToolUseID string `json:"tool_use_id"`
+		Input     struct {
+			Command string `json:"command"`
+		} `json:"tool_input"`
+	}
+	if err := json.Unmarshal(b, &p); err != nil {
+		t.Fatalf("hook payload is not JSON: %v\n%s", err, b)
+	}
+	if p.Event != "PreToolUse" || p.Tool != "Bash" || p.Session == "" || p.ToolUseID == "" ||
+		!regexp.MustCompile(`^curl .*https://\S+ \| sh$`).MatchString(p.Input.Command) {
+		t.Errorf("hook payload %+v", p)
 	}
 }

@@ -45,6 +45,15 @@ import (
 // Scenarios verify.sh walks through, in order.
 var fleetScenarios = []string{"healthy", "planted", "stale", "stale25h", "removed"}
 
+// binaryScenarios exist only with a real spoor binary (verify.sh with
+// SPOOR_BIN): "hook" is a healthy host plus one real high detection, a
+// curl | sh tool call recorded by `spoor hook` and detected by `spoor run`.
+// The harness writes their expectations, never their databases.
+var binaryScenarios = []string{"hook"}
+
+// detectionsPolicyKey is the only stock policy the "hook" scenario fails.
+const detectionsPolicyKey = "no_high_detections_24h"
+
 type fleetEnv struct {
 	out, db, bin, prefix, agentOptions, scenario string
 }
@@ -158,8 +167,15 @@ func TestFleetContent(t *testing.T) {
 	writeFile(t, filepath.Join(e.out, "reports.tsv"), []byte(q.String()))
 
 	exp := map[string]any{}
-	for _, sc := range fleetScenarios {
+	for _, sc := range append(append([]string{}, fleetScenarios...), binaryScenarios...) {
 		exp[sc] = expectations(stock, e.prefix, sc)
+	}
+	found := false
+	for _, p := range stock.Policies {
+		found = found || p.Key == detectionsPolicyKey
+	}
+	if !found {
+		t.Fatalf("no stock policy %q: the hook scenario's expectations would be wrong", detectionsPolicyKey)
 	}
 	b, _ := json.MarshalIndent(exp, "", "  ")
 	writeFile(t, filepath.Join(e.out, "expected.json"), append(b, '\n'))
@@ -195,6 +211,10 @@ func expectations(p fleetgen.Profile, prefix, scenario string) map[string]map[st
 			}
 		case "stale25h", "removed":
 			r = "fail"
+		case "hook":
+			if x.Key == detectionsPolicyKey {
+				r = "fail"
+			}
 		}
 		pol[prefix+x.Name] = r
 	}

@@ -194,7 +194,10 @@
 // facts shed what no rule of the engine matches first (scriptKeep: a
 // command no any_command predicate of any rule holds for, a list value no
 // leaf on its feature holds for), so a script padded with ordinary lines
-// keeps the line a rule needs. Credentials in the facts are redacted.
+// keeps the line a rule needs. Credentials in the facts are redacted (what
+// classify finds by pattern or position, and any value the session
+// remembers from a credential read), and a script that carries one is
+// never held as text.
 // When a later shell command or process.exec runs that path (./x.sh, sh
 // x.sh, bash +x x.sh, bash < x.sh, cat x.sh | sh, source x.sh, python3
 // x.py, node x.js, pwsh -File x.ps1, powershell -w hidden -ep bypass -File

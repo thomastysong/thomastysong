@@ -12,10 +12,10 @@ import (
 // into a shell in the line it lands in. When the caller holds the file's
 // text from an earlier write (WrittenScript.Keep), the edit is applied to
 // it the way the tool applies it and the whole result is analysed. When it
-// does not, or the edit does not apply to the held text (the file changed
-// outside the agent's file tools, or a credential the edit touches is
-// redacted in the held copy), the new text is analysed on its own and the
-// facts are marked as a fragment.
+// does not (the text was too long or held a credential, or was written in
+// another session), or the edit does not apply to the held text (the file
+// changed outside the agent's file tools), the new text is analysed on its
+// own and the facts are marked as a fragment.
 
 // patchKeys are the tool-input fields an apply_patch envelope travels in:
 // the tool's own "input" (and "patch" / "diff" in other clients), and

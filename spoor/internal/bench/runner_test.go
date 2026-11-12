@@ -145,7 +145,7 @@ func TestRunScenarioSet(t *testing.T) {
 	if !pipe.Detected || pipe.Robust {
 		t.Errorf("pipe: detected=%v robust=%v %v", pipe.Detected, pipe.Robust, pipe.Mutations)
 	}
-	if pipe.Mutations["quoting"] != MutDetected || pipe.Mutations["split"] != MutMissed || pipe.Mutations["variant:written-script"] != MutMissed {
+	if pipe.Mutations["quoting"] != MutDetected || pipe.Mutations["split"] != MutDetected || pipe.Mutations["variant:written-script"] != MutMissed {
 		t.Errorf("pipe mutations %v", pipe.Mutations)
 	}
 	if !pipe.Ablations["hook_only"] || !pipe.Ablations["transcript_only"] || pipe.Ablations["os_only"] {

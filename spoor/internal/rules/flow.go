@@ -311,12 +311,22 @@ func inputStrings(ev *event.Event, limit int) ([]string, bool) {
 // stop, when not nil, is polled during the scan; once it reports true the
 // scan ends as if a bound had been hit.
 func (s *sessionState) secretFlow(ev *event.Event, stop func() bool) (kinds []string, checked, truncated bool) {
+	kinds, checked, truncated, _ = s.secretFlowHits(ev, stop, false)
+	return kinds, checked, truncated
+}
+
+// secretFlowHits is secretFlow; with collect it also returns, per
+// remembered value found, the text that carries it (the token, the encoded
+// token a decoding recovered it from, or the dotted name its labels came
+// from) and the value's kind, so a caller that keeps that text can redact
+// it.
+func (s *sessionState) secretFlowHits(ev *event.Event, stop func() bool, collect bool) (kinds []string, checked, truncated bool, hits map[string]string) {
 	if len(s.secrets) == 0 || len(s.salt) == 0 {
-		return nil, false, false
+		return nil, false, false, nil
 	}
 	texts, truncated := outboundTexts(ev)
 	if len(texts) == 0 {
-		return nil, false, false
+		return nil, false, false, nil
 	}
 	want := make(map[string]secretFP, len(s.secrets))
 	sc := &flowScan{budget: maxFlowCands, seen: map[string]uint8{}, stop: stop}
@@ -330,9 +340,19 @@ func (s *sessionState) secretFlow(ev *event.Event, stop func() bool) (kinds []st
 	}
 	found := map[string]bool{}
 	fp := s.fingerprinter()
+	if collect {
+		hits = map[string]string{}
+		sc.collect = true
+	}
 	sc.match = func(c string, weakToo bool) {
 		if x, ok := want[fp(c)]; ok && (weakToo || !x.weak) {
 			found[x.kind] = true
+			if hits != nil {
+				if sc.root != "" {
+					c = sc.root
+				}
+				hits[c] = x.kind
+			}
 		}
 	}
 	// Shortest first: a value hidden behind a long padding string is
@@ -373,7 +393,7 @@ scan:
 		kinds = append(kinds, k)
 	}
 	sort.Strings(kinds)
-	return kinds, true, truncated
+	return kinds, true, truncated, hits
 }
 
 // cutHead returns at most n leading bytes of s without splitting a rune.
@@ -463,6 +483,10 @@ type flowScan struct {
 	pieces []string
 	ok64   []bool
 	buf    []byte
+	// With collect, root is the text a candidate under consideration was
+	// derived from (a token being decoded, a dotted name being split).
+	collect bool
+	root    string
 }
 
 // step charges n units of work. It reports false, and marks the scan
@@ -685,6 +709,10 @@ func (sc *flowScan) consider(c string, mode candMode) {
 	if todo&(seenDecoded|seenBase32) == 0 || !sc.step(costDecode+len(c)>>2) {
 		return
 	}
+	if sc.collect && sc.root == "" {
+		sc.root = c
+		defer func() { sc.root = "" }()
+	}
 	for _, d := range decodings(c, todo&seenDecoded != 0, todo&seenBase32 != 0) {
 		sc.consider(strings.TrimSpace(d), candDecoded)
 		fields(d, sepDecoded, func(tok string) { sc.consider(tok, candDecoded) })
@@ -709,6 +737,10 @@ const (
 func (sc *flowScan) labelCandidates(name string) {
 	if !sc.step(1 + len(name)>>2) { // splitting and classifying the labels
 		return
+	}
+	if sc.collect && sc.root == "" {
+		sc.root = name
+		defer func() { sc.root = "" }()
 	}
 	labels := sc.labels[:0] // [start, end) of each label, empty ones included
 	defer func() { sc.labels = labels[:0] }()

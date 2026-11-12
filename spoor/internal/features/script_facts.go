@@ -557,6 +557,61 @@ func (s *ScriptFacts) redact() bool {
 	return changed
 }
 
+// RedactTokens replaces every occurrence of each token (a value the
+// caller found by other means: a credential read earlier in the session)
+// in the facts' arguments, paths and values with "[REDACTED:<kind>]", and
+// bounds the result again. Tokens shorter than 4 bytes are not replaced:
+// they would rewrite unrelated text.
+func (s *ScriptFacts) RedactTokens(tokens map[string]string, keep ScriptKeep) {
+	if s == nil || len(tokens) == 0 {
+		return
+	}
+	type tok struct{ v, marker string }
+	var list []tok
+	for v, kind := range tokens {
+		if len(v) >= 4 {
+			list = append(list, tok{v, "[REDACTED:" + kind + "]"})
+		}
+	}
+	// Longest first, so a token inside a longer one does not split it.
+	sort.Slice(list, func(i, j int) bool {
+		if len(list[i].v) != len(list[j].v) {
+			return len(list[i].v) > len(list[j].v)
+		}
+		return list[i].v < list[j].v
+	})
+	red := func(p *string) {
+		for _, t := range list {
+			if strings.Contains(*p, t.v) {
+				*p = strings.ReplaceAll(*p, t.v, t.marker)
+			}
+		}
+	}
+	for i := range s.Cmds {
+		red(&s.Cmds[i].Path)
+		for j := range s.Cmds[i].Args {
+			red(&s.Cmds[i].Args[j])
+		}
+	}
+	for k, l := range s.Lists {
+		if fi, ok := Lookup(k); ok && fi.Vocab != nil {
+			continue // a closed vocabulary holds no value
+		}
+		for i := range l {
+			red(&l[i])
+		}
+	}
+	for i := range s.Installs {
+		for j := range s.Installs[i].Packages {
+			red(&s.Installs[i].Packages[j])
+		}
+		for j := range s.Installs[i].Flags {
+			red(&s.Installs[i].Flags[j])
+		}
+	}
+	s.bound(keep)
+}
+
 // size is the string bytes held, plus a small charge per string.
 func (s *ScriptFacts) size() int {
 	n := len(s.Lang)

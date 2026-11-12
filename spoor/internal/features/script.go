@@ -61,6 +61,9 @@ const (
 	// maxEditWork bounds the line comparisons spent applying the hunks of
 	// one event's patch to held texts.
 	maxEditWork = 1 << 20
+	// maxForcedTails bounds the files of one event whose last 8 KiB are
+	// analysed after the budget is spent.
+	maxForcedTails = 4
 )
 
 // ScriptKeep says which facts some rule can match. When a script's facts
@@ -98,9 +101,12 @@ type budget struct {
 	ran     int
 	stopped bool
 	work    int // line comparisons left for applying patch hunks
+	tails   int // forced tail analyses left
 }
 
-func newBudget(stop func() bool) *budget { return &budget{stop: stop, work: maxEditWork} }
+func newBudget(stop func() bool) *budget {
+	return &budget{stop: stop, work: maxEditWork, tails: maxForcedTails}
+}
 
 // spent reports that the budget is gone, without charging a piece.
 func (b *budget) spent() bool {
@@ -183,8 +189,8 @@ func WrittenScripts(e *event.Event, ctx Context, o ScriptOptions) (out []Written
 	// Compute scanned the event's written content for credentials
 	// (write.*); the scan is the most expensive part of a large file, so
 	// it is not run twice. A text derived from that content (one file of
-	// a patch, an edit applied to a held text whose credentials are
-	// redacted) has none when the content had none.
+	// a patch, an edit applied to a held text, which never holds one) has
+	// none when the content had none.
 	known := computedSecrets(e)
 	var none *knownSecrets
 	if known != nil && len(known.kinds) == 0 {
@@ -339,10 +345,10 @@ func AnalyzeScript(name, content string, ctx Context, o ScriptOptions) (facts *S
 
 // analyzeScript is AnalyzeScript within the budget b. The first piece of
 // text the budget pays for and, whenever anything was left out, the last
-// 8 KiB of the content are always analysed: a payload sits at the start of
-// a script or after the padding that pushed it out of view, so spending
-// the event's budget elsewhere (a large content scan) does not hide both
-// ends. The credential scan of the text is skipped once the budget is
+// 8 KiB of the content (of the first four files an event writes) are
+// always analysed: a payload sits at the start of a script or after the
+// padding that pushed it out of view, so spending the event's budget
+// elsewhere (a large content scan) does not hide both ends. The credential scan of the text is skipped once the budget is
 // spent (and recorded as incomplete), unless known has its result. hold
 // is the content for the caller to keep for a later edit (see holdable).
 func analyzeScript(name, content string, ctx Context, keep ScriptKeep, b *budget, known *knownSecrets) (facts *ScriptFacts, text, hold string) {
@@ -379,7 +385,10 @@ func analyzeScript(name, content string, ctx Context, keep ScriptKeep, b *budget
 	// budget did, the end of the text (where a payload appended after
 	// padding sits) is analysed on its own.
 	if (a.cut || fx != nil && fx.Truncated) && len(content) > tailRescan {
-		a.forced = true
+		if a.cut && b.tails > 0 {
+			b.tails--
+			a.forced = true
+		}
 		fx = mergeFacts(fx, a.analyze(cutTail(content, tailRescan)))
 		a.forced = false
 	}

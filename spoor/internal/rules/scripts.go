@@ -707,13 +707,21 @@ func (e *Engine) rememberScripts(st *sessionState, ev *event.Event, cwd, goos st
 			continue
 		}
 		rec := scriptRec{d: d, at: now, f: ws.Facts, text: ws.Keep}
-		rec.flow, rec.flowChk, rec.flowCut = st.scriptFlow(ws, stop)
+		var hits map[string]string
+		rec.flow, rec.flowChk, rec.flowCut, hits = st.scriptFlow(ws, stop)
+		if len(hits) > 0 {
+			// The script carries a credential value read earlier: the
+			// session keeps only fingerprints of those, so neither the
+			// text nor the facts may hold it.
+			rec.text = ""
+			rec.f = rec.f.Clone()
+			rec.f.RedactTokens(hits, e.keep)
+		}
 		if prev != nil {
 			switch {
 			case ws.InContext:
-				// The held text has credential values redacted, so the
-				// scan of the edited text cannot find what the earlier
-				// text sent: that is kept.
+				// What the earlier text was found to send is kept: a
+				// value the edit split or rewrote is not found again.
 				rec.flow = mergeKinds(prev.flow, rec.flow)
 				rec.flowChk = rec.flowChk || prev.flowChk
 				rec.flowCut = rec.flowCut || prev.flowCut
@@ -732,10 +740,11 @@ func (e *Engine) rememberScripts(st *sessionState, ev *event.Event, cwd, goos st
 
 // scriptFlow scans a written script that contacts the network for the
 // credential values the session remembers, as the outbound scan would scan
-// a command line carrying the same text.
-func (s *sessionState) scriptFlow(ws features.WrittenScript, stop func() bool) (kinds []string, checked, truncated bool) {
+// a command line carrying the same text. hits maps the text that carries
+// each value found to the value's kind.
+func (s *sessionState) scriptFlow(ws features.WrittenScript, stop func() bool) (kinds []string, checked, truncated bool, hits map[string]string) {
 	if len(s.secrets) == 0 || ws.Text == "" || ws.Facts == nil {
-		return nil, false, false
+		return nil, false, false, nil
 	}
 	l := ws.Facts.Lists
 	feat := map[string]any{}
@@ -745,14 +754,14 @@ func (s *sessionState) scriptFlow(ws features.WrittenScript, stop func() bool) (
 		}
 	}
 	if len(feat) == 0 {
-		return nil, false, false
+		return nil, false, false, nil
 	}
 	probe := &event.Event{Target: &event.Target{Command: ws.Text}, Tool: &event.Tool{Kind: event.ToolShell}, Feat: feat}
-	kinds, checked, truncated = s.secretFlow(probe, stop)
+	kinds, checked, truncated, hits = s.secretFlowHits(probe, stop, true)
 	if len(kinds) > maxFlowKinds {
 		kinds = kinds[:maxFlowKinds]
 	}
-	return kinds, checked, truncated
+	return kinds, checked, truncated, hits
 }
 
 // mergeKinds returns the sorted union of a and b.

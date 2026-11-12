@@ -338,6 +338,11 @@ func TestWriteThenRunSecretFlow(t *testing.T) {
 	if r := e.Eval(ev(event.TypeToolPre, writeScript(event.ToolFileWrite, "/tmp/send.sh", script))); len(r.Detections) != 0 {
 		t.Fatalf("the write itself fired: %v", ids(r.Detections))
 	}
+	// The value read earlier is kept only as a fingerprint: neither the
+	// script's facts nor a held text carry it.
+	if data, _ := e.ExportSession(SessionKey(ev(event.TypeToolPre))); strings.Contains(string(data), f.key) || !strings.Contains(string(data), "[REDACTED:") {
+		t.Errorf("session state holds the remembered value: %s", data)
+	}
 	x := ev(event.TypeToolPre, shell("bash /tmp/send.sh"))
 	r := e.Eval(x)
 	if !detected(r, "SPR-X-001") || x.Feat["session.secret_flow"] != true {

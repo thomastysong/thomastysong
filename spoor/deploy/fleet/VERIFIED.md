@@ -1,6 +1,8 @@
 # deploy/fleet: verification record
 
-Captured 2026-11-12 against the live test stack of this repository's build
+Captured 2026-11-12, and re-run after the adversarial review's fixes (tier-3
+examples, binary-only install policies, path and opt-in report changes,
+verify.sh polling), against the live test stack of this repository's build
 sandbox: **Fleet 4.94.1** (license tier Free), **fleetctl 4.94.1**, and one
 enrolled host `vm` running **plain osquery 5.19.0** on Ubuntu (not fleetd).
 Paths under the build scratchpad are shortened to `$S` below; nothing else in
@@ -22,8 +24,8 @@ the captured output is edited.
 - For the extension tier the throwaway extension was appended to the host's
   `extensions.load`, osqueryd was restarted as ENV.md describes, and at the
   end the line was removed (the file is empty again) and osqueryd restarted.
-  Afterwards: host `vm` online, `osquery_extensions` lists only `core`, no
-  `spoor_*` table registered.
+  Afterwards (checked again after the re-run): host `vm` online,
+  `osquery_extensions` lists only `core`, no `spoor_*` table registered.
 
 ## 1. Live run of verify.sh (ATC tier and extension tier)
 
@@ -31,30 +33,38 @@ Command (the extension was built outside the repository from a scratch
 `main` that calls `osqext.Run` against the harness database):
 
 ```
-FLEETCTL=$S/fleet-c5/bin/fleetctl FLEET_HOST=vm WORK=$S/fleet-c5/verify PREFIX=spoor-c5- \
-EXT_LOAD=$S/fleetstack/osq/extensions.load EXT_BIN=$S/fleet-c5/ext/spoor-c5.ext \
-OSQUERY_RESTART=$S/fleet-c5/bin/restart-osqueryd ./deploy/fleet/verify.sh
+FLEETCTL=$S/fleetfix/bin/fleetctl FLEET_HOST=vm WORK=$S/fleetfix/verify PREFIX=spoor-c5- \
+EXT_LOAD=$S/fleetstack/osq/extensions.load EXT_BIN=$S/fleetfix/ext/spoor-fix.ext \
+OSQUERY_RESTART=$S/fleetfix/bin/restart-osqueryd ./deploy/fleet/verify.sh
 ```
 
 The state databases were written by the harness in `test/e2e/fleet_test.go`
 through `state.Store.Apply`, `SetAgentProcesses`, `SetCoverage` and
 `MarkScan`; the planted project files and MCP server went through
-`discovery.ScanProject`. `SPOOR_BIN` was not used: `cmd/spoor` does not
-exist yet. Each policy is checked twice: as a live query (a row means pass)
-and as Fleet's own policy result after a host refetch.
+`discovery.ScanProject`. `SPOOR_BIN` was not used: `cmd/spoor` was not built
+for this run. Each policy is checked twice: as a live query (a row means
+pass) and as Fleet's own policy result after a host refetch.
 
-Result: **0 failed checks**; every spoor policy passes on the healthy
-database and fails with the planted findings, with a 25-hour-old heartbeat
-and with the database removed; a 2-hour-old heartbeat fails only the sensor
-policy (the 30 min / 24 h trade-off). The opt-in Linux report ran (0 rows:
-audit events are not enabled on this host); the macOS and Windows opt-in
-reports fail here with "no such table" as expected on Linux.
+A first attempt of this re-run stopped at the GitOps dry run, which is what
+it is for: `label "spoor tables unavailable" description may not exceed 255
+characters` (the description had been extended). It was shortened, and a
+unit test now holds every label description to Fleet's 255 characters.
+
+Result: **0 failed checks**; `default.yml` (now with the tier-3 agent
+options `lib/agent-options.base.example.yml`) passes the dry run; every
+spoor policy passes on the healthy database and fails with the planted
+findings, with a 25-hour-old heartbeat and with the database removed; a
+2-hour-old heartbeat fails only the sensor policy (the 30 min / 24 h
+trade-off). The opt-in Linux report, now with the `processes` lookup for
+depth 2, ran (0 rows: audit events are not enabled on this host; section 6
+shows the lookup attributing a grandchild on this osquery); the macOS and
+Windows opt-in reports fail here with "no such table" as expected on Linux.
 
 ```
-[04:19:27] Fleet 4.94.1, host vm (id 1), work dir $S/fleet-c5/verify
-[04:19:32] osquery 5.19.0
-[04:19:32] saved agent options (920 bytes) to $S/fleet-c5/verify/agent-options.before.json
-[04:19:32] fleetctl gitops --dry-run deploy/fleet/gitops/default.yml
+[05:41:31] Fleet 4.94.1, host vm (id 1), work dir $S/fleetfix/verify
+[05:41:36] osquery 5.19.0
+[05:41:36] saved agent options (920 bytes) to $S/fleetfix/verify/agent-options.before.json
+[05:41:36] fleetctl gitops --dry-run deploy/fleet/gitops/default.yml
   [+] would've created 4 labels
   [+] would've applied certificate authorities
   [+] would've applied 4 scripts
@@ -64,14 +74,14 @@ reports fail here with "no such table" as expected on Linux.
   [+] would've applied 10 policies
   [+] would've applied 4 reports
   [!] gitops dry run succeeded
-[04:19:33] harness wrote specs, merged agent options and expectations for DB $S/fleet-c5/verify/data/state.db
+[05:41:37] harness wrote specs, merged agent options and expectations for DB $S/fleetfix/verify/data/state.db
   [+] applied fleet config
   [+] applied 4 reports
   [+] applied 4 labels
   [+] applied 10 policies
-[04:19:33] == tier 2: ATC
-[04:19:47] all 9 spoor tables registered through ATC
-[04:19:47] == scenario healthy (ATC)
+[05:41:37] == tier 2: ATC
+[05:41:51] all 9 spoor tables registered through ATC
+[05:41:51] == scenario healthy (ATC)
   live query of every spoor table:
         spoor_agents                 2 rows; columns: asset_id,catalog_id,change,confidence,evidence,first_seen,hooks,host_display_name,host_hos
         spoor_mcp_servers            1 rows; columns: asset_id,auth_mode,command,ecosystem,env_keys,first_seen,host_display_name,host_hostname,l
@@ -109,7 +119,7 @@ reports fail here with "no such table" as expected on Linux.
   ok    spoor-c5-spoor installed                                               member
   ok    spoor-c5-spoor sensor unhealthy                                        not member
   ok    spoor-c5-spoor tables unavailable                                      not member
-[04:21:33] == scenario planted (ATC)
+[05:43:36] == scenario planted (ATC)
   policies evaluated as live queries (a row = pass):
   ok    spoor-c5-spoor - sensor is reporting                                   pass
   ok    spoor-c5-spoor - managed hooks effective for every AI agent            fail
@@ -137,7 +147,7 @@ reports fail here with "no such table" as expected on Linux.
   ok    spoor-c5-spoor installed                                               member
   ok    spoor-c5-spoor sensor unhealthy                                        not member
   ok    spoor-c5-spoor tables unavailable                                      not member
-[04:22:33] == scenario stale (ATC)
+[05:44:33] == scenario stale (ATC)
   policies evaluated as live queries (a row = pass):
   ok    spoor-c5-spoor - sensor is reporting                                   fail
   ok    spoor-c5-spoor - managed hooks effective for every AI agent            pass
@@ -165,7 +175,7 @@ reports fail here with "no such table" as expected on Linux.
   ok    spoor-c5-spoor installed                                               member
   ok    spoor-c5-spoor sensor unhealthy                                        member
   ok    spoor-c5-spoor tables unavailable                                      not member
-[04:23:29] == scenario stale25h (ATC)
+[05:45:29] == scenario stale25h (ATC)
   policies evaluated as live queries (a row = pass):
   ok    spoor-c5-spoor - sensor is reporting                                   fail
   ok    spoor-c5-spoor - managed hooks effective for every AI agent            fail
@@ -193,8 +203,8 @@ reports fail here with "no such table" as expected on Linux.
   ok    spoor-c5-spoor installed                                               member
   ok    spoor-c5-spoor sensor unhealthy                                        member
   ok    spoor-c5-spoor tables unavailable                                      not member
-[04:24:25] == scenario removed (ATC)
-  state database removed: ls: cannot access '$S/fleet-c5/verify/data/state.db': No such file or directory
+[05:46:28] == scenario removed (ATC)
+  state database removed: ls: cannot access '$S/fleetfix/verify/data/state.db': No such file or directory
   policies evaluated as live queries (a row = pass):
   ok    spoor-c5-spoor - sensor is reporting                                   fail
   ok    spoor-c5-spoor - managed hooks effective for every AI agent            fail
@@ -222,7 +232,7 @@ reports fail here with "no such table" as expected on Linux.
   ok    spoor-c5-spoor installed                                               member
   ok    spoor-c5-spoor sensor unhealthy                                        member
   ok    spoor-c5-spoor tables unavailable                                      not member
-[04:25:24] == reports (stock profile and opt-in exec reports) as live queries on the healthy database
+[05:47:27] == reports (stock profile and opt-in exec reports) as live queries on the healthy database
         spoor - detections                                             [darwin,linux,windows] 1 rows
         spoor - AI inventory (packed)                                  [darwin,linux,windows] 1 rows
         spoor - telemetry coverage                                     [darwin,linux,windows] 2 rows
@@ -230,11 +240,11 @@ reports fail here with "no such table" as expected on Linux.
         spoor opt-in - agent child processes (Linux, audit)            [linux] 0 rows
         spoor opt-in - agent child processes (macOS, EndpointSecurity) [darwin] error: no such table: es_process_events
         spoor opt-in - agent child processes (Windows, ETW)            [windows] error: no such table: process_etw_events
-[04:26:01] == tier 3: osquery extension $S/fleet-c5/ext/spoor-c5.ext
+[05:48:04] == tier 3: osquery extension $S/fleetfix/ext/spoor-fix.ext
   [+] applied fleet config
-[04:26:15] ATC tables gone; registering the extension in $S/fleetstack/osq/extensions.load
-  [{"host_display_name":"vm","host_hostname":"vm","name":"spoor","path":"/run/osqt/osquery.em.63429","type":"extension","version":"c5-verify"}]
-[04:26:30] == scenario healthy (extension)
+[05:48:17] ATC tables gone; registering the extension in $S/fleetstack/osq/extensions.load
+  [{"host_display_name":"vm","host_hostname":"vm","name":"spoor","path":"/run/osqt/osquery.em.44150","type":"extension","version":"c5-verify"}]
+[05:48:33] == scenario healthy (extension)
   live query of every spoor table:
         spoor_agents                 2 rows; columns: asset_id,catalog_id,change,confidence,evidence,first_seen,hooks,host_display_name,host_hos
         spoor_mcp_servers            1 rows; columns: asset_id,auth_mode,command,ecosystem,env_keys,first_seen,host_display_name,host_hostname,l
@@ -272,7 +282,7 @@ reports fail here with "no such table" as expected on Linux.
   ok    spoor-c5-spoor installed                                               member
   ok    spoor-c5-spoor sensor unhealthy                                        not member
   ok    spoor-c5-spoor tables unavailable                                      not member
-[04:28:16] == scenario planted (extension)
+[05:50:15] == scenario planted (extension)
   policies evaluated as live queries (a row = pass):
   ok    spoor-c5-spoor - sensor is reporting                                   pass
   ok    spoor-c5-spoor - managed hooks effective for every AI agent            fail
@@ -300,8 +310,8 @@ reports fail here with "no such table" as expected on Linux.
   ok    spoor-c5-spoor installed                                               member
   ok    spoor-c5-spoor sensor unhealthy                                        not member
   ok    spoor-c5-spoor tables unavailable                                      not member
-[04:29:15] == scenario removed (extension)
-  state database removed: ls: cannot access '$S/fleet-c5/verify/data/state.db': No such file or directory
+[05:51:15] == scenario removed (extension)
+  state database removed: ls: cannot access '$S/fleetfix/verify/data/state.db': No such file or directory
   policies evaluated as live queries (a row = pass):
   ok    spoor-c5-spoor - sensor is reporting                                   fail
   ok    spoor-c5-spoor - managed hooks effective for every AI agent            fail
@@ -329,37 +339,23 @@ reports fail here with "no such table" as expected on Linux.
   ok    spoor-c5-spoor installed                                               member
   ok    spoor-c5-spoor sensor unhealthy                                        member
   ok    spoor-c5-spoor tables unavailable                                      not member
-[04:30:10] cleanup
-[04:30:16] extension unregistered from $S/fleetstack/osq/extensions.load, osqueryd restarted
-[04:30:16] agent options restored: identical to the saved copy
-[04:30:16] objects named spoor-c5-* left on the server: labels 0, reports 0, policies []
-[04:30:16] done: 0 failed checks
+[05:52:10] cleanup
+[05:52:16] extension unregistered from $S/fleetstack/osq/extensions.load, osqueryd restarted
+[05:52:16] agent options restored: identical to the saved copy
+[05:52:16] objects named spoor-c5-* left on the server: labels 0, reports 0, policies []
+[05:52:16] done: 0 failed checks
 ```
 
 ## 2. GitOps dry runs
 
-`deploy/fleet/gitops/default.yml` (stock profile, scripts, example agent
-options) is in the run above: dry run succeeded. The other generated files,
-through a scratch `default.yml` that names them. These ran while the
-verification objects were on the server, which is why the dry run says it
-would have deleted them: that is exactly what a real `fleetctl gitops` run
-does to everything its files omit, and why verify.sh never runs one.
-
-The Premium example fails on this Free server: fleetctl 4.94.1 parses the
-`software` section only with a Premium license (`pkg/spec/gitops.go`,
-`if appConfig != nil && appConfig.License.IsPremium()`), so the
-install-on-failure policies cannot find their packages. The package files
-themselves parse (an earlier probe showed that an all-zero `hash_sha256` is
-rejected as "not a valid software package definition"; the examples now
-leave the hash commented for the operator to fill in).
+`deploy/fleet/gitops/default.yml` (stock profile, scripts, tier-3 example
+agent options) is in the run above: dry run succeeded. The other generated
+files, through a scratch `default.yml` that names them (the fleetd profile
+with the ATC example agent options, the builtin profile with the base
+example), after the run above had removed its objects:
 
 ```
 $ fleetctl gitops --dry-run -f default.yml   # labels/policies/reports from lib/fleetd + lib/opt-in, agent options lib/agent-options.example.yml
-[-] would've deleted 4 labels (This includes renames, since labels are identified by name in YAML.)
-[-] would've deleted label 'spoor-c5-spoor installed'
-[-] would've deleted label 'spoor-c5-AI agents present'
-[-] would've deleted label 'spoor-c5-spoor sensor unhealthy'
-[-] would've deleted label 'spoor-c5-spoor tables unavailable'
 [+] would've created 4 labels
 [+] would've applied certificate authorities
 [+] would've applied 0 scripts
@@ -367,31 +363,10 @@ $ fleetctl gitops --dry-run -f default.yml   # labels/policies/reports from lib/
 [+] would've applied MDM profiles
 [+] would've applied enroll secrets
 [+] would've applied 10 policies
-[-] would've deleted policy spoor-c5-spoor - sensor is reporting
-[-] would've deleted policy spoor-c5-spoor - managed hooks effective for every AI agent
-[-] would've deleted policy spoor-c5-spoor - no high or critical agent detections in 24 h
-[-] would've deleted policy spoor-c5-spoor - no AI agent in permission-bypass mode
-[-] would've deleted policy spoor-c5-spoor - no unpinned or inline-secret MCP server
-[-] would've deleted policy spoor-c5-spoor - no auto-run file planted in a project
-[-] would've deleted policy spoor-c5-spoor - rules bundle is current
-[-] would've deleted policy spoor-c5-spoor - inventory scan complete and recent
-[-] would've deleted policy spoor-c5-spoor - no AI agent running unobserved
-[-] would've deleted policy spoor-c5-spoor - no high or critical agent configuration failure
-[-] would've deleted 10 policies
 [+] would've applied 7 reports
-[-] would've deleted report spoor-c5-spoor - detections
-[-] would've deleted report spoor-c5-spoor - telemetry coverage
-[-] would've deleted report spoor-c5-spoor - sensor health
-[-] would've deleted report spoor-c5-spoor - AI inventory (packed)
-[-] would've deleted 4 reports
 [!] gitops dry run succeeded
 exit 0
-$ fleetctl gitops --dry-run -f default.yml   # labels/policies/reports from lib/builtin + lib/opt-in, agent options lib/agent-options.example.yml
-[-] would've deleted 4 labels (This includes renames, since labels are identified by name in YAML.)
-[-] would've deleted label 'spoor-c5-spoor installed'
-[-] would've deleted label 'spoor-c5-AI agents present'
-[-] would've deleted label 'spoor-c5-spoor sensor unhealthy'
-[-] would've deleted label 'spoor-c5-spoor tables unavailable'
+$ fleetctl gitops --dry-run -f default.yml   # labels/policies/reports from lib/builtin + lib/opt-in, agent options lib/agent-options.base.example.yml
 [+] would've created 1 label
 [+] would've applied certificate authorities
 [+] would've applied 0 scripts
@@ -399,23 +374,7 @@ $ fleetctl gitops --dry-run -f default.yml   # labels/policies/reports from lib/
 [+] would've applied MDM profiles
 [+] would've applied enroll secrets
 [+] would've applied 2 policies
-[-] would've deleted policy spoor-c5-spoor - sensor is reporting
-[-] would've deleted policy spoor-c5-spoor - managed hooks effective for every AI agent
-[-] would've deleted policy spoor-c5-spoor - no high or critical agent detections in 24 h
-[-] would've deleted policy spoor-c5-spoor - no AI agent in permission-bypass mode
-[-] would've deleted policy spoor-c5-spoor - no unpinned or inline-secret MCP server
-[-] would've deleted policy spoor-c5-spoor - no auto-run file planted in a project
-[-] would've deleted policy spoor-c5-spoor - rules bundle is current
-[-] would've deleted policy spoor-c5-spoor - inventory scan complete and recent
-[-] would've deleted policy spoor-c5-spoor - no AI agent running unobserved
-[-] would've deleted policy spoor-c5-spoor - no high or critical agent configuration failure
-[-] would've deleted 10 policies
 [+] would've applied 4 reports
-[-] would've deleted report spoor-c5-spoor - detections
-[-] would've deleted report spoor-c5-spoor - telemetry coverage
-[-] would've deleted report spoor-c5-spoor - sensor health
-[-] would've deleted report spoor-c5-spoor - AI inventory (packed)
-[-] would've deleted 4 reports
 [!] gitops dry run succeeded
 exit 0
 $ fleetctl gitops --dry-run -f deploy/fleet/gitops/default.yml -f deploy/fleet/gitops/fleets/workstations.yml   # Premium example
@@ -426,6 +385,30 @@ Error: 3 errors occurred:
 
 
 exit 1
+```
+
+The Premium example still fails on this Free server, and only where Fleet
+Premium is required: fleetctl 4.94.1 parses the `software` section only with
+a Premium license (`pkg/spec/gitops.go`, `if appConfig != nil &&
+appConfig.License.IsPremium()`), so the install-on-failure policies cannot
+find their packages. Without the `install_software` and `software` keys,
+fleetctl skips a fleet file entirely on Free, so the fleet's own labels
+(Debian-family and Red Hat-family Linux) and its policies were checked only
+by the unit tests:
+
+```
+$ fleetctl gitops --dry-run -f default.yml -f fleets/workstations.yml   # Premium example without install_software and software
+[!] skipping team config fleets/workstations.yml since teams are only supported for premium Fleet users
+[+] would've created 4 labels
+[+] would've applied certificate authorities
+[+] would've applied 4 scripts
+[+] would've applied fleet config
+[+] would've applied MDM profiles
+[+] would've applied enroll secrets
+[+] would've applied 10 policies
+[+] would've applied 4 reports
+[!] gitops dry run succeeded
+exit 0
 ```
 
 ## 3. ATC and the extension together
@@ -515,14 +498,14 @@ sizes with maximum-length values full of characters JSON must escape
     semantics_test.go:464: builtin/AI tools (packed): 124326 bytes
 ```
 
-## 6. osquery path handling (local osquery 5.19.0)
+## 6. osquery path handling and the opt-in lookup (local osquery 5.19.0)
 
 Why custom state database paths must be clean and pattern-free: ATC resolves
 its `path` as a glob (`?`, `[...]` and, with brace expansion, `{A,B}`) and
 reports the canonical path, while the `file` table that the "spoor
 installed" label reads reports a path exactly as written. Run with
 `osqueryd -S --config_path=cfg.json` over three one-row databases
-`$W/db/spoorA`, `spoorB`, `spoorC`. The last probe shows `processes.start_time`
+`$W/db/spoorA`, `spoorB`, `spoorC` (`$W` is a scratch directory). The last probe shows `processes.start_time`
 is in Unix seconds, like the event tables' `time`, which the opt-in reports
 compare.
 
@@ -540,6 +523,17 @@ $ osqueryd -S "SELECT path FROM file WHERE path = '$W/db//spoorA/state.db'"
 $ osqueryd -S "SELECT pid, parent, start_time FROM processes WHERE pid = 1"; date +%s
 [{"parent":"0","pid":"1","start_time":"1794454940"}]
 1794462130
+```
+
+The opt-in Linux report's new depth-2 lookup, on the same osquery: the
+generated query with its two inputs that need audit and spoor replaced by
+stand-ins, and a real process as the depth-1 parent whose exec event is
+not in the batch (as when it started in an earlier scheduled run):
+
+```
+$ sleep 300 &   # pid 12164, child of shell 12162: stand-ins for an agent's depth-1 shell (exec event in an earlier run) and the agent root
+$ osqueryd -S "<the generated Linux opt-in query, with spoor_agent_processes replaced by (12162, claude-code, sess-1) and process_events by one exec of pid 999999 whose parent is 12164>"
+{"pid":"999999","parent":"12164","depth":"2","agent_id":"claude-code","session_ref":"sess-1"}
 ```
 
 ## Not verified here
@@ -566,7 +560,9 @@ $ osqueryd -S "SELECT pid, parent, start_time FROM processes WHERE pid = 1"; dat
   `StateDirectory=` it counters is systemd's documented behaviour, not
   observed here.
 - **Fleet Premium**: package YAMLs, install-on-failure policies, per-fleet
-  files (dry run refused on a Free server, see section 2).
+  files and fleet labels (dry run refused or skipped on a Free server, see
+  section 2), and the rollback of a package whose post-install script
+  fails (from Fleet's REST API documentation).
 - **A real sensor**: the state databases came from the harness, not from
   `spoor scan --state` / `spoor run` (cmd/spoor is not built yet); verify.sh
   switches to them when `SPOOR_BIN` is set. The scripts ran with a fake

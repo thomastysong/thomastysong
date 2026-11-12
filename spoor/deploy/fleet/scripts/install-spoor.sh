@@ -126,6 +126,7 @@ ExecStart=/usr/bin/spoor run --config /etc/spoor/spoor.yaml
 Restart=always
 RestartSec=5s
 TimeoutStopSec=20s
+Group=spoor
 StateDirectory=spoor
 StateDirectoryMode=0750
 RuntimeDirectory=spoor

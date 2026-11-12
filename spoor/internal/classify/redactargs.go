@@ -131,8 +131,15 @@ func RedactArgs(args []string) (out []string) {
 			pending = modeNone
 		}
 		if !endOfFlags && a == "--" {
-			endOfFlags = true
 			out[i] = a
+			if nestedCommand(seen) {
+				// kubectl exec pod -- mysql -pSECRET: what follows is a new
+				// command line with its own flags. Restart the scan.
+				seen = map[string]bool{}
+				prevPositional, prevPrevPositional = "", ""
+				continue
+			}
+			endOfFlags = true
 			continue
 		}
 		if !endOfFlags && len(a) > 1 && a[0] == '-' {
@@ -252,12 +259,39 @@ func redactFlag(a string, seen map[string]bool, hasNext bool) (string, flagMode)
 	return redactLoose(a), modeNone
 }
 
+// nestedCommand reports programs whose "--" introduces another program's
+// command line rather than plain operands.
+func nestedCommand(seen map[string]bool) bool {
+	for _, p := range []string{"kubectl", "oc", "docker", "podman", "nerdctl", "ssh", "gcloud", "az", "aws",
+		"npx", "pnpm", "yarn", "npm", "bunx", "uvx", "uv", "poetry", "pipx", "cargo", "go", "timeout", "env",
+		"sudo", "doas", "nohup", "nice", "xargs", "watch", "kind", "minikube", "vagrant", "flyctl", "fly", "heroku"} {
+		if seen[p] {
+			return true
+		}
+	}
+	return false
+}
+
+// httpClients are the programs whose short -d/-F flags carry a request body.
+var httpClients = []string{"curl", "wget", "wget2", "http", "https", "xh", "curlie", "httpie"}
+
 func flagModeFor(flag string, seen map[string]bool) flagMode {
 	if headerFlags[flag] {
 		return modeHeader
 	}
 	if dataFlags[flag] {
-		return modeData
+		// Short -d and -F mean "decrypt", "daemon", "field separator" for
+		// most programs (openssl enc -d -k SECRET); only treat them as a
+		// request body after an HTTP client.
+		if len(flag) == 2 {
+			for _, c := range httpClients {
+				if seen[c] {
+					return modeData
+				}
+			}
+		} else {
+			return modeData
+		}
 	}
 	for tool, flags := range toolFlags {
 		if m, ok := flags[flag]; ok && seen[tool] {

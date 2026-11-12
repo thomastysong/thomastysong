@@ -37,6 +37,7 @@ func (a *analyzer) posix(src string, origin string, depth int, in flow) flow {
 		// seconds growing its stack. No real command line looks like this,
 		// so do not hand it over.
 		a.f.ParseOK = false
+		a.obf("deep_nesting")
 		return a.posixFallback(src, origin, depth, in)
 	}
 	p := parserPool.Get().(*syntax.Parser)

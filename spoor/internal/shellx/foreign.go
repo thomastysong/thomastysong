@@ -10,14 +10,14 @@ var shellCalls = map[string][]string{
 	"python": {"os.system", "os.popen", "subprocess.run", "subprocess.call", "subprocess.check_output",
 		"subprocess.check_call", "subprocess.Popen", "subprocess.getoutput", "subprocess.getstatusoutput",
 		"pty.spawn", "commands.getoutput", "system", "popen"},
-	"javascript": {"execSync", "exec", "spawnSync", "spawn", "execFileSync", "execFile", "doShellScript", "Deno.Command"},
-	"perl":       {"system", "exec", "qx", "open"},
-	"ruby":       {"system", "exec", "%x", "IO.popen", "Open3.capture2", "Open3.capture3", "Open3.popen3", "spawn"},
-	"php":        {"system", "exec", "shell_exec", "passthru", "popen", "proc_open"},
-	"lua":        {"os.execute", "io.popen"},
-	"awk":        {"system"},
+	"javascript":  {"execSync", "exec", "spawnSync", "spawn", "execFileSync", "execFile", "doShellScript", "Deno.Command"},
+	"perl":        {"system", "exec", "qx", "open"},
+	"ruby":        {"system", "exec", "%x", "IO.popen", "Open3.capture2", "Open3.capture3", "Open3.popen3", "spawn"},
+	"php":         {"system", "exec", "shell_exec", "passthru", "popen", "proc_open"},
+	"lua":         {"os.execute", "io.popen"},
+	"awk":         {"system"},
 	"applescript": {"do shell script"},
-	"vbscript":   {".run", ".exec", "shell"},
+	"vbscript":    {".run", ".exec", "shell"},
 }
 
 // backtickLangs treat `...` as command execution.
@@ -167,13 +167,13 @@ func (a *analyzer) foreign(lang, code, origin string, depth int) {
 }
 
 var downloadMarkers = map[string][]string{
-	"python":     {"urlopen(", "urlretrieve(", "requests.get(", "requests.post(", "httpx.get(", "urllib3", "http.client", "aiohttp"},
-	"javascript": {"fetch(", "http.get(", "https.get(", "axios", "xmlhttprequest", "require('http", "require(\"http", "got("},
-	"perl":       {"lwp::simple", "lwp::useragent", "http::tiny", "io::socket::inet"},
-	"ruby":       {"net::http", "open-uri", "uri.open", "httparty", "faraday", "tcpsocket"},
-	"php":        {"file_get_contents('http", "file_get_contents(\"http", "curl_init", "fopen('http", "fopen(\"http", "fsockopen"},
-	"lua":        {"socket.http", "http.request"},
-	"vbscript":   {"msxml2.xmlhttp", "winhttp.winhttprequest", "msxml2.serverxmlhttp", "adodb.stream"},
+	"python":      {"urlopen(", "urlretrieve(", "requests.get(", "requests.post(", "httpx.get(", "urllib3", "http.client", "aiohttp"},
+	"javascript":  {"fetch(", "http.get(", "https.get(", "axios", "xmlhttprequest", "require('http", "require(\"http", "got("},
+	"perl":        {"lwp::simple", "lwp::useragent", "http::tiny", "io::socket::inet"},
+	"ruby":        {"net::http", "open-uri", "uri.open", "httparty", "faraday", "tcpsocket"},
+	"php":         {"file_get_contents('http", "file_get_contents(\"http", "curl_init", "fopen('http", "fopen(\"http", "fsockopen"},
+	"lua":         {"socket.http", "http.request"},
+	"vbscript":    {"msxml2.xmlhttp", "winhttp.winhttprequest", "msxml2.serverxmlhttp", "adodb.stream"},
 	"applescript": {"curl "},
 }
 

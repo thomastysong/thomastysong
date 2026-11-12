@@ -203,6 +203,10 @@ func scanURLCreds(s string, raw []rawHit) []rawHit {
 			kind = KindDatabaseURL
 		}
 		user := s[loc[4]:loc[5]]
+		if strings.Contains(s[loc[4]:max(loc[5], loc[7])], "REDACTED") {
+			// Already a redaction marker from an earlier pass.
+			continue
+		}
 		if loc[6] >= 0 && loc[7] > loc[6] {
 			pass := s[loc[6]:loc[7]]
 			lp := asciiLower(pass)

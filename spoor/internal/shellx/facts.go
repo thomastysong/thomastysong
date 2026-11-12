@@ -86,6 +86,15 @@ type Facts struct {
 	HereDoc            bool
 
 	Obfuscation []string
+	// Opaque names constructs whose effect a static parse cannot see:
+	// eval, inline_code (code in another language), heredoc_interpreter,
+	// dynamic_command, decoded_exec, process_substitution_exec, deep_nesting.
+	// Rules score the opacity itself instead of pretending to see inside.
+	Opaque []string
+	// ExecutesPaths are scripts or binaries run by path (./x.sh, sh x.sh,
+	// python x.py, C:\t\a.exe), so a file written earlier in the session
+	// and executed here can be correlated across events.
+	ExecutesPaths []string
 
 	// Semantic categories (closed vocabularies, documented in the package doc).
 	Destructive    []string
@@ -115,7 +124,11 @@ func Vocabulary() map[string][]string {
 var vocabulary = map[string][]string{
 	"Obfuscation": {
 		"base64_decode_exec", "hex_escape", "ifs_abuse", "var_indirection", "eval",
-		"char_concat", "encoded_command", "rev_exec", "long_single_token",
+		"char_concat", "encoded_command", "rev_exec", "long_single_token", "deep_nesting",
+	},
+	"Opaque": {
+		"eval", "inline_code", "heredoc_interpreter", "dynamic_command", "decoded_exec",
+		"process_substitution_exec", "deep_nesting",
 	},
 	"Destructive": {
 		"rm_recursive_root", "rm_recursive_home", "rm_recursive_wildcard", "disk_wipe", "mkfs",

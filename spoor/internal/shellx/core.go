@@ -18,7 +18,7 @@ const (
 	maxWrapChain   = 16        // chained wrappers (sudo env nice ...) unwrapped
 	maxNest        = 200       // recursion guard for control-flow nesting in the walker
 	maxBraceFields = 64        // fields one brace-expanded word may produce
-	maxParserNest  = 120       // bracket nesting accepted before the real parser is skipped
+	maxParserNest  = 64        // bracket nesting accepted before the real parser is skipped
 	maxParserKw    = 3000      // compound-command keywords accepted before the real parser is skipped
 	longTokenBytes = 1024      // a single argument at least this long without whitespace is long_single_token
 	maxEmbedded    = 16        // shell strings extracted from one piece of foreign-language inline code
@@ -107,22 +107,22 @@ type dropFile struct {
 // AST, fallback tokenizer, PowerShell and cmd tokenizers) lowers to it so the
 // semantic layer is written once.
 type simple struct {
-	args    []arg
-	raw     string // command word as written
-	env     []envKV
-	stdin   *string // heredoc / here-string content when resolvable
-	stdinT  taint
-	inFile  arg  // "< file"
-	hasIn   bool // inFile is set
-	outFile arg  // stdout redirected to this file
-	hasOut  bool
+	args      []arg
+	raw       string // command word as written
+	env       []envKV
+	stdin     *string // heredoc / here-string content when resolvable
+	stdinT    taint
+	inFile    arg  // "< file"
+	hasIn     bool // inFile is set
+	outFile   arg  // stdout redirected to this file
+	hasOut    bool
 	outAppend bool
-	origin  string
-	depth   int
-	wraps   int
-	dialect Dialect
-	bg      bool
-	tail    bool // more arguments are appended at run time (xargs, find -exec {} +)
+	origin    string
+	depth     int
+	wraps     int
+	dialect   Dialect
+	bg        bool
+	tail      bool // more arguments are appended at run time (xargs, find -exec {} +)
 
 	name string // normalised command name
 	idx  int    // index in Facts.Commands, -1 when not recorded
@@ -191,18 +191,18 @@ func addUniq(list *[]string, s string) {
 	*list = append(l, s)
 }
 
-func (a *analyzer) obf(v string)       { addUniq(&a.f.Obfuscation, v) }
+func (a *analyzer) obf(v string)         { addUniq(&a.f.Obfuscation, v) }
 func (a *analyzer) destructive(v string) { addUniq(&a.f.Destructive, v) }
-func (a *analyzer) persist(v string)   { addUniq(&a.f.Persistence, v) }
-func (a *analyzer) evasion(v string)   { addUniq(&a.f.DefenseEvasion, v) }
-func (a *analyzer) cred(v string)      { addUniq(&a.f.CredAccess, v) }
-func (a *analyzer) exfil(v string)     { addUniq(&a.f.Exfil, v) }
-func (a *analyzer) nettool(v string)   { addUniq(&a.f.NetTools, v) }
-func (a *analyzer) recon(v string)     { addUniq(&a.f.Recon, v) }
-func (a *analyzer) priv(v string)      { addUniq(&a.f.Privilege, v) }
-func (a *analyzer) gitop(v string)     { addUniq(&a.f.GitOps, v) }
+func (a *analyzer) persist(v string)     { addUniq(&a.f.Persistence, v) }
+func (a *analyzer) evasion(v string)     { addUniq(&a.f.DefenseEvasion, v) }
+func (a *analyzer) cred(v string)        { addUniq(&a.f.CredAccess, v) }
+func (a *analyzer) exfil(v string)       { addUniq(&a.f.Exfil, v) }
+func (a *analyzer) nettool(v string)     { addUniq(&a.f.NetTools, v) }
+func (a *analyzer) recon(v string)       { addUniq(&a.f.Recon, v) }
+func (a *analyzer) priv(v string)        { addUniq(&a.f.Privilege, v) }
+func (a *analyzer) gitop(v string)       { addUniq(&a.f.GitOps, v) }
 func (a *analyzer) interpreter(v string) { addUniq(&a.f.Interpreters, v) }
-func (a *analyzer) envAssign(v string) { addUniq(&a.f.EnvAssign, v) }
+func (a *analyzer) envAssign(v string)   { addUniq(&a.f.EnvAssign, v) }
 
 // obfTaint records the obfuscation implied by how executed text was built.
 func (a *analyzer) obfTaint(t taint) {
@@ -262,10 +262,10 @@ func (a *analyzer) useText(path string, m useMode, text string) {
 	}
 }
 
-func (a *analyzer) read(path string)   { a.use(path, mRead) }
-func (a *analyzer) write(path string)  { a.use(path, mWrite) }
-func (a *analyzer) del(path string)    { a.use(path, mDelete) }
-func (a *analyzer) attr(path string)   { a.use(path, mAttr) }
+func (a *analyzer) read(path string)     { a.use(path, mRead) }
+func (a *analyzer) write(path string)    { a.use(path, mWrite) }
+func (a *analyzer) del(path string)      { a.use(path, mDelete) }
+func (a *analyzer) attr(path string)     { a.use(path, mAttr) }
 func (a *analyzer) appendTo(path string) { a.use(path, mAppend) }
 
 // drop remembers a file written by a download or a decoder so a later
@@ -319,6 +319,9 @@ func (a *analyzer) droppedTaint(path string) (taint, bool) {
 
 // ranFile links the execution of path to how the file got there.
 func (a *analyzer) ranFile(path string) {
+	if p := strings.TrimSpace(path); p != "" && !pseudoPath(p) && !strings.HasPrefix(p, "<(") {
+		addUniq(&a.f.ExecutesPaths, clip(p, 4096))
+	}
 	if a.unpacked && relativePath(path) {
 		// curl -LO x.tgz && tar xzf x.tgz && ./install.sh
 		a.f.DownloadAndExecute = true

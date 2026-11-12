@@ -44,6 +44,11 @@ func isPlaceholder(v string) bool {
 	if placeholderExact[lv] {
 		return true
 	}
+	// Text this package already redacted must not be redacted again, or a
+	// second pass nests markers ("[REDACTED:[REDACTED:...").
+	if strings.Contains(v, "[REDACTED") || strings.Contains(v, "REDACTED:") {
+		return true
+	}
 	if wrapped(v) {
 		return true
 	}

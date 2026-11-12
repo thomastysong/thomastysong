@@ -42,8 +42,8 @@ var interpDefs = map[string]*interpDef{
 
 	"powershell": {lang: "powershell", kind: kindPwsh}, "pwsh": {lang: "powershell", kind: kindPwsh},
 	"powershell_ise": {lang: "powershell", kind: kindPwsh}, "pwsh-preview": {lang: "powershell", kind: kindPwsh},
-	"cmd":   {lang: "cmd", kind: kindCmd},
-	"mshta": {lang: "vbscript", kind: kindMshta},
+	"cmd":     {lang: "cmd", kind: kindCmd},
+	"mshta":   {lang: "vbscript", kind: kindMshta},
 	"wscript": {lang: "vbscript", kind: kindWSH}, "cscript": {lang: "vbscript", kind: kindWSH},
 }
 
@@ -668,6 +668,12 @@ func hEval(a *analyzer, c *simple, in flow, out *flow) {
 	}
 	a.obfTaint(t)
 	code := joinArgs(rest)
+	if allDynamic(rest) {
+		// eval "$(curl ...)": the code only exists at run time; its source
+		// was analysed where it was produced. Re-parsing the "$(...)"
+		// placeholder would only invent commands.
+		return
+	}
 	origin := OriginEval
 	if t&tCoded != 0 {
 		origin = OriginDecoded
@@ -676,6 +682,16 @@ func hEval(a *analyzer, c *simple, in flow, out *flow) {
 		}
 	}
 	a.sub(code, Posix, origin, c.depth+1, in)
+}
+
+// allDynamic reports arguments that are nothing but unresolved expansions.
+func allDynamic(args []arg) bool {
+	for i := range args {
+		if !wholeDynamic(args[i]) && strings.TrimSpace(args[i].s) != "$(...)" {
+			return false
+		}
+	}
+	return true
 }
 
 func hSource(a *analyzer, c *simple, in flow, out *flow) {

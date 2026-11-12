@@ -4,10 +4,15 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/thomastysong/spoor/internal/event"
 	"github.com/thomastysong/spoor/internal/hookio"
@@ -259,5 +264,214 @@ func TestGuardWithoutRulesAsks(t *testing.T) {
 	}
 	if a := lastActivity(t, s); a.Labels["hook_rules"] != "unavailable" {
 		t.Fatalf("labels %v", a.Labels)
+	}
+}
+
+// The agent has not closed stdin by half the hard deadline: the
+// supervisor passes on the prefix it has and tells the worker it was cut
+// (--stdin-cut). A prefix that does not parse is answered "ask" on a gated
+// event, never an implicit allow; a complete payload from an agent that
+// merely kept stdin open is judged normally.
+func TestGuardTruncatedStdinAsks(t *testing.T) {
+	full := dialects[0].payload("spoor-test-block now")
+	cut := bytes.Index(full, []byte("spoor-test-block"))
+	for _, c := range []struct {
+		name    string
+		payload []byte
+		want    func([]byte) bool
+		anomaly string
+	}{
+		{"prefix of a block", full[:cut+5], func(b []byte) bool { return replyCarries(b, hookio.ActionAsk) }, anomalyStdin},
+		{"complete benign payload", dialects[0].payload("ls -la"), func(b []byte) bool { return len(b) == 0 }, ""},
+		{"complete block payload", full, func(b []byte) bool { return replyCarries(b, hookio.ActionDeny) }, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newSandbox(t, cfgGuardCrash)
+			pr, pw := io.Pipe()
+			t.Cleanup(func() { _ = pw.Close() })
+			go func() { _, _ = pw.Write(c.payload) }() // never closed while the hook waits
+			r := s.supervisedFrom(t, "claude-code", pr, "")
+			if r.code != 0 || !c.want(r.stdout) {
+				t.Fatalf("exit %d reply %q", r.code, r.stdout)
+			}
+			if got := healthReasons(s.ofKind(t, event.KindHealth)); !slices.Equal(got, []string{ReasonStdin}) {
+				t.Fatalf("health %v", got)
+			}
+			var anomaly string
+			for _, a := range s.ofKind(t, event.KindActivity) {
+				if a.Type == TypePayloadAnomaly {
+					anomaly = a.Labels["hook_error"]
+				}
+			}
+			if anomaly != c.anomaly {
+				t.Fatalf("anomaly %q, want %q", anomaly, c.anomaly)
+			}
+		})
+	}
+}
+
+// A worker that starts with less time left than its reply margin still
+// reads the whole payload its supervisor wrote: an empty read would decide
+// "allow". Run directly with a deadline already almost spent, the answer is
+// the rule's deny or, when the evaluation runs out of time, "ask".
+func TestWorkerNearDeadlineReadsWholePayload(t *testing.T) {
+	saved := exitFunc
+	t.Cleanup(func() { exitFunc = saved })
+	exitFunc = func(int) {} // the worker's watchdog must not end the test binary
+	for i := 0; i < 3; i++ {
+		s := newSandbox(t, cfgGuard)
+		d := dialects[0]
+		pr, pw, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pw.Write(d.payload("spoor-test-block now")); err != nil {
+			t.Fatal(err)
+		}
+		pw.Close()
+		deadline := time.Now().Add(10 * time.Millisecond)
+		var out, errb bytes.Buffer
+		code := Run(pr, &out, &errb, []string{"--worker", "--agent", d.agent, "--config", s.cfg,
+			"--deadline", strconv.FormatInt(deadline.UnixNano(), 10)}, OSEnv())
+		pr.Close()
+		if !replyCarries(out.Bytes(), hookio.ActionDeny) && !replyCarries(out.Bytes(), hookio.ActionAsk) {
+			var labels []string
+			for _, a := range s.ofKind(t, event.KindActivity) {
+				labels = append(labels, a.Type+":"+a.Labels["hook_error"])
+			}
+			t.Fatalf("worker with the full block payload in its pipe answered %q (allow) with exit %d; records %v", out.Bytes(), code, labels)
+		}
+	}
+}
+
+// Hooks of parallel tool calls in one session overlap. A hook that loaded
+// the session state before a parallel hook saved a new flag must not write
+// its stale copy over it: the commit sees the newer state and evaluates
+// again on top of it. Ordering is forced with the eval fault seam: the
+// "ls" hook is paused after its first evaluation while the "arm" hook
+// runs to completion.
+func TestConcurrentHooksKeepSessionFlag(t *testing.T) {
+	d := dialects[0]
+	s := newSandbox(t, cfgGuard)
+	saved := faultHook
+	t.Cleanup(func() { faultHook = saved })
+	var (
+		mu      sync.Mutex
+		first   = true
+		reached = make(chan struct{})
+		release = make(chan struct{})
+	)
+	faultHook = func(stage string) {
+		if stage != "eval" {
+			return
+		}
+		mu.Lock()
+		hold := first
+		first = false
+		mu.Unlock()
+		if hold { // the "ls" hook: state loaded and evaluated, not yet saved
+			close(reached)
+			<-release
+		}
+	}
+	bDone := make(chan hookResult, 1)
+	go func() { bDone <- s.worker(t, OSEnv(), d.agent, d.payload("ls -la")) }()
+	<-reached
+	if r := s.worker(t, OSEnv(), d.agent, d.payload("spoor-test-arm")); r.code != 0 {
+		t.Fatalf("arm: exit %d", r.code)
+	}
+	close(release)
+	if r := <-bDone; r.code != 0 || len(r.stdout) != 0 {
+		t.Fatalf("ls: exit %d reply %q", r.code, r.stdout)
+	}
+	faultHook = saved
+	for _, a := range s.ofKind(t, event.KindActivity) {
+		if v := a.Labels["hook_state"]; v != "" {
+			t.Fatalf("hook_state=%s on %s", v, a.Type)
+		}
+	}
+
+	r := s.worker(t, OSEnv(), d.agent, d.payload("spoor-test-armed"))
+	if !replyCarries(r.stdout, hookio.ActionAsk) {
+		t.Fatalf("flag set by a concurrent hook was overwritten by a stale state save; guard rule SPR-TEST-011 did not fire (reply %q)", r.stdout)
+	}
+}
+
+// Many guard hooks of one session at once, half of them arming: the flag
+// survives every interleaving.
+func TestParallelGuardHooksKeepFlag(t *testing.T) {
+	d := dialects[0]
+	s := newSandbox(t, cfgGuard)
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		cmd := "ls -la"
+		if i == 7 {
+			cmd = "spoor-test-arm"
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.worker(t, OSEnv(), d.agent, d.payload(cmd))
+		}()
+	}
+	wg.Wait()
+	if r := s.worker(t, OSEnv(), d.agent, d.payload("spoor-test-armed")); !replyCarries(r.stdout, hookio.ActionAsk) {
+		t.Fatalf("flag lost among parallel hooks: reply %q", r.stdout)
+	}
+}
+
+// A guard that decided "proceed" and then could not append its records
+// (here: no space) still proceeds. The spool failure is a health record,
+// not a prompt on every tool call.
+func TestGuardSpoolFailureKeepsAllow(t *testing.T) {
+	s := newSandbox(t, cfgGuard)
+	d := dialects[0]
+	r := s.supervised(t, d.agent, d.payload("ls -la"), "nospace")
+	if r.code != 0 {
+		t.Fatalf("exit %d", r.code)
+	}
+	if len(r.stdout) != 0 {
+		t.Fatalf("benign command, guard rules matched nothing, but the agent was told %s because the spool append failed", r.stdout)
+	}
+	// The supervisor (whose spool is fine in this test) reports why.
+	if got := healthReasons(s.ofKind(t, event.KindHealth)); !slices.Equal(got, []string{ReasonSpool}) {
+		t.Fatalf("health %v, want [%s]", got, ReasonSpool)
+	}
+	if acts := s.ofKind(t, event.KindActivity); len(acts) != 0 {
+		t.Fatalf("activity appended despite no space: %d", len(acts))
+	}
+}
+
+// One invalid value the hook never reads (heartbeat is a daemon setting)
+// must not drop guard mode: the hook keeps the decoded configuration and
+// labels its records.
+func TestGuardSurvivesUnrelatedConfigError(t *testing.T) {
+	s := newSandbox(t, cfgGuard+"heartbeat: 1s\n")
+	d := dialects[0]
+	r := s.supervised(t, d.agent, d.payload("spoor-test-block now"), "")
+	if r.code != 0 || !replyCarries(r.stdout, hookio.ActionDeny) {
+		t.Fatalf("guard.mode advisory with a block rule, but an invalid daemon-only field (heartbeat) changed the answer: reply %q", r.stdout)
+	}
+	if a := lastActivity(t, s); a.Labels["hook_config"] != "invalid" || a.Labels["hook_mode"] != "guard" {
+		t.Fatalf("labels %v", a.Labels)
+	}
+}
+
+// A suppression whose bare-date expiry is today is still in force, as it
+// is in the daemon ("through the end of that day").
+func TestSuppressionExpiryMatchesDaemon(t *testing.T) {
+	today := time.Now().UTC().Format("2006-01-02")
+	cfg := cfgGuard + "  suppressions:\n    - rule: SPR-TEST-001\n      reason: approved through " + today + "\n      expires: \"" + today + "\"\n"
+	s := newSandbox(t, cfg)
+	d := dialects[0]
+	r := s.supervised(t, d.agent, d.payload("spoor-test-block now"), "")
+	if r.code != 0 || replyCarries(r.stdout, hookio.ActionDeny) {
+		t.Fatalf("suppression expiring today (%s) is in force for the daemon, but the hook answered: exit %d %s", today, r.code, r.stdout)
+	}
+	// Yesterday's has expired in both.
+	yesterday := time.Now().UTC().Add(-24 * time.Hour).Format("2006-01-02")
+	s = newSandbox(t, strings.ReplaceAll(cfg, today, yesterday))
+	if r := s.supervised(t, d.agent, d.payload("spoor-test-block now"), ""); !replyCarries(r.stdout, hookio.ActionDeny) {
+		t.Fatalf("expired suppression still honoured: %s", r.stdout)
 	}
 }

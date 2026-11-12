@@ -9,7 +9,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "'C:\\spoor\\spoor.exe' hook --agent codex",
+            "command": "[ -x 'C:\\spoor\\spoor.exe' ] || exit 0; exec 'C:\\spoor\\spoor.exe' hook --agent codex",
             "commandWindows": "C:\\spoor\\spoor.exe hook --agent codex",
             "timeout": 10
           }
@@ -21,7 +21,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "'C:\\spoor\\spoor.exe' hook --agent codex",
+            "command": "[ -x 'C:\\spoor\\spoor.exe' ] || exit 0; exec 'C:\\spoor\\spoor.exe' hook --agent codex",
             "commandWindows": "C:\\spoor\\spoor.exe hook --agent codex",
             "timeout": 10
           }
@@ -33,7 +33,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "'C:\\spoor\\spoor.exe' hook --agent codex",
+            "command": "[ -x 'C:\\spoor\\spoor.exe' ] || exit 0; exec 'C:\\spoor\\spoor.exe' hook --agent codex",
             "commandWindows": "C:\\spoor\\spoor.exe hook --agent codex",
             "timeout": 10
           }
@@ -45,7 +45,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "'C:\\spoor\\spoor.exe' hook --agent codex",
+            "command": "[ -x 'C:\\spoor\\spoor.exe' ] || exit 0; exec 'C:\\spoor\\spoor.exe' hook --agent codex",
             "commandWindows": "C:\\spoor\\spoor.exe hook --agent codex",
             "timeout": 10
           }
@@ -57,7 +57,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "'C:\\spoor\\spoor.exe' hook --agent codex",
+            "command": "[ -x 'C:\\spoor\\spoor.exe' ] || exit 0; exec 'C:\\spoor\\spoor.exe' hook --agent codex",
             "commandWindows": "C:\\spoor\\spoor.exe hook --agent codex",
             "timeout": 10
           }
@@ -69,7 +69,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "'C:\\spoor\\spoor.exe' hook --agent codex",
+            "command": "[ -x 'C:\\spoor\\spoor.exe' ] || exit 0; exec 'C:\\spoor\\spoor.exe' hook --agent codex",
             "commandWindows": "C:\\spoor\\spoor.exe hook --agent codex",
             "timeout": 10
           }
@@ -81,7 +81,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "'C:\\spoor\\spoor.exe' hook --agent codex",
+            "command": "[ -x 'C:\\spoor\\spoor.exe' ] || exit 0; exec 'C:\\spoor\\spoor.exe' hook --agent codex",
             "commandWindows": "C:\\spoor\\spoor.exe hook --agent codex",
             "timeout": 10
           }
@@ -93,7 +93,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "'C:\\spoor\\spoor.exe' hook --agent codex",
+            "command": "[ -x 'C:\\spoor\\spoor.exe' ] || exit 0; exec 'C:\\spoor\\spoor.exe' hook --agent codex",
             "commandWindows": "C:\\spoor\\spoor.exe hook --agent codex",
             "timeout": 10
           }
@@ -105,7 +105,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "'C:\\spoor\\spoor.exe' hook --agent codex",
+            "command": "[ -x 'C:\\spoor\\spoor.exe' ] || exit 0; exec 'C:\\spoor\\spoor.exe' hook --agent codex",
             "commandWindows": "C:\\spoor\\spoor.exe hook --agent codex",
             "timeout": 10,
             "async": true
@@ -118,7 +118,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "'C:\\spoor\\spoor.exe' hook --agent codex",
+            "command": "[ -x 'C:\\spoor\\spoor.exe' ] || exit 0; exec 'C:\\spoor\\spoor.exe' hook --agent codex",
             "commandWindows": "C:\\spoor\\spoor.exe hook --agent codex",
             "timeout": 3
           }

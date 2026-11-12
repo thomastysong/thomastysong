@@ -36,7 +36,7 @@ const (
 	// Session state is saved under a lock with a bounded wait, retrying
 	// the evaluation when another hook of the session saved in between.
 	stateLockName    = ".hook-state.lock"
-	stateLockWait    = 50 * time.Millisecond
+	stateLockWait    = 100 * time.Millisecond
 	lockPoll         = time.Millisecond
 	maxStateAttempts = 4
 	minRetryBudget   = 2 * replyMargin
@@ -100,7 +100,8 @@ func runWorker(stdin io.Reader, stdout io.Writer, o opts, env Env) int {
 	if w.deadline.IsZero() {
 		w.deadline = start.Add(hardDeadline(w.cfg, w.m))
 	} else {
-		armWatchdog(w.deadline)
+		// Stopped on return: it is for a worker that never returns.
+		defer armWatchdog(w.deadline).Stop()
 	}
 	if !w.m.enabled {
 		w.answer(stdout, nil)
@@ -153,8 +154,8 @@ func (w *work) answer(stdout io.Writer, reply []byte) {
 	}
 }
 
-func armWatchdog(deadline time.Time) {
-	time.AfterFunc(max0(time.Until(deadline)+watchdogSlack), func() { exitFunc(exitWatchdog) })
+func armWatchdog(deadline time.Time) *time.Timer {
+	return time.AfterFunc(max0(time.Until(deadline)+watchdogSlack), func() { exitFunc(exitWatchdog) })
 }
 
 func (w *work) run(stdout io.Writer) int {
@@ -417,8 +418,9 @@ func sessionsOf(evs []*event.Event) []sessRef {
 // after the other one; a plain load-evaluate-save would let a hook that
 // loaded early overwrite a flag a parallel hook had just set, and the
 // guard rule requiring it would silently stop firing. The lock is held
-// only for the compare and the write, never during evaluation, and waited
-// for at most stateLockWait.
+// only for the compare and the write, except in the last round, which
+// holds it from load to save so a hook of a busy session still makes
+// progress. Every wait for the lock is bounded (lockWait).
 func (w *work) evaluate(evs []*event.Event) (r evalResult) {
 	set, degraded, err := loadRuleSet(w.cfg, w.m.guard && !w.m.detect)
 	if err != nil || set == nil {
@@ -427,34 +429,55 @@ func (w *work) evaluate(evs []*event.Event) (r evalResult) {
 	}
 	sessions := sessionsOf(evs)
 	for attempt := 1; ; attempt++ {
-		unlabelAll(evs, "hook_state", "guard_timeout")
-		loaded := w.loadStates(sessions)
-		var supDegraded bool
-		r, supDegraded = w.evalOnce(set, evs, sessions, loaded)
-		if degraded || supDegraded {
-			labelAll(evs, "hook_rules", "degraded")
+		final := attempt >= maxStateAttempts
+		lock := lockTry
+		var unlock func()
+		if final && w.spool != nil {
+			lock = lockFailed
+			if un, ok := w.lockStates(); ok {
+				unlock, lock = un, lockHeld
+			}
 		}
-		if w.spool == nil || len(r.states) == 0 {
-			return r
+		var c stateCommit
+		r, c = w.round(set, degraded, evs, sessions, lock)
+		if unlock != nil {
+			unlock()
 		}
-		switch w.commitStates(sessions, loaded, r.states) {
+		switch c {
 		case stateSaved:
-			return r
 		case stateUnlocked:
 			labelAll(evs, "hook_state", "unlocked")
-			return r
 		case stateSaveFailed:
 			r.stateErr = true
-			return r
-		}
-		// Another hook of the session saved in between.
-		if attempt >= maxStateAttempts || time.Until(w.deadline) < minRetryBudget {
+		case stateConflict:
+			// Another hook of the session saved in between.
+			if !final && time.Until(w.deadline) >= minRetryBudget {
+				continue
+			}
 			// This result stands, but its state is not saved over the
 			// newer one: a later hook builds on that.
 			labelAll(evs, "hook_state", "conflict")
-			return r
 		}
+		return r
 	}
+}
+
+// round is one evaluation of the events on top of the saved state, and
+// the attempt to save the state it produced.
+func (w *work) round(set *rules.Set, degraded bool, evs []*event.Event, sessions []sessRef, lock lockMode) (evalResult, stateCommit) {
+	unlabelAll(evs, "hook_state", "guard_timeout")
+	var loaded map[string]loadedState
+	if w.spool != nil {
+		loaded = w.loadStates(sessions)
+	}
+	r, supDegraded := w.evalOnce(set, evs, sessions, loaded)
+	if degraded || supDegraded {
+		labelAll(evs, "hook_rules", "degraded")
+	}
+	if w.spool == nil || len(r.states) == 0 {
+		return r, stateSaved
+	}
+	return r, w.commitStates(sessions, loaded, r.states, lock)
 }
 
 func (w *work) loadStates(sessions []sessRef) map[string]loadedState {
@@ -512,14 +535,26 @@ const (
 	stateConflict
 )
 
+// lockMode is how commitStates treats the state lock.
+type lockMode int
+
+const (
+	lockTry    lockMode = iota // take it for the compare and the write
+	lockHeld                   // the caller holds it
+	lockFailed                 // the caller could not get it in time
+)
+
 // commitStates saves states if the state files still hold what this hook
 // loaded. When the lock cannot be had in time (any process of the user can
 // hold it), the compare and the save run unlocked: the window for a lost
 // update is then small again, and the records say so.
-func (w *work) commitStates(sessions []sessRef, loaded map[string]loadedState, states []savedState) stateCommit {
-	unlock, locked := w.lockStates()
-	if locked {
-		defer unlock()
+func (w *work) commitStates(sessions []sessRef, loaded map[string]loadedState, states []savedState, lock lockMode) stateCommit {
+	locked := lock == lockHeld
+	if lock == lockTry {
+		if unlock, ok := w.lockStates(); ok {
+			defer unlock()
+			locked = true
+		}
 	}
 	for _, s := range sessions {
 		b, ok := w.spool.LoadState(s.agent, s.session)
@@ -538,6 +573,9 @@ func (w *work) commitStates(sessions []sessRef, loaded map[string]loadedState, s
 	return stateSaved
 }
 
+// lockStates takes the session-state lock, waiting at most stateLockWait
+// and never more than half the time left, so a lock held by a stuck or
+// hostile process delays the answer but cannot turn it into a timeout.
 func (w *work) lockStates() (func(), bool) {
 	if w.spoolDir == "" {
 		return nil, false
@@ -546,7 +584,7 @@ func (w *work) lockStates() (func(), bool) {
 	if os.MkdirAll(d, 0o700) != nil {
 		return nil, false
 	}
-	return tryLock(filepath.Join(d, stateLockName), max0(min(stateLockWait, time.Until(w.deadline)-replyMargin)))
+	return tryLock(filepath.Join(d, stateLockName), max0(min(stateLockWait, (time.Until(w.deadline)-replyMargin)/2)))
 }
 
 func rank(resp string) int {

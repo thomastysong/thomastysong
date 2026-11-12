@@ -112,7 +112,7 @@ func installNotes(t target, o Options, rel related, n *notes) {
 		}
 	case "copilot":
 		// github/docs hooks-reference.md, "Exit codes for command hooks".
-		n.add("a preToolUse hook that cannot start or crashes denies the tool call (only timeouts fail open): uninstall before removing the spoor binary")
+		n.add("a preToolUse hook that crashes or exits non-zero denies the tool call (only timeouts fail open); the command checks for the spoor binary first and exits 0 when it is missing")
 		if managed {
 			n.add("Copilot CLI loads policy files only while they are root-owned and not group- or world-writable")
 		}

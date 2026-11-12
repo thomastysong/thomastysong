@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -279,6 +280,13 @@ type hookResult struct {
 // this test binary in a child process, with fault injected.
 func (s *sandbox) supervised(t *testing.T, agent string, payload []byte, fault string, extra ...string) hookResult {
 	t.Helper()
+	return s.supervisedFrom(t, agent, bytes.NewReader(payload), fault, extra...)
+}
+
+// supervisedFrom is supervised with an arbitrary stdin. It returns once the
+// supervisor's health appends are done, so the spool can be read at once.
+func (s *sandbox) supervisedFrom(t *testing.T, agent string, stdin io.Reader, fault string, extra ...string) hookResult {
+	t.Helper()
 	t.Setenv(envRole, "hook")
 	t.Setenv(envFault, fault)
 	exe, err := os.Executable()
@@ -290,8 +298,10 @@ func (s *sandbox) supervised(t *testing.T, agent string, payload []byte, fault s
 	var out, errb bytes.Buffer
 	args := append([]string{"--agent", agent, "--config", s.cfg}, extra...)
 	start := time.Now()
-	code := Run(bytes.NewReader(payload), &out, &errb, args, env)
-	return hookResult{stdout: out.Bytes(), stderr: errb.Bytes(), code: code, dur: time.Since(start)}
+	code := Run(stdin, &out, &errb, args, env)
+	dur := time.Since(start)
+	healthPending.Wait()
+	return hookResult{stdout: out.Bytes(), stderr: errb.Bytes(), code: code, dur: dur}
 }
 
 // worker runs the worker in this process (no subprocess, no watchdog).

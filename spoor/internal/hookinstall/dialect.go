@@ -29,6 +29,10 @@ type params struct {
 	timeout    int
 	guard      bool
 	failClosed bool
+	// legacy renders the command lines of releases before the
+	// missing-binary guard (see guardMode); Status uses it to name such
+	// entries. Install never writes it.
+	legacy bool
 }
 
 // entry is the registration for one hook event.
@@ -114,6 +118,15 @@ func (d dialectSpec) entries(p params) ([]entry, bool) {
 // background hooks).
 // VERIFIED: code.claude.com/docs/en/hooks.md, sections "Command hook
 // fields", "Exec form and shell form", "Block the action when a hook fails".
+//
+// There is no shell, so there is no missing-binary guard either: a missing
+// binary is a spawn failure, which Claude Code counts as a hook that
+// "can't start" and treats as a non-blocking error (the action goes ahead
+// with a "hook error" notice), except with "onFailure": "block", where
+// blocking is what the operator asked for. VERIFIED: hooks.md "Other exit
+// codes" ("a hook that can't start is a non-blocking error too") and
+// "Block the action when a hook fails" ("Without onFailure set, the same
+// missing script is a non-blocking error"), research/dl_hooks/hooks.md.
 func claudeHandler(p params, ev hookio.HookEvent, async bool) jobj {
 	h := jobj{
 		{"type", "command"},
@@ -138,9 +151,14 @@ const codexSessionEndMax = 3
 // codexHandler writes one string per shell field. Codex runs "command"
 // through the user's login shell (<shell> -c on unix) and "commandWindows"
 // through pwsh or powershell -NoProfile -Command on Windows; $SHELL -lc and
-// %COMSPEC% /C are only its fallbacks. The Windows string is therefore
-// written bare when the path needs no quoting (valid in PowerShell and
-// cmd.exe alike) and as a PowerShell call otherwise. "timeout" is in
+// %COMSPEC% /C are its fallbacks (the latter also whenever the session has
+// no single local environment). "command" carries the POSIX guard. The
+// Windows string is written bare when the path needs no quoting (valid in
+// PowerShell and cmd.exe alike, but unguarded) and as the guarded
+// PowerShell form otherwise; see windowsCommand. Codex reads a non-zero
+// exit other than 2 as a failed, non-blocking run and exit 2 with stderr as
+// a block (codex-rs/hooks/src/events/pre_tool_use.rs, read 2026-11-12), so
+// a missing binary there was noise rather than a denial. "timeout" is in
 // seconds.
 // VERIFIED: codex-rs/core/config.schema.json (HookHandlerConfig),
 // codex-rs/hooks/src/engine/discovery.rs, codex-rs/core/src/session/mod.rs
@@ -148,10 +166,10 @@ const codexSessionEndMax = 3
 func codexHandler(p params, ev hookio.HookEvent, async bool) jobj {
 	h := jobj{
 		{"type", "command"},
-		{"command", posixCommand(p.binary, p.agentID)},
+		{"command", posixCommand(p.binary, p.agentID, p.modeFor(false))},
 	}
 	if p.goos == "windows" {
-		h = append(h, jfield{"commandWindows", windowsCommand(p.binary, p.agentID)})
+		h = append(h, jfield{"commandWindows", windowsCommand(p.binary, p.agentID, p.modeFor(false))})
 	}
 	t := p.timeout
 	if ev.Name == "SessionEnd" && t > codexSessionEndMax {
@@ -166,7 +184,10 @@ func codexHandler(p params, ev hookio.HookEvent, async bool) jobj {
 
 // copilotHandler writes both shell fields: Copilot CLI runs "bash" on unix
 // and "powershell" on Windows. "timeoutSec" is in seconds. Timeouts always
-// fail open, including for policy hooks.
+// fail open, including for policy hooks, but a preToolUse command hook
+// that crashes or exits non-zero denies the tool call ("Exit codes for
+// command hooks"), so both fields carry the missing-binary guard: without
+// it a removed or quarantined binary would deny every tool call.
 // VERIFIED: github/docs content/copilot/reference/hooks-reference.md,
 // "Command hooks" and "Exit codes for command hooks", re-read 2026-11-12.
 // The CLI now also accepts an exec form ("exec" plus "args"), but the page
@@ -176,8 +197,8 @@ func codexHandler(p params, ev hookio.HookEvent, async bool) jobj {
 func copilotHandler(p params, ev hookio.HookEvent, async bool) jobj {
 	return jobj{
 		{"type", "command"},
-		{"bash", posixCommand(p.binary, p.agentID)},
-		{"powershell", pwshCommand(p.binary, p.agentID)},
+		{"bash", posixCommand(p.binary, p.agentID, p.modeFor(false))},
+		{"powershell", pwshCommand(p.binary, p.agentID, p.modeFor(false))},
 		{"timeoutSec", p.timeout},
 	}
 }
@@ -188,10 +209,18 @@ func copilotHandler(p params, ev hookio.HookEvent, async bool) jobj {
 // VERIFIED: google-gemini/gemini-cli docs/hooks/index.md (configuration
 // schema) and packages/core/src/utils/shell-utils.ts (getShellConfiguration),
 // read 2026-11-11.
+//
+// Gemini CLI turns output that is not JSON into a decision by exit code,
+// and every code other than 0 and 1 is a deny, so the shell's exit 127 for
+// a missing binary would deny the event: the command carries the guard. On
+// PowerShell it appends "; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }"
+// to the command, which the guarded form never reaches.
+// VERIFIED: packages/core/src/hooks/hookRunner.ts (convertPlainTextToHookOutput
+// and the PowerShell suffix), redteam/verify-platform-parity/dl/gemini-hookRunner.ts.
 func geminiHandler(p params, ev hookio.HookEvent, async bool) jobj {
-	cmd := posixCommand(p.binary, p.agentID)
+	cmd := posixCommand(p.binary, p.agentID, p.modeFor(false))
 	if p.goos == "windows" {
-		cmd = pwshCommand(p.binary, p.agentID)
+		cmd = pwshCommand(p.binary, p.agentID, p.modeFor(false))
 	}
 	return jobj{
 		{"name", sensorName},
@@ -208,17 +237,23 @@ func geminiHandler(p params, ev hookio.HookEvent, async bool) jobj {
 // "failClosed" and the shell Cursor uses on Windows are not confirmed
 // against vendor documentation. On Windows the command is therefore written
 // without quotes whenever the path allows it, which both cmd.exe and
-// PowerShell accept.
+// PowerShell accept (unguarded, see windowsCommand).
+//
+// A handler marked failClosed gets no missing-binary guard: the operator
+// asked for a failing hook to block, and the guard would turn the most
+// likely failure, a removed binary, into a silent allow.
 func cursorHandler(p params, ev hookio.HookEvent, async bool) jobj {
-	cmd := posixCommand(p.binary, p.agentID)
+	failClosed := p.failClosed && p.guard && ev.Blocking
+	m := p.modeFor(failClosed)
+	cmd := posixCommand(p.binary, p.agentID, m)
 	if p.goos == "windows" {
-		cmd = windowsCommand(p.binary, p.agentID)
+		cmd = windowsCommand(p.binary, p.agentID, m)
 	}
 	h := jobj{
 		{"command", cmd},
 		{"timeout", p.timeout},
 	}
-	if p.failClosed && p.guard && ev.Blocking {
+	if failClosed {
 		h = append(h, jfield{"failClosed", true})
 	}
 	return h

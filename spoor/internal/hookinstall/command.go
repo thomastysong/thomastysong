@@ -2,6 +2,7 @@ package hookinstall
 
 import (
 	"strings"
+	"unicode/utf8"
 )
 
 // posixQuote wraps s in single quotes. Inside single quotes sh, bash, zsh and
@@ -21,8 +22,7 @@ func pwshQuote(s string) string {
 	b.Grow(len(s) + 2)
 	b.WriteByte('\'')
 	for _, r := range s {
-		switch r {
-		case '\'', '‘', '’', '‚', '‛':
+		if isPwshQuote(r) {
 			b.WriteRune(r)
 		}
 		b.WriteRune(r)
@@ -31,15 +31,87 @@ func pwshQuote(s string) string {
 	return b.String()
 }
 
-// posixCommand is the hook command line for a POSIX shell.
-func posixCommand(bin, agent string) string {
-	return posixQuote(bin) + hookMarker + agent
+// guardMode selects how a shell command line treats a spoor binary that is
+// not there.
+type guardMode uint8
+
+const (
+	// guarded checks for the binary first and exits 0 without output when
+	// it is missing, not executable or not a file. A shell that cannot find
+	// a program exits 126/127, and Copilot CLI denies a preToolUse call on
+	// any non-zero exit while Gemini CLI reads a non-JSON exit 127 as a
+	// deny: a removed, half-replaced or quarantined binary would otherwise
+	// block every tool call. The check never changes a status spoor itself
+	// returns (exec hands over the process; PowerShell exits with
+	// $LASTEXITCODE).
+	guarded guardMode = iota
+	// strict has no check: the handler asks the agent to block when the
+	// hook fails (Cursor failClosed), and a missing binary is exactly the
+	// failure the operator asked to be blocked on.
+	strict
+	// legacy is what releases before the guard wrote. It is rendered only
+	// to recognise such entries in Status.
+	legacy
+)
+
+// modeFor picks the form for one handler.
+func (p params) modeFor(failClosed bool) guardMode {
+	switch {
+	case p.legacy:
+		return legacy
+	case failClosed:
+		return strict
+	}
+	return guarded
 }
 
-// pwshCommand is the hook command line for PowerShell. A quoted path is a
-// string expression there, not a command: it needs the call operator.
-func pwshCommand(bin, agent string) string {
-	return "& " + pwshQuote(bin) + hookMarker + agent
+// Shell fragments of the guarded forms. binaryOf parses exactly these.
+const (
+	posixGuardHead = "[ -x "
+	posixGuardTail = " ] || exit 0; "
+	posixExec      = "exec "
+	pwshGuardHead  = "if (Test-Path -LiteralPath "
+	pwshGuardMid   = " -PathType Leaf) { & "
+	pwshGuardTail  = "; exit $LASTEXITCODE } else { exit 0 }"
+)
+
+// posixCommand is the hook command line for a POSIX shell:
+//
+//	[ -x '<bin>' ] || exit 0; exec '<bin>' hook --agent <id>
+//
+// `[` is a builtin in sh, dash, bash, zsh, ksh and fish 3, so the check
+// starts no process. exec replaces the shell with spoor, so stdin, stdout,
+// signals and the exit status are spoor's own; nothing follows the call
+// that could rewrite its status (no `|| true`).
+func posixCommand(bin, agent string, m guardMode) string {
+	q := posixQuote(bin)
+	switch m {
+	case legacy:
+		return q + hookMarker + agent
+	case strict:
+		return posixExec + q + hookMarker + agent
+	}
+	return posixGuardHead + q + posixGuardTail + posixExec + q + hookMarker + agent
+}
+
+// pwshCommand is the hook command line for PowerShell:
+//
+//	if (Test-Path -LiteralPath '<bin>' -PathType Leaf) { & '<bin>' hook --agent <id>; exit $LASTEXITCODE } else { exit 0 }
+//
+// A quoted path is a string expression there, not a command, so it needs
+// the call operator; -LiteralPath takes the path verbatim (no wildcard
+// expansion of [ ] in it). exit $LASTEXITCODE is also what keeps spoor's
+// status: with -Command, PowerShell turns any native exit code other than
+// 0 or 1 into 1 unless the script exits with it explicitly
+// (about_Pwsh.md, "-Command", re-read 2026-11-12), which loses Codex's
+// exit-2 block. The strict and legacy forms are the bare call, which
+// exits 1 when the binary is missing.
+func pwshCommand(bin, agent string, m guardMode) string {
+	q := pwshQuote(bin)
+	if m != guarded {
+		return "& " + q + hookMarker + agent
+	}
+	return pwshGuardHead + q + pwshGuardMid + q + hookMarker + agent + pwshGuardTail
 }
 
 // bareCommand is the unquoted form, valid in cmd.exe and PowerShell alike.
@@ -49,15 +121,19 @@ func bareCommand(bin, agent string) string {
 }
 
 // windowsCommand is the command line for a Windows field whose shell is
-// PowerShell by default but may be cmd.exe: bare when the path allows it,
-// else the PowerShell call form (a path with spaces cannot be written so
-// that both shells accept it; the package doc recommends a path without
-// spaces for that reason).
-func windowsCommand(bin, agent string) string {
+// PowerShell by default but may be cmd.exe (Codex commandWindows, Cursor).
+// A path that needs no quoting is written bare, which both shells run.
+// That form has no missing-binary guard: the guard needs `if`, and no
+// single line found here is valid in cmd.exe, Windows PowerShell 5.1 and
+// PowerShell 7 alike (5.1 has no && or ||, and both parsers reject the
+// other's `if`). Any other path gets the PowerShell form (a path with
+// spaces cannot be written so that both shells accept it; the package doc
+// recommends a path without spaces for that reason).
+func windowsCommand(bin, agent string, m guardMode) string {
 	if plainWindowsPath(bin) {
 		return bareCommand(bin, agent)
 	}
-	return pwshCommand(bin, agent)
+	return pwshCommand(bin, agent, m)
 }
 
 // plainWindowsPath reports whether a Windows path can be written without
@@ -167,39 +243,113 @@ func classify(lines []string) (spoor bool, sensor string) {
 }
 
 // binaryOf extracts the executable path from a spoor command line in any of
-// the forms this package writes: exec form (path, then arguments), POSIX
-// single quotes, PowerShell call operator, or bare. It returns "" when the
-// line has another shape.
+// the forms this package writes or wrote before: exec form (path, then
+// arguments), POSIX single quotes with or without the guard and exec,
+// PowerShell call operator with or without the Test-Path guard, or bare.
+// In the guarded forms the checked path and the run path must be the same.
+// It returns "" when the line has another shape.
 func binaryOf(line string) string {
 	i := strings.Index(line, hookMarker)
 	if i < 0 {
 		return ""
 	}
 	exe := strings.TrimSpace(line[:i])
-	if strings.HasPrefix(exe, "& ") {
-		q := strings.TrimSpace(exe[2:])
-		if len(q) < 2 || q[0] != '\'' || q[len(q)-1] != '\'' {
+	switch {
+	case strings.HasPrefix(exe, posixGuardHead):
+		checked, rest, ok := cutPosixQuoted(exe[len(posixGuardHead):])
+		if !ok || !strings.HasPrefix(rest, posixGuardTail+posixExec) {
 			return ""
 		}
-		return unquoteDoubled(q[1 : len(q)-1])
-	}
-	if len(exe) >= 2 && exe[0] == '\'' && exe[len(exe)-1] == '\'' {
-		return strings.ReplaceAll(exe[1:len(exe)-1], `'\''`, "'")
+		run, rest, ok := cutPosixQuoted(rest[len(posixGuardTail+posixExec):])
+		if !ok || rest != "" || run != checked {
+			return ""
+		}
+		return run
+	case strings.HasPrefix(exe, pwshGuardHead):
+		checked, rest, ok := cutPwshQuoted(exe[len(pwshGuardHead):])
+		if !ok || !strings.HasPrefix(rest, pwshGuardMid) {
+			return ""
+		}
+		run, rest, ok := cutPwshQuoted(rest[len(pwshGuardMid):])
+		if !ok || rest != "" || run != checked {
+			return ""
+		}
+		return run
+	case strings.HasPrefix(exe, "& "):
+		run, rest, ok := cutPwshQuoted(strings.TrimSpace(exe[2:]))
+		if !ok || rest != "" {
+			return ""
+		}
+		return run
+	case strings.HasPrefix(exe, posixExec+"'"):
+		run, rest, ok := cutPosixQuoted(exe[len(posixExec):])
+		if !ok || rest != "" {
+			return ""
+		}
+		return run
+	case strings.HasPrefix(exe, "'"):
+		run, rest, ok := cutPosixQuoted(exe)
+		if !ok || rest != "" {
+			return ""
+		}
+		return run
 	}
 	return exe
 }
 
-func unquoteDoubled(s string) string {
-	var b strings.Builder
-	rs := []rune(s)
-	for i := 0; i < len(rs); i++ {
-		b.WriteRune(rs[i])
-		switch rs[i] {
-		case '\'', '‘', '’', '‚', '‛':
-			if i+1 < len(rs) && rs[i+1] == rs[i] {
-				i++
-			}
-		}
+// cutPosixQuoted reads one word written by posixQuote at the start of s:
+// single-quoted runs joined by \' (the '\'' sequence for an apostrophe).
+func cutPosixQuoted(s string) (val, rest string, ok bool) {
+	if !strings.HasPrefix(s, "'") {
+		return "", s, false
 	}
-	return b.String()
+	var b strings.Builder
+	for {
+		end := strings.IndexByte(s[1:], '\'')
+		if end < 0 {
+			return "", s, false
+		}
+		b.WriteString(s[1 : 1+end])
+		s = s[end+2:]
+		if !strings.HasPrefix(s, `\''`) {
+			return b.String(), s, true
+		}
+		b.WriteByte('\'')
+		s = s[2:]
+	}
+}
+
+// cutPwshQuoted reads one PowerShell verbatim string written by pwshQuote
+// at the start of s: any single-quote character doubled stands for itself,
+// any other one ends the string.
+func cutPwshQuoted(s string) (val, rest string, ok bool) {
+	if !strings.HasPrefix(s, "'") {
+		return "", s, false
+	}
+	var b strings.Builder
+	for i := 1; i < len(s); {
+		r, n := utf8.DecodeRuneInString(s[i:])
+		if !isPwshQuote(r) {
+			// Copy bytes, not runes: an invalid byte must not turn into
+			// U+FFFD and name another file.
+			b.WriteString(s[i : i+n])
+			i += n
+			continue
+		}
+		if r2, n2 := utf8.DecodeRuneInString(s[i+n:]); r2 == r && n2 > 0 {
+			b.WriteString(s[i : i+n])
+			i += n + n2
+			continue
+		}
+		return b.String(), s[i+n:], true
+	}
+	return "", s, false
+}
+
+func isPwshQuote(r rune) bool {
+	switch r {
+	case '\'', '‘', '’', '‚', '‛':
+		return true
+	}
+	return false
 }

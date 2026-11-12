@@ -19,11 +19,14 @@
 //   - The hook never writes to stderr: agents show it to the user or the
 //     model, and Codex and Gemini read stderr as the block reason.
 //   - stdin is read with a cap (limits.max_hook_input_bytes, at most
-//     hookio.MaxInput) and a time bound. A payload that cannot be decoded
-//     (empty, malformed, over the cap, nested deeper than 64 levels, from an
-//     unknown agent) produces a TypePayloadAnomaly activity record with its
-//     size and digest instead of nothing; hookio's salvage events for
-//     oversized and over-nested payloads are kept as well.
+//     hookio.MaxInput) and a time bound (half the hard deadline). A payload
+//     that cannot be decoded (empty, malformed, over the cap, nested deeper
+//     than 64 levels, from an unknown agent, or cut short because the agent
+//     had not closed stdin in time) produces a TypePayloadAnomaly activity
+//     record instead of nothing, with the size and SHA-256 of every byte the
+//     agent sent (bytes drained past the cap are counted and hashed, not
+//     only the kept prefix); hookio's salvage events for oversized and
+//     over-nested payloads are kept as well.
 //   - Payloads are decoded into maps by hookio, never into structs, and no
 //     path from a payload is ever opened.
 //   - Every record carries Host (platform.HostInfo), User (the OS identity
@@ -54,17 +57,30 @@
 // goroutine, a stack overflow, concurrent map writes and a deadlock all end
 // a Go program with status 2. So Run is a supervisor. It checks the kill
 // switch, reads the config and stdin, and re-executes its own binary as a
-// worker (`spoor hook --worker ...`, stdin piped, stdout piped, stderr on
-// the null device) under a hard deadline: guard.deadline in guard mode
-// (floor MinGuardDeadline, cap 10 s), ObserveDeadline (2 s) otherwise. It
-// forwards the worker's stdout only when it is empty after a clean exit or
-// exactly one complete JSON object of at most MaxReply bytes; in every other
-// case (worker missing, killed, crashed, hung, partial or oversized output)
-// it answers with the dialect's allow-shaped reply (empty stdout) in observe
-// mode or the dialect's "ask" in guard mode, appends a health.error record
-// (Reason* constants) to the spool when it can, and exits 0. The worker
-// writes its reply before appending records, so a decision survives a
-// failure in the spool write.
+// worker (`spoor hook --worker --framed ...`, stdin piped, stdout piped,
+// stderr on the null device) under a hard deadline: guard.deadline in
+// guard mode (floor MinGuardDeadline, cap 10 s), ObserveDeadline (2 s)
+// otherwise. The worker writes its reply, then a fixed end marker, in one
+// write before it appends any record; the marker makes the decision final,
+// an empty one ("proceed") included, whatever becomes of the worker
+// afterwards. So a full disk, an unsafe spool directory or a spool lock
+// held by another process cost the records (and a health record), never
+// the answer: a guard that decided "proceed" does not turn into a prompt,
+// and a deny is forwarded even when the worker is then killed at the
+// deadline. Without the marker the supervisor forwards exactly one
+// complete JSON object of at most MaxReply bytes, or an empty reply after
+// a clean exit; in every other case (worker missing, killed, crashed, hung,
+// partial or oversized output) it answers with the dialect's allow-shaped
+// reply (empty stdout) in observe mode or the dialect's "ask" in guard
+// mode, and exits 0.
+//
+// The supervisor touches the spool only after its reply is written: its
+// health.error records (Reason* constants) are appended then, with a wait
+// of at most 250 ms, because spool.Append waits for the spool's lock
+// without a timeout and any process of the user can hold that lock (a
+// stopped hook, or a model told to run `flock .../spool/.lock sleep inf`).
+// The worker's own appends are bounded the same way when it runs without a
+// supervisor.
 //
 // The supervisor re-executes only itself (/proc/self/exe on Linux,
 // os.Executable elsewhere) with os.StartProcess; nothing found on disk or in
@@ -77,22 +93,38 @@
 //   - Observe (guard.mode off, sources.hooks.detect_in_hook off; the
 //     default): no rules are loaded. Parse, stamp, append, exit. The reply
 //     is empty.
+//
 //   - Guard (guard.mode advisory): the guard subset of the rules
 //     (rules.Set.GuardSubset of embedded + installed bundle + rules.dirs,
 //     minus rules.disable) is evaluated with session state carried through
 //     the spool's state files (ImportSession, Eval, ExportSession). The
 //     strongest response is the answer, capped by guard.max_response. An
-//     evaluation that times out, rule content that cannot be loaded, and a
-//     payload too large or too deep to inspect answer "ask" on an event the
-//     agent gates. Findings are not spooled in this mode (the daemon
-//     re-detects from the activity); the activity records what the agent was
-//     told (labels guard_reply, guard_rule; Outcome.Decision with
+//     evaluation that times out, rule content that cannot be loaded, a
+//     payload too large or too deep to inspect, and a payload that did not
+//     parse after the agent failed to close stdin in time answer "ask" on
+//     an event the agent gates. Findings are not spooled in this mode (the
+//     daemon re-detects from the activity); the activity records what the
+//     agent was told (labels guard_reply, guard_rule; Outcome.Decision with
 //     DecisionSource "spoor" when the reply carried the decision).
+//
+//     Hooks of parallel tool calls in one session run at the same time, so
+//     session state is saved optimistically: under a lock file in the
+//     state directory, and only when the state is still what this hook
+//     loaded; otherwise the events are evaluated again on the newer state
+//     (at most four rounds, the last holding the lock from load to save).
+//     A flag one hook sets is never overwritten by a parallel hook's stale
+//     copy. Every wait for the lock is bounded; when it cannot be had the
+//     state is saved without it and the records carry hook_state=unlocked
+//     (hook_state=conflict when this hook's state was not saved over a
+//     newer one, hook_state=rejected for a state file the engine refused).
+//
 //   - In-hook detection (sources.hooks.detect_in_hook, for daemonless,
 //     container and CI use): the full rule set is evaluated and its findings
-//     (and privacy.Policy.ContextFor records when privacy.context_events >
-//     0) are appended to the spool after privacy.Policy.Emit, without local
-//     content, with integrity "user". A daemon reading the spool refuses
+//     at or above rules.min_class (and, for findings and alerts,
+//     privacy.Policy.ContextFor records when privacy.context_events > 0;
+//     the same floor and context rule as the daemon) are appended to the
+//     spool after privacy.Policy.Emit, without local content, with
+//     integrity "user". A daemon reading the spool refuses
 //     them (only activity is accepted from a user spool); they are for
 //     consumers of a daemonless spool. Combined with guard, the full set
 //     also answers the agent.
@@ -129,6 +161,21 @@
 // on 2026-11-12. UNVERIFIED: which Codex release first accepted the JSON
 // form; a Codex too old to parse it would fail open on a spoor block.
 //
+// # Configuration
+//
+// A config file that cannot be read or parsed means the built-in defaults
+// (observe mode); the records carry hook_config=invalid. A file that
+// parses but fails config validation is kept: one bad value, often a
+// daemon-only setting the hook never reads, must not drop guard mode,
+// rules.dirs, rules.disable, privacy exclusions or sources.hooks.enabled:
+// false. Of the values the hook reads, only invalid ones are replaced, in
+// the direction that does not weaken the sensor: an unknown privacy
+// profile becomes minimal, an unknown non-empty guard.mode becomes
+// advisory, guard.max_response, rules.min_class and output.max_line_bytes
+// take their defaults. The records still carry hook_config=invalid. A
+// suppression's bare-date expiry runs through the end of that day (UTC),
+// as in the daemon.
+//
 // # Kill switch
 //
 // platform.Disabled (<system config dir>/disabled) or a "disabled" file
@@ -155,9 +202,12 @@
 //     from --event or SPOOR_HOOK_EVENT (Copilot treats its own hook
 //     timeouts as allow, so this matches the agent's behaviour).
 //   - Session state of a hook lives in the user's spool: code running as
-//     that user can clear its own flags (see the rules package).
+//     that user can clear its own flags (see the rules package), or hold
+//     the state lock so saves run unlocked (labelled, see Modes).
 //   - An agent that never closes stdin costs one stdin wait (half the hard
-//     deadline) per call.
+//     deadline) per call. A complete JSON payload is judged normally; in
+//     guard mode a prefix that does not parse is answered "ask" on a gated
+//     event.
 //   - On Windows the worker is not tied to its supervisor by a job object;
 //     its own watchdog ends it at most one second after the hard deadline.
 //

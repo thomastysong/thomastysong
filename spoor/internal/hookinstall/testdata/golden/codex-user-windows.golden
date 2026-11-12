@@ -9,8 +9,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex",
-            "commandWindows": "& 'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex",
+            "command": "[ -x 'C:\\Program Files\\spoor\\spoor.exe' ] || exit 0; exec 'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex",
+            "commandWindows": "if (Test-Path -LiteralPath 'C:\\Program Files\\spoor\\spoor.exe' -PathType Leaf) { & 'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex; exit $LASTEXITCODE } else { exit 0 }",
             "timeout": 10
           }
         ]
@@ -21,8 +21,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex",
-            "commandWindows": "& 'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex",
+            "command": "[ -x 'C:\\Program Files\\spoor\\spoor.exe' ] || exit 0; exec 'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex",
+            "commandWindows": "if (Test-Path -LiteralPath 'C:\\Program Files\\spoor\\spoor.exe' -PathType Leaf) { & 'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex; exit $LASTEXITCODE } else { exit 0 }",
             "timeout": 10
           }
         ]
@@ -33,8 +33,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex",
-            "commandWindows": "& 'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex",
+            "command": "[ -x 'C:\\Program Files\\spoor\\spoor.exe' ] || exit 0; exec 'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex",
+            "commandWindows": "if (Test-Path -LiteralPath 'C:\\Program Files\\spoor\\spoor.exe' -PathType Leaf) { & 'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex; exit $LASTEXITCODE } else { exit 0 }",
             "timeout": 10
           }
         ]
@@ -45,8 +45,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex",
-            "commandWindows": "& 'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex",
+            "command": "[ -x 'C:\\Program Files\\spoor\\spoor.exe' ] || exit 0; exec 'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex",
+            "commandWindows": "if (Test-Path -LiteralPath 'C:\\Program Files\\spoor\\spoor.exe' -PathType Leaf) { & 'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex; exit $LASTEXITCODE } else { exit 0 }",
             "timeout": 10
           }
         ]
@@ -57,8 +57,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex",
-            "commandWindows": "& 'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex",
+            "command": "[ -x 'C:\\Program Files\\spoor\\spoor.exe' ] || exit 0; exec 'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex",
+            "commandWindows": "if (Test-Path -LiteralPath 'C:\\Program Files\\spoor\\spoor.exe' -PathType Leaf) { & 'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex; exit $LASTEXITCODE } else { exit 0 }",
             "timeout": 10
           }
         ]
@@ -69,8 +69,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex",
-            "commandWindows": "& 'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex",
+            "command": "[ -x 'C:\\Program Files\\spoor\\spoor.exe' ] || exit 0; exec 'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex",
+            "commandWindows": "if (Test-Path -LiteralPath 'C:\\Program Files\\spoor\\spoor.exe' -PathType Leaf) { & 'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex; exit $LASTEXITCODE } else { exit 0 }",
             "timeout": 10
           }
         ]
@@ -81,8 +81,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex",
-            "commandWindows": "& 'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex",
+            "command": "[ -x 'C:\\Program Files\\spoor\\spoor.exe' ] || exit 0; exec 'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex",
+            "commandWindows": "if (Test-Path -LiteralPath 'C:\\Program Files\\spoor\\spoor.exe' -PathType Leaf) { & 'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex; exit $LASTEXITCODE } else { exit 0 }",
             "timeout": 10
           }
         ]
@@ -93,8 +93,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex",
-            "commandWindows": "& 'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex",
+            "command": "[ -x 'C:\\Program Files\\spoor\\spoor.exe' ] || exit 0; exec 'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex",
+            "commandWindows": "if (Test-Path -LiteralPath 'C:\\Program Files\\spoor\\spoor.exe' -PathType Leaf) { & 'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex; exit $LASTEXITCODE } else { exit 0 }",
             "timeout": 10
           }
         ]
@@ -105,8 +105,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex",
-            "commandWindows": "& 'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex",
+            "command": "[ -x 'C:\\Program Files\\spoor\\spoor.exe' ] || exit 0; exec 'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex",
+            "commandWindows": "if (Test-Path -LiteralPath 'C:\\Program Files\\spoor\\spoor.exe' -PathType Leaf) { & 'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex; exit $LASTEXITCODE } else { exit 0 }",
             "timeout": 10,
             "async": true
           }
@@ -118,8 +118,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex",
-            "commandWindows": "& 'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex",
+            "command": "[ -x 'C:\\Program Files\\spoor\\spoor.exe' ] || exit 0; exec 'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex",
+            "commandWindows": "if (Test-Path -LiteralPath 'C:\\Program Files\\spoor\\spoor.exe' -PathType Leaf) { & 'C:\\Program Files\\spoor\\spoor.exe' hook --agent codex; exit $LASTEXITCODE } else { exit 0 }",
             "timeout": 3
           }
         ]

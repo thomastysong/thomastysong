@@ -7,91 +7,91 @@
   "hooks": {
     "sessionStart": [
       {
-        "command": "'/usr/local/bin/spoor' hook --agent cursor",
+        "command": "[ -x '/usr/local/bin/spoor' ] || exit 0; exec '/usr/local/bin/spoor' hook --agent cursor",
         "timeout": 10
       }
     ],
     "beforeSubmitPrompt": [
       {
-        "command": "'/usr/local/bin/spoor' hook --agent cursor",
+        "command": "[ -x '/usr/local/bin/spoor' ] || exit 0; exec '/usr/local/bin/spoor' hook --agent cursor",
         "timeout": 10
       }
     ],
     "preToolUse": [
       {
-        "command": "'/usr/local/bin/spoor' hook --agent cursor",
+        "command": "[ -x '/usr/local/bin/spoor' ] || exit 0; exec '/usr/local/bin/spoor' hook --agent cursor",
         "timeout": 10
       }
     ],
     "postToolUse": [
       {
-        "command": "'/usr/local/bin/spoor' hook --agent cursor",
+        "command": "[ -x '/usr/local/bin/spoor' ] || exit 0; exec '/usr/local/bin/spoor' hook --agent cursor",
         "timeout": 10
       }
     ],
     "postToolUseFailure": [
       {
-        "command": "'/usr/local/bin/spoor' hook --agent cursor",
+        "command": "[ -x '/usr/local/bin/spoor' ] || exit 0; exec '/usr/local/bin/spoor' hook --agent cursor",
         "timeout": 10
       }
     ],
     "beforeShellExecution": [
       {
-        "command": "'/usr/local/bin/spoor' hook --agent cursor",
+        "command": "[ -x '/usr/local/bin/spoor' ] || exit 0; exec '/usr/local/bin/spoor' hook --agent cursor",
         "timeout": 10
       }
     ],
     "afterShellExecution": [
       {
-        "command": "'/usr/local/bin/spoor' hook --agent cursor",
+        "command": "[ -x '/usr/local/bin/spoor' ] || exit 0; exec '/usr/local/bin/spoor' hook --agent cursor",
         "timeout": 10
       }
     ],
     "beforeMCPExecution": [
       {
-        "command": "'/usr/local/bin/spoor' hook --agent cursor",
+        "command": "[ -x '/usr/local/bin/spoor' ] || exit 0; exec '/usr/local/bin/spoor' hook --agent cursor",
         "timeout": 10
       }
     ],
     "afterMCPExecution": [
       {
-        "command": "'/usr/local/bin/spoor' hook --agent cursor",
+        "command": "[ -x '/usr/local/bin/spoor' ] || exit 0; exec '/usr/local/bin/spoor' hook --agent cursor",
         "timeout": 10
       }
     ],
     "beforeReadFile": [
       {
-        "command": "'/usr/local/bin/spoor' hook --agent cursor",
+        "command": "[ -x '/usr/local/bin/spoor' ] || exit 0; exec '/usr/local/bin/spoor' hook --agent cursor",
         "timeout": 10
       }
     ],
     "afterFileEdit": [
       {
-        "command": "'/usr/local/bin/spoor' hook --agent cursor",
+        "command": "[ -x '/usr/local/bin/spoor' ] || exit 0; exec '/usr/local/bin/spoor' hook --agent cursor",
         "timeout": 10
       }
     ],
     "subagentStart": [
       {
-        "command": "'/usr/local/bin/spoor' hook --agent cursor",
+        "command": "[ -x '/usr/local/bin/spoor' ] || exit 0; exec '/usr/local/bin/spoor' hook --agent cursor",
         "timeout": 10
       }
     ],
     "subagentStop": [
       {
-        "command": "'/usr/local/bin/spoor' hook --agent cursor",
+        "command": "[ -x '/usr/local/bin/spoor' ] || exit 0; exec '/usr/local/bin/spoor' hook --agent cursor",
         "timeout": 10
       }
     ],
     "stop": [
       {
-        "command": "'/usr/local/bin/spoor' hook --agent cursor",
+        "command": "[ -x '/usr/local/bin/spoor' ] || exit 0; exec '/usr/local/bin/spoor' hook --agent cursor",
         "timeout": 10
       }
     ],
     "sessionEnd": [
       {
-        "command": "'/usr/local/bin/spoor' hook --agent cursor",
+        "command": "[ -x '/usr/local/bin/spoor' ] || exit 0; exec '/usr/local/bin/spoor' hook --agent cursor",
         "timeout": 10
       }
     ]

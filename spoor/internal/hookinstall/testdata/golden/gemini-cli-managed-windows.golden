@@ -10,7 +10,7 @@
           {
             "name": "spoor",
             "type": "command",
-            "command": "& 'C:\\Program Files\\spoor\\spoor.exe' hook --agent gemini-cli",
+            "command": "if (Test-Path -LiteralPath 'C:\\Program Files\\spoor\\spoor.exe' -PathType Leaf) { & 'C:\\Program Files\\spoor\\spoor.exe' hook --agent gemini-cli; exit $LASTEXITCODE } else { exit 0 }",
             "timeout": 10000
           }
         ]
@@ -22,7 +22,7 @@
           {
             "name": "spoor",
             "type": "command",
-            "command": "& 'C:\\Program Files\\spoor\\spoor.exe' hook --agent gemini-cli",
+            "command": "if (Test-Path -LiteralPath 'C:\\Program Files\\spoor\\spoor.exe' -PathType Leaf) { & 'C:\\Program Files\\spoor\\spoor.exe' hook --agent gemini-cli; exit $LASTEXITCODE } else { exit 0 }",
             "timeout": 10000
           }
         ]
@@ -34,7 +34,7 @@
           {
             "name": "spoor",
             "type": "command",
-            "command": "& 'C:\\Program Files\\spoor\\spoor.exe' hook --agent gemini-cli",
+            "command": "if (Test-Path -LiteralPath 'C:\\Program Files\\spoor\\spoor.exe' -PathType Leaf) { & 'C:\\Program Files\\spoor\\spoor.exe' hook --agent gemini-cli; exit $LASTEXITCODE } else { exit 0 }",
             "timeout": 10000
           }
         ]
@@ -46,7 +46,7 @@
           {
             "name": "spoor",
             "type": "command",
-            "command": "& 'C:\\Program Files\\spoor\\spoor.exe' hook --agent gemini-cli",
+            "command": "if (Test-Path -LiteralPath 'C:\\Program Files\\spoor\\spoor.exe' -PathType Leaf) { & 'C:\\Program Files\\spoor\\spoor.exe' hook --agent gemini-cli; exit $LASTEXITCODE } else { exit 0 }",
             "timeout": 10000
           }
         ]
@@ -58,7 +58,7 @@
           {
             "name": "spoor",
             "type": "command",
-            "command": "& 'C:\\Program Files\\spoor\\spoor.exe' hook --agent gemini-cli",
+            "command": "if (Test-Path -LiteralPath 'C:\\Program Files\\spoor\\spoor.exe' -PathType Leaf) { & 'C:\\Program Files\\spoor\\spoor.exe' hook --agent gemini-cli; exit $LASTEXITCODE } else { exit 0 }",
             "timeout": 10000
           }
         ]
@@ -70,7 +70,7 @@
           {
             "name": "spoor",
             "type": "command",
-            "command": "& 'C:\\Program Files\\spoor\\spoor.exe' hook --agent gemini-cli",
+            "command": "if (Test-Path -LiteralPath 'C:\\Program Files\\spoor\\spoor.exe' -PathType Leaf) { & 'C:\\Program Files\\spoor\\spoor.exe' hook --agent gemini-cli; exit $LASTEXITCODE } else { exit 0 }",
             "timeout": 10000
           }
         ]
@@ -82,7 +82,7 @@
           {
             "name": "spoor",
             "type": "command",
-            "command": "& 'C:\\Program Files\\spoor\\spoor.exe' hook --agent gemini-cli",
+            "command": "if (Test-Path -LiteralPath 'C:\\Program Files\\spoor\\spoor.exe' -PathType Leaf) { & 'C:\\Program Files\\spoor\\spoor.exe' hook --agent gemini-cli; exit $LASTEXITCODE } else { exit 0 }",
             "timeout": 10000
           }
         ]
@@ -94,7 +94,7 @@
           {
             "name": "spoor",
             "type": "command",
-            "command": "& 'C:\\Program Files\\spoor\\spoor.exe' hook --agent gemini-cli",
+            "command": "if (Test-Path -LiteralPath 'C:\\Program Files\\spoor\\spoor.exe' -PathType Leaf) { & 'C:\\Program Files\\spoor\\spoor.exe' hook --agent gemini-cli; exit $LASTEXITCODE } else { exit 0 }",
             "timeout": 10000
           }
         ]

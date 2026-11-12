@@ -103,6 +103,39 @@ Measured remedies, outside this package:
   supervised call. It costs a second binary in packaging and in the hook
   command hookinstall writes, so it is the integrator's call.
 
+## Against the spec budget (open)
+
+Spec C1 asks observe mode to stay "within a few ms" of the empty-hook
+figures (1.7 / 2.5 / 8.5 ms p50 direct, `sh -c`, `bash -lc`). Observe
+supervised is about 10.5 to 12 ms over them (table above). The excess is
+two process starts of the full binary, each paying the package init of
+`internal/features`, `shellx`, `classify` and `rules`; nothing in this
+package's own code is a measurable share (next section). Closing the gap
+needs one of the remedies above, all outside `internal/hookcmd`: lazy
+package init in those packages, or a slim launcher binary. Until one of
+them lands, the observe budget is a deviation the lead has to accept or
+fix there.
+
+## After the reviewer fixes (2026-11-12)
+
+The fixes (reply written before any spool access, framed worker replies,
+bounded health and record appends, the session-state lock with optimistic
+save, stdin size and digest past the cap) were measured against the
+previous version of this package, both built into the same tree as test
+binaries running in their hook role (`hook.test hook --agent claude-code`,
+the worker re-executing the same binary), direct exec, the same 540-byte
+payload, 300 runs each interleaved, load average 1.2 to 3.1:
+
+| p50 / p90 / p99 ms | before | after |
+|---|---|---|
+| observe, supervised | 14.37 / 17.86 / 23.39 | 14.34 / 17.45 / 23.96 |
+| guard, supervised (run 1) | 28.95 / 34.67 / 41.34 | 30.24 / 36.23 / 43.41 |
+| guard, supervised (run 2) | 31.18 / 36.11 / 41.26 | 30.91 / 36.57 / 43.41 |
+
+No measurable change. The test binaries are about 2.7 MB larger than the
+`hookbench` binary above (the testing package and test code), so their
+absolute figures are not comparable with the earlier tables.
+
 ## modernc.org/sqlite
 
 `go list -deps ./internal/hookcmd` has 212 packages and none of them is

@@ -7,91 +7,91 @@
   "hooks": {
     "sessionStart": [
       {
-        "command": "& 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent cursor",
+        "command": "if (Test-Path -LiteralPath 'C:\\Users\\O''Brien Tools\\spoor.exe' -PathType Leaf) { & 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent cursor; exit $LASTEXITCODE } else { exit 0 }",
         "timeout": 10
       }
     ],
     "beforeSubmitPrompt": [
       {
-        "command": "& 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent cursor",
+        "command": "if (Test-Path -LiteralPath 'C:\\Users\\O''Brien Tools\\spoor.exe' -PathType Leaf) { & 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent cursor; exit $LASTEXITCODE } else { exit 0 }",
         "timeout": 10
       }
     ],
     "preToolUse": [
       {
-        "command": "& 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent cursor",
+        "command": "if (Test-Path -LiteralPath 'C:\\Users\\O''Brien Tools\\spoor.exe' -PathType Leaf) { & 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent cursor; exit $LASTEXITCODE } else { exit 0 }",
         "timeout": 10
       }
     ],
     "postToolUse": [
       {
-        "command": "& 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent cursor",
+        "command": "if (Test-Path -LiteralPath 'C:\\Users\\O''Brien Tools\\spoor.exe' -PathType Leaf) { & 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent cursor; exit $LASTEXITCODE } else { exit 0 }",
         "timeout": 10
       }
     ],
     "postToolUseFailure": [
       {
-        "command": "& 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent cursor",
+        "command": "if (Test-Path -LiteralPath 'C:\\Users\\O''Brien Tools\\spoor.exe' -PathType Leaf) { & 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent cursor; exit $LASTEXITCODE } else { exit 0 }",
         "timeout": 10
       }
     ],
     "beforeShellExecution": [
       {
-        "command": "& 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent cursor",
+        "command": "if (Test-Path -LiteralPath 'C:\\Users\\O''Brien Tools\\spoor.exe' -PathType Leaf) { & 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent cursor; exit $LASTEXITCODE } else { exit 0 }",
         "timeout": 10
       }
     ],
     "afterShellExecution": [
       {
-        "command": "& 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent cursor",
+        "command": "if (Test-Path -LiteralPath 'C:\\Users\\O''Brien Tools\\spoor.exe' -PathType Leaf) { & 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent cursor; exit $LASTEXITCODE } else { exit 0 }",
         "timeout": 10
       }
     ],
     "beforeMCPExecution": [
       {
-        "command": "& 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent cursor",
+        "command": "if (Test-Path -LiteralPath 'C:\\Users\\O''Brien Tools\\spoor.exe' -PathType Leaf) { & 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent cursor; exit $LASTEXITCODE } else { exit 0 }",
         "timeout": 10
       }
     ],
     "afterMCPExecution": [
       {
-        "command": "& 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent cursor",
+        "command": "if (Test-Path -LiteralPath 'C:\\Users\\O''Brien Tools\\spoor.exe' -PathType Leaf) { & 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent cursor; exit $LASTEXITCODE } else { exit 0 }",
         "timeout": 10
       }
     ],
     "beforeReadFile": [
       {
-        "command": "& 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent cursor",
+        "command": "if (Test-Path -LiteralPath 'C:\\Users\\O''Brien Tools\\spoor.exe' -PathType Leaf) { & 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent cursor; exit $LASTEXITCODE } else { exit 0 }",
         "timeout": 10
       }
     ],
     "afterFileEdit": [
       {
-        "command": "& 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent cursor",
+        "command": "if (Test-Path -LiteralPath 'C:\\Users\\O''Brien Tools\\spoor.exe' -PathType Leaf) { & 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent cursor; exit $LASTEXITCODE } else { exit 0 }",
         "timeout": 10
       }
     ],
     "subagentStart": [
       {
-        "command": "& 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent cursor",
+        "command": "if (Test-Path -LiteralPath 'C:\\Users\\O''Brien Tools\\spoor.exe' -PathType Leaf) { & 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent cursor; exit $LASTEXITCODE } else { exit 0 }",
         "timeout": 10
       }
     ],
     "subagentStop": [
       {
-        "command": "& 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent cursor",
+        "command": "if (Test-Path -LiteralPath 'C:\\Users\\O''Brien Tools\\spoor.exe' -PathType Leaf) { & 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent cursor; exit $LASTEXITCODE } else { exit 0 }",
         "timeout": 10
       }
     ],
     "stop": [
       {
-        "command": "& 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent cursor",
+        "command": "if (Test-Path -LiteralPath 'C:\\Users\\O''Brien Tools\\spoor.exe' -PathType Leaf) { & 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent cursor; exit $LASTEXITCODE } else { exit 0 }",
         "timeout": 10
       }
     ],
     "sessionEnd": [
       {
-        "command": "& 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent cursor",
+        "command": "if (Test-Path -LiteralPath 'C:\\Users\\O''Brien Tools\\spoor.exe' -PathType Leaf) { & 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent cursor; exit $LASTEXITCODE } else { exit 0 }",
         "timeout": 10
       }
     ]

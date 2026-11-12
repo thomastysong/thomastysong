@@ -156,8 +156,9 @@ type check struct {
 }
 
 // wantFor renders the registration PlanInstall would write, with the
-// caller's binary or, without one, the binary already in the file.
-func wantFor(t target, o Options, installed string) ([]entry, bool) {
+// caller's binary or, without one, the binary already in the file. With
+// legacy it renders what a release before the missing-binary guard wrote.
+func wantFor(t target, o Options, installed string, legacy bool) ([]entry, bool) {
 	bin := o.Binary
 	if bin == "" {
 		bin = installed
@@ -168,8 +169,13 @@ func wantFor(t target, o Options, installed string) ([]entry, bool) {
 	return dialects[t.dialect].entries(params{
 		binary: bin, agentID: t.cmdAgent, goos: o.GOOS,
 		timeout: o.Timeout, guard: o.Guard, failClosed: o.FailClosed,
+		legacy: legacy,
 	})
 }
+
+// legacyDetail is the Status detail for entries that are exactly what an
+// earlier release installed: not tampered with, only older.
+const legacyDetail = "written by an earlier spoor release whose hook commands fail when the spoor binary is missing; install again to update"
 
 func checkJSON(t target, o Options, data []byte) check {
 	d, err := parseJSON(data)
@@ -186,7 +192,7 @@ func checkJSON(t target, o Options, data []byte) check {
 		c.state = checkNone
 		return c
 	}
-	want, ok := wantFor(t, o, sc.binary())
+	want, ok := wantFor(t, o, sc.binary(), false)
 	if !ok {
 		c.state, c.detail = checkModified, "the spoor entries name no binary spoor can recognise"
 		return c
@@ -197,6 +203,11 @@ func checkJSON(t target, o Options, data []byte) check {
 		c.state = checkOK
 	default:
 		c.state, c.detail = checkModified, diff
+		if old, ok := wantFor(t, o, sc.binary(), true); ok {
+			if st, _ := sc.compare(old, t.kind); st == contentOK {
+				c.detail = legacyDetail
+			}
+		}
 	}
 	if t.kind == kindFlat {
 		if _, v := d.root.member("version"); v == nil || v.kind != kindNumber || v.num != 1 {
@@ -227,7 +238,7 @@ func checkTOML(t target, o Options, data []byte) check {
 		c.state = checkNone
 		return c
 	}
-	want, ok := wantFor(t, o, td.binary())
+	want, ok := wantFor(t, o, td.binary(), false)
 	if !ok {
 		c.state, c.detail = checkModified, "the spoor entries name no binary spoor can recognise"
 		return c
@@ -244,6 +255,9 @@ func checkTOML(t target, o Options, data []byte) check {
 	switch {
 	case !sameText(data[b.start:b.end], blk):
 		c.state, c.detail = checkModified, "the spoor block differs from what install writes"
+		if old, ok := wantFor(t, o, td.binary(), true); ok && sameText(data[b.start:b.end], []byte(hooksBlock(old, newline(data)))) {
+			c.detail = legacyDetail
+		}
 	case spoor != inBlock:
 		c.state, c.detail = checkModified, "spoor hook entries also exist outside the marked block"
 	case keysAfter(data, b):

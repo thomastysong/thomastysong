@@ -17,19 +17,43 @@ func TestQuoting(t *testing.T) {
 	if got := pwshQuote(`C:\O'Brien’s\x.exe`); got != `'C:\O''Brien’’s\x.exe'` {
 		t.Errorf("pwshQuote %s", got)
 	}
-	for _, bin := range []string{"/usr/bin/spoor", "/a b/it's/spoor", `C:\Program Files\O'Brien‘x’\spoor.exe`} {
-		for _, line := range []string{
-			posixCommand(bin, "codex"),
-			pwshCommand(bin, "codex"),
-			bin + " hook --agent codex",
-		} {
+	// binaryOf reads back every form, current and legacy, for paths that
+	// stress both quoting rules.
+	for _, bin := range []string{
+		"/usr/bin/spoor", "/a b/it's/spoor", `C:\Program Files\O'Brien‘x’\spoor.exe`,
+		"/x/''/'''/spoor", "/a/[b]*/spoor", "/a/exec '/b/spoor", `C:\a\’’’\spoor.exe`,
+		"/opt/] || exit 0; exec /spoor",
+	} {
+		lines := []string{bin + " hook --agent codex"}
+		for _, m := range []guardMode{guarded, strict, legacy} {
+			lines = append(lines, posixCommand(bin, "codex", m), pwshCommand(bin, "codex", m), windowsCommand(bin, "codex", m))
+		}
+		for _, line := range lines {
 			if got := binaryOf(line); got != bin {
 				t.Errorf("binaryOf(%q) = %q, want %q", line, got, bin)
 			}
 		}
 	}
-	if binaryOf("no marker here") != "" || binaryOf("& 'unterminated hook --agent x") != "" {
-		t.Error("binaryOf accepted a malformed line")
+	for _, bad := range []string{
+		"no marker here",
+		"& 'unterminated hook --agent x",
+		"'unterminated hook --agent x",
+		"'/a' '/b' hook --agent x",
+		"exec '/a hook --agent x",
+		"& 'C:\\a.exe' 'x' hook --agent x",
+		// A guard must check the path it runs; anything else is not a line
+		// this package wrote.
+		"[ -x '/a/spoor' ] || exit 0; exec '/b/spoor' hook --agent x",
+		"[ -x '/a/spoor' ] || exit 0; '/a/spoor' hook --agent x",
+		"[ -x '/a/spoor' ] && exit 0; exec '/a/spoor' hook --agent x",
+		"[ -x '/a/spoor' ] || exit 0; exec '/a/spoor' '/a/spoor' hook --agent x",
+		"if (Test-Path -LiteralPath 'C:\\a.exe' -PathType Leaf) { & 'C:\\b.exe' hook --agent x; exit $LASTEXITCODE } else { exit 0 }",
+		"if (Test-Path -LiteralPath 'C:\\a.exe' -PathType Leaf) { & 'C:\\a.exe' 'x' hook --agent x",
+		"if (Test-Path -LiteralPath 'C:\\a.exe hook --agent x",
+	} {
+		if got := binaryOf(bad); got != "" {
+			t.Errorf("binaryOf(%q) = %q, want none", bad, got)
+		}
 	}
 	for p, ok := range map[string]bool{
 		`C:\spoor\spoor.exe`:         true,
@@ -43,9 +67,24 @@ func TestQuoting(t *testing.T) {
 			t.Errorf("plainWindowsPath(%q) != %v", p, ok)
 		}
 	}
-	if windowsCommand(`C:\spoor\spoor.exe`, "x") != `C:\spoor\spoor.exe hook --agent x` ||
-		windowsCommand(`C:\Program Files\s.exe`, "x") != `& 'C:\Program Files\s.exe' hook --agent x` {
-		t.Error("windowsCommand")
+	forms := []struct{ got, want string }{
+		{posixCommand("/opt/O'Brien/spoor", "codex", guarded), `[ -x '/opt/O'\''Brien/spoor' ] || exit 0; exec '/opt/O'\''Brien/spoor' hook --agent codex`},
+		{posixCommand("/opt/spoor", "cursor", strict), `exec '/opt/spoor' hook --agent cursor`},
+		{posixCommand("/opt/spoor", "codex", legacy), `'/opt/spoor' hook --agent codex`},
+		{pwshCommand(`C:\O'Brien\spoor.exe`, "copilot-cli", guarded), `if (Test-Path -LiteralPath 'C:\O''Brien\spoor.exe' -PathType Leaf) { & 'C:\O''Brien\spoor.exe' hook --agent copilot-cli; exit $LASTEXITCODE } else { exit 0 }`},
+		{pwshCommand(`C:\x\spoor.exe`, "cursor", strict), `& 'C:\x\spoor.exe' hook --agent cursor`},
+		{pwshCommand(`C:\x\spoor.exe`, "codex", legacy), `& 'C:\x\spoor.exe' hook --agent codex`},
+		// A path that cmd.exe and PowerShell both read unquoted stays bare
+		// in every mode (the documented gap); any other gets PowerShell's.
+		{windowsCommand(`C:\spoor\spoor.exe`, "x", guarded), `C:\spoor\spoor.exe hook --agent x`},
+		{windowsCommand(`C:\spoor\spoor.exe`, "x", legacy), `C:\spoor\spoor.exe hook --agent x`},
+		{windowsCommand(`C:\Program Files\s.exe`, "x", guarded), `if (Test-Path -LiteralPath 'C:\Program Files\s.exe' -PathType Leaf) { & 'C:\Program Files\s.exe' hook --agent x; exit $LASTEXITCODE } else { exit 0 }`},
+		{windowsCommand(`C:\Program Files\s.exe`, "x", legacy), `& 'C:\Program Files\s.exe' hook --agent x`},
+	}
+	for _, f := range forms {
+		if f.got != f.want {
+			t.Errorf("command form\n got %s\nwant %s", f.got, f.want)
+		}
 	}
 	for id, ok := range map[string]bool{
 		"claude-code": true, "cursor": true, "a.b_c-1": true,

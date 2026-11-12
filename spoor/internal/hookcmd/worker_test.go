@@ -359,10 +359,25 @@ func TestReadBounded(t *testing.T) {
 	if !r.timedOut || string(r.b) != `{"a":1}` {
 		t.Fatalf("slow reader: %+v", r)
 	}
-	// Over the cap: max+1 bytes kept, the rest drained to EOF.
-	r = readBounded(bytes.NewReader(bytes.Repeat([]byte("x"), 300000)), 1000, time.Second)
-	if !r.eof || len(r.b) != 1001 {
-		t.Fatalf("cap: eof %v len %d", r.eof, len(r.b))
+	// Over the cap: max+1 bytes kept, the rest drained to EOF, all of it
+	// counted and hashed.
+	big := bytes.Repeat([]byte("x"), 300000)
+	r = readBounded(bytes.NewReader(big), 1000, time.Second)
+	sum := sha256.Sum256(big)
+	if !r.eof || len(r.b) != 1001 || r.total != int64(len(big)) || r.sum != hex.EncodeToString(sum[:]) {
+		t.Fatalf("cap: eof %v len %d total %d sum %s", r.eof, len(r.b), r.total, r.sum)
+	}
+	if n, d := r.rawDigest(); n != int64(len(big)) || d != r.sum {
+		t.Fatalf("rawDigest %d %s", n, d)
+	}
+	// Exactly at the cap and under it: nothing hashed while reading.
+	for _, n := range []int{1000, 10} {
+		p := bytes.Repeat([]byte("y"), n)
+		r = readBounded(bytes.NewReader(p), 1000, time.Second)
+		s := sha256.Sum256(p)
+		if size, d := r.rawDigest(); r.sum != "" || size != int64(n) || d != hex.EncodeToString(s[:]) {
+			t.Fatalf("%d bytes: sum %q size %d digest %s", n, r.sum, size, d)
+		}
 	}
 }
 
@@ -417,5 +432,173 @@ func TestConcurrentHooks(t *testing.T) {
 		if !seen[i] {
 			t.Fatalf("seq gap at %d", i)
 		}
+	}
+}
+
+// signalPack holds one emitting signal-class rule.
+const signalPack = `pack: zzsignal
+version: "2026.11.0"
+rules:
+  - id: SPR-ZZ-001
+    title: Marker command reported as a signal
+    description: A signal-class rule; below the default rules.min_class.
+    kind: activity
+    class: signal
+    severity: low
+    confidence: high
+    maturity: experimental
+    category: execution
+    when:
+      type: tool.pre
+      tool.kind: shell
+    match:
+      shell.commands: spoor-zz-signal
+    tests:
+      - name: marker
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "spoor-zz-signal" } }
+        expect: match
+      - name: other
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "ls" } }
+        expect: no_match
+`
+
+// In-hook detection applies rules.min_class like the daemon: a signal is
+// not written to the detection stream under the default floor (finding),
+// and is written, without context records, when the floor is signal.
+func TestDetectInHookAppliesMinClass(t *testing.T) {
+	for _, c := range []struct {
+		name, cfg string
+		want      bool
+	}{
+		{"default floor", cfgDetect, false},
+		{"floor signal", strings.Replace(cfgDetect, "rules:\n", "rules:\n  min_class: signal\n", 1), true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newSandbox(t, c.cfg)
+			if err := os.WriteFile(filepath.Join(s.rules, "zzsignal.yaml"), []byte(signalPack), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			r := s.worker(t, OSEnv(), "claude-code", dialects[0].payload("spoor-zz-signal"))
+			if r.code != 0 {
+				t.Fatalf("exit %d", r.code)
+			}
+			got, context := false, 0
+			for _, l := range s.lines(t) {
+				if l.ev.Kind != event.KindDetection {
+					continue
+				}
+				if l.ev.Detection != nil && l.ev.Detection.RuleID == "SPR-ZZ-001" {
+					got = true
+				} else {
+					context++
+				}
+			}
+			if got != c.want || context != 0 {
+				t.Fatalf("signal written %v (want %v), %d other detection-stream records", got, c.want, context)
+			}
+		})
+	}
+}
+
+// An oversized payload is reported with the size and digest of everything
+// the agent sent, through the supervisor (which drains past the cap) as
+// well as a worker run directly.
+func TestOversizeAnomalyDescribesWholePayload(t *testing.T) {
+	s := newSandbox(t, cfgObserve+"limits:\n  max_hook_input_bytes: 65536\n")
+	d := dialects[0]
+	p := d.payload("echo " + strings.Repeat("A", 200000))
+	sum := sha256.Sum256(p)
+	r := s.supervised(t, d.agent, p, "")
+	if r.code != 0 {
+		t.Fatalf("exit %d", r.code)
+	}
+	var found bool
+	for _, a := range s.ofKind(t, event.KindActivity) {
+		if a.Type != TypePayloadAnomaly {
+			continue
+		}
+		found = true
+		if a.Labels["payload_bytes"] != strconv.Itoa(len(p)) || a.Tool == nil || a.Tool.InputSHA256 != hex.EncodeToString(sum[:]) {
+			t.Fatalf("anomaly says payload_bytes=%s sha256=%s; the payload was %d bytes with sha256 %x", a.Labels["payload_bytes"], a.Tool.InputSHA256, len(p), sum)
+		}
+		if a.Session == nil || a.Session.ID != "s-claude" {
+			t.Fatalf("session from the kept prefix lost: %+v", a.Session)
+		}
+	}
+	if !found {
+		t.Fatal("no anomaly record")
+	}
+	// The worker refuses a hand-off digest that is not one.
+	w := &work{in: inputResult{b: []byte("x"), total: 1}, o: opts{stdinBytes: 99, stdinSHA256: "not-hex"}}
+	w.adoptSupervisorRead()
+	if w.in.total != 1 || w.in.sum != "" {
+		t.Fatalf("bad hand-off adopted: %+v", w.in)
+	}
+}
+
+// A supervised (framed) worker ends every reply, even an empty one, with
+// replyEnd; a worker run directly writes the bare reply.
+func TestFramedWorkerReply(t *testing.T) {
+	s := newSandbox(t, cfgGuard)
+	d := dialects[0]
+	r := s.worker(t, OSEnv(), d.agent, d.payload("ls -la"), "--framed")
+	if string(r.stdout) != replyEnd {
+		t.Fatalf("framed empty reply %q", r.stdout)
+	}
+	r = s.worker(t, OSEnv(), d.agent, d.payload("spoor-test-block now"), "--framed")
+	reply, final := unframe(r.stdout)
+	if !final || !replyCarries(reply, "deny") {
+		t.Fatalf("framed deny %q", r.stdout)
+	}
+	r = s.worker(t, OSEnv(), d.agent, d.payload("spoor-test-block now"))
+	if _, final := unframe(r.stdout); final || !replyCarries(r.stdout, "deny") {
+		t.Fatalf("unframed deny %q", r.stdout)
+	}
+	if b, final := unframe([]byte(`{"a":1}` + replyEnd + "x")); final || len(b) == 0 {
+		t.Fatal("marker not at the end must not count")
+	}
+}
+
+// A config that parses but fails validation keeps what the hook reads and
+// repairs only the invalid values the hook reads, in the direction that
+// does not weaken the sensor. An unparseable file still means defaults
+// (TestBrokenConfig).
+func TestLoadConfigRepairsInvalidValues(t *testing.T) {
+	dir := t.TempDir()
+	write := func(body string) string {
+		p := filepath.Join(dir, "c.yaml")
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	for _, c := range []struct {
+		name, body string
+		check      func(*config.Config) bool
+	}{
+		{"hooks disabled survives a daemon-only error", "heartbeat: 1s\nsources:\n  hooks:\n    enabled: false\n",
+			func(c *config.Config) bool { return !modeOf(c).enabled }},
+		{"exclusions and rules survive", "heartbeat: 1s\nprivacy:\n  exclude:\n    paths: [\"/x/*\"]\nrules:\n  dirs: [/r]\n  disable: [SPR-A]\n",
+			func(c *config.Config) bool {
+				return len(c.Privacy.Exclude.Paths) == 1 && len(c.Rules.Dirs) == 1 && len(c.Rules.Disable) == 1
+			}},
+		{"misspelt guard mode keeps guarding", "guard:\n  mode: advisroy\n  max_response: block\n",
+			func(c *config.Config) bool { return modeOf(c).guard && c.Guard.MaxResponse == "block" }},
+		{"empty guard mode is off", "guard:\n  mode: \"\"\n", func(c *config.Config) bool { return !modeOf(c).guard }},
+		{"bad profile becomes minimal", "privacy:\n  profile: everything\n", func(c *config.Config) bool { return c.Privacy.Profile == "minimal" }},
+		{"bad floors take defaults", "guard:\n  max_response: never\nrules:\n  min_class: loud\noutput:\n  max_line_bytes: 10\n",
+			func(c *config.Config) bool {
+				return c.Guard.MaxResponse == "ask" && c.Rules.MinClass == "finding" && c.Output.MaxLine == 16<<10
+			}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			cfg, err := loadConfig(write(c.body))
+			if err == nil {
+				t.Fatal("validation error not reported")
+			}
+			if !c.check(cfg) {
+				t.Fatalf("%+v", cfg)
+			}
+		})
 	}
 }

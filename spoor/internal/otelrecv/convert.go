@@ -61,9 +61,10 @@ const maxUnknownNames = 64
 // panics. Unknown event names are counted (see ConvertDetail), not errors;
 // an error means the body is not a usable export request at all.
 //
-// The result is deterministic for a given body except for records that carry
-// no timestamp, which are stamped with the current time and labelled
-// ts_source=sensor.
+// The result is deterministic for a given body within one process (event
+// ids are keyed with a per-process secret, see recordKey) except for
+// records that carry no timestamp, which are stamped with the current time
+// and labelled ts_source=sensor.
 func Convert(body []byte) ([]*event.Event, error) {
 	res, err := ConvertDetail(body)
 	if err != nil {

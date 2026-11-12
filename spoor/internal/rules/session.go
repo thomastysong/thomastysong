@@ -625,7 +625,7 @@ func importState(key string, data []byte, now time.Time) (*sessionState, error) 
 		}
 		out := make(map[string]flagEntry, len(in))
 		for name, f := range in {
-			if !flagRe.MatchString(name) || !validEventRef(f.Ev) || !okTime(f.At) || f.Exp < 0 {
+			if !validFlagName(name) || !validEventRef(f.Ev) || !okTime(f.At) || f.Exp < 0 {
 				return nil, badState("invalid flag %q", name)
 			}
 			exp := fromMS(f.Exp)
@@ -696,7 +696,7 @@ func importState(key string, data []byte, now time.Time) (*sessionState, error) 
 		return nil, badState("too many counters")
 	}
 	for r, hs := range x.Counters {
-		if !ruleIDRe.MatchString(r) || len(hs) > maxThreshold {
+		if !validRuleID(r) || len(hs) > maxThreshold {
 			return nil, badState("invalid counter %q", r)
 		}
 		conv := make([]hit, 0, len(hs))
@@ -722,7 +722,7 @@ func importState(key string, data []byte, now time.Time) (*sessionState, error) 
 	}
 	for k, hs := range x.Scoped {
 		i := strings.LastIndexByte(k, '/')
-		if i < 0 || !ruleIDRe.MatchString(k[:i]) || (k[i+1:] != ByUser && k[i+1:] != ByHost) || len(hs) > maxThreshold {
+		if i < 0 || !validRuleID(k[:i]) || (k[i+1:] != ByUser && k[i+1:] != ByHost) || len(hs) > maxThreshold {
 			return nil, badState("invalid scoped counter %q", k)
 		}
 		conv := make([]hit, 0, len(hs))

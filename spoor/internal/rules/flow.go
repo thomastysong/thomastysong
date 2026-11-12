@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/thomastysong/spoor/internal/classify"
@@ -56,7 +57,11 @@ const (
 	maxFlowTexts = 1024     // MCP argument strings per event
 )
 
-var envLine = regexp.MustCompile(`^\s*(?:export\s+)?"?([A-Za-z_][A-Za-z0-9_.\-]{0,127})"?\s*[:=]\s*(.*?)\s*,?\s*$`)
+// envLine is compiled on first use, not at package initialisation: every
+// process that links the package would pay for it.
+var envLine = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^\s*(?:export\s+)?"?([A-Za-z_][A-Za-z0-9_.\-]{0,127})"?\s*[:=]\s*(.*?)\s*,?\s*$`)
+})
 
 var secretNameParts = []string{"KEY", "TOKEN", "SECRET", "PASS", "PWD", "AUTH", "CRED", "PRIVATE", "SESSION", "COOKIE", "SIGNATURE", "DSN", "CONN"}
 
@@ -109,8 +114,9 @@ func secretValues(text string) []secretValue {
 	if len(lines) > maxEnvLines {
 		lines = lines[:maxEnvLines]
 	}
+	re := envLine()
 	for _, ln := range lines {
-		m := envLine.FindStringSubmatch(ln)
+		m := re.FindStringSubmatch(ln)
 		if m == nil {
 			continue
 		}

@@ -2,7 +2,6 @@ package rules
 
 import (
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,10 +35,38 @@ const (
 	maxThreshold = 256
 )
 
-var (
-	ruleIDRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
-	flagRe   = regexp.MustCompile(`^[a-z0-9][a-z0-9_.:-]{0,63}$`)
-)
+// validRuleID reports a rule id: a letter or digit, then up to 63 letters,
+// digits, '.', '_' or '-' (^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$, checked by
+// hand: it runs for every rule at load and package-level regexps cost
+// every process that links the package).
+func validRuleID(s string) bool {
+	if len(s) == 0 || len(s) > 64 || !alnum(s[0]) {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		if c := s[i]; !alnum(c) && c != '.' && c != '_' && c != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+// validFlagName reports a flag name: a lower-case letter or digit, then up
+// to 63 of those or '_', '.', ':', '-' (^[a-z0-9][a-z0-9_.:-]{0,63}$).
+func validFlagName(s string) bool {
+	if len(s) == 0 || len(s) > 64 || !lowerAlnum(s[0]) {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		if c := s[i]; !lowerAlnum(c) && c != '_' && c != '.' && c != ':' && c != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func alnum(c byte) bool      { return c >= 'A' && c <= 'Z' || lowerAlnum(c) }
+func lowerAlnum(c byte) bool { return c >= 'a' && c <= 'z' || c >= '0' && c <= '9' }
 
 // rule is one compiled rule. It is immutable after compilation.
 type rule struct {
@@ -151,7 +178,7 @@ func compileBody(rr *rawRule, pack, version string) (*rule, error) {
 		escalate: rr.Escalate, dedup: rr.Dedup, evidence: rr.Evidence, remedy: rr.Remedy,
 		tests: rr.Tests, pack: pack, packVersion: version,
 	}
-	if !ruleIDRe.MatchString(r.ID) {
+	if !validRuleID(r.ID) {
 		return nil, fmt.Errorf("rule id %q: use letters, digits, '.', '-' and '_' (at most 64)", r.ID)
 	}
 	fail := func(format string, a ...any) error {
@@ -208,7 +235,7 @@ func compileBody(rr *rawRule, pack, version string) (*rule, error) {
 				return nil, fail("flags: more than %d names in one list", maxFlagNames)
 			}
 			for _, name := range set {
-				if !flagRe.MatchString(name) {
+				if !validFlagName(name) {
 					return nil, fail("flag name %q: use lower-case letters, digits, '_', '.', ':' and '-'", name)
 				}
 			}
@@ -290,7 +317,7 @@ func checkTests(id string, tests []rawTest) error {
 			return fail("test %q: more than 64 events", t.Name)
 		}
 		for _, name := range t.Flags {
-			if !flagRe.MatchString(name) {
+			if !validFlagName(name) {
 				return fail("test %q: flag name %q is not valid", t.Name, name)
 			}
 		}

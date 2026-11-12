@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/thomastysong/spoor/internal/event"
 	"github.com/thomastysong/spoor/internal/features"
@@ -29,7 +30,7 @@ func (i Issue) String() string {
 	return fmt.Sprintf("%s %s [%s]: %s", i.Level, i.RuleID, i.Code, i.Msg)
 }
 
-var idStyle = regexp.MustCompile(`^[A-Z][A-Z0-9]*-[A-Z0-9]+-[0-9]{3,}$`)
+var idStyle = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[A-Z][A-Z0-9]*-[A-Z0-9]+-[0-9]{3,}$`) })
 
 // Lint checks a set for problems the loader accepts but a reviewer must
 // not: missing descriptive fields, names that are not in the feature
@@ -82,7 +83,7 @@ func lintRule(s *Set, r *rule, setAnywhere map[string]bool) []Issue {
 	if r.emit && r.remedy == "" {
 		add(LevelWarning, "missing_field", "remedy is empty")
 	}
-	if !idStyle.MatchString(r.ID) {
+	if !idStyle().MatchString(r.ID) {
 		add(LevelWarning, "id_format", "id does not follow PREFIX-AREA-NNN")
 	}
 

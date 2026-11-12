@@ -118,7 +118,7 @@ func stubRule(rn *yaml.Node, pack, version string, tree *cacheTree) *rule {
 		}
 		switch k.Value {
 		case "id":
-			if r.ID, ok = plainString(v); !ok || !ruleIDRe.MatchString(r.ID) {
+			if r.ID, ok = plainString(v); !ok || !validRuleID(r.ID) {
 				return nil
 			}
 		case "kind":
@@ -200,7 +200,7 @@ func stubFlags(r *rule, v *yaml.Node) bool {
 		names := make([]string, 0, len(lv.Content))
 		for _, c := range lv.Content {
 			s, ok := plainString(c)
-			if !ok || !flagRe.MatchString(s) {
+			if !ok || !validFlagName(s) {
 				return false
 			}
 			names = append(names, s)

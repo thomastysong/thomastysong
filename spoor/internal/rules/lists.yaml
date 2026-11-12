@@ -158,3 +158,19 @@ lists:
     - aider
     - amp
     - qwen
+
+  # Secret kinds that are shapes rather than provider formats (a value
+  # under a key named "password", a secret-named URL parameter). Rules that
+  # flag credential literals stay quiet when every kind found is one of
+  # these: they are mostly fixtures and placeholders.
+  weak_secret_kinds:
+    - password
+    - generic_secret
+    - url_param
+    - sensitive_key
+
+  # kubectl spellings of "every namespace".
+  all_namespace_flags:
+    - "-A"
+    - "--all-namespaces"
+    - "--all-namespaces=true"

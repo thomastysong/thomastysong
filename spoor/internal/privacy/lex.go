@@ -40,8 +40,11 @@ type token struct {
 	owner int // tHeredoc: index of the "<<" operator token
 }
 
-// maxTokens bounds the lexer's output. Input is capped before lexing, so
-// this only matters for inputs made of nothing but separators.
+// maxTokens bounds the lexer's output. Every token but an empty heredoc
+// body spans at least one byte, so a command capped at maxCommandScan fits;
+// should the cap be reached anyway, the lexer reports where it stopped and
+// redactCommand cuts the line there, because text no token covers is text
+// no structural view has seen.
 const maxTokens = 1 << 16
 
 // maxNestScan bounds how deep $( ... ) and ${ ... } nesting is followed
@@ -55,6 +58,7 @@ type lexer struct {
 	// pending heredocs, read after the next newline
 	pending []pendingDoc
 	full    bool // token cap reached
+	stop    int  // byte offset of the first token that was not emitted, -1 when complete
 }
 
 type pendingDoc struct {
@@ -67,7 +71,14 @@ type pendingDoc struct {
 // (callers still recover) and runs in linear time apart from bounded
 // nesting scans.
 func lex(src string, d shellx.Dialect) []token {
-	l := &lexer{src: src, d: d}
+	toks, _ := lexStop(src, d)
+	return toks
+}
+
+// lexStop is lex that also returns the byte offset where the token cap
+// stopped it (-1 when all of src was tokenised).
+func lexStop(src string, d shellx.Dialect) ([]token, int) {
+	l := &lexer{src: src, d: d, stop: -1}
 	switch d {
 	case shellx.PowerShell:
 		l.run(l.psWord, psOps)
@@ -76,7 +87,7 @@ func lex(src string, d shellx.Dialect) []token {
 	default:
 		l.run(l.posixWord, posixOps)
 	}
-	return l.toks
+	return l.toks, l.stop
 }
 
 var (
@@ -86,8 +97,12 @@ var (
 )
 
 func (l *lexer) emit(t token) {
+	if l.full {
+		return
+	}
 	if len(l.toks) >= maxTokens {
 		l.full = true
+		l.stop = t.start
 		return
 	}
 	l.toks = append(l.toks, t)
@@ -754,6 +769,7 @@ type segment struct {
 	words    []int // token indexes of argv words
 	herestr  []int // token indexes of here-string words (bash "<<<")
 	heredocs []int // token indexes of heredoc bodies
+	outs     []int // token indexes of output redirection targets (">", ">>", "&>", ...)
 	pipeFrom int   // index of the segment piping into this one, or -1
 }
 
@@ -766,7 +782,7 @@ func segments(toks []token) []segment {
 	nextPipe := -1
 	expectTarget := ""
 	flush := func(op string) {
-		if len(cur.words) > 0 || len(cur.herestr) > 0 || len(cur.heredocs) > 0 || cur.pipeFrom >= 0 {
+		if len(cur.words) > 0 || len(cur.herestr) > 0 || len(cur.heredocs) > 0 || len(cur.outs) > 0 || cur.pipeFrom >= 0 {
 			segs = append(segs, cur)
 		}
 		idx := len(segs) - 1
@@ -807,8 +823,11 @@ func segments(toks []token) []segment {
 		if expectTarget != "" {
 			op := expectTarget
 			expectTarget = ""
-			if op == "<<<" {
+			switch {
+			case op == "<<<":
 				cur.herestr = append(cur.herestr, i)
+			case strings.HasPrefix(op, ">") || strings.HasPrefix(op, "&>") || op == "<>":
+				cur.outs = append(cur.outs, i)
 			}
 			continue // a redirection target or heredoc delimiter
 		}

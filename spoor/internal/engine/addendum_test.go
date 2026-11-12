@@ -52,7 +52,11 @@ func TestEvidenceAllowlist(t *testing.T) {
 	for _, prof := range []string{"minimal", "standard", "full"} {
 		t.Run(prof, func(t *testing.T) {
 			h := newHarness(t, func(c *config.Config, o *Options) { c.Privacy.Profile = prof })
-			h.ingest(hook(event.TypePromptSubmit, "evidence-test", prompt("deploy the TEXTMARKER plan now")))
+			pe := hook(event.TypePromptSubmit, "evidence-test", prompt("deploy the TEXTMARKER plan now"))
+			// A source that carries the text in the record itself (not only
+			// in Content) is what a content-searching rule would exploit.
+			pe.Prompt.Text = pe.Content.PromptText
+			h.ingest(pe)
 			h.tick()
 			d := h.out.rule("SPR-T-005")
 			if len(d) != 1 {

@@ -41,11 +41,32 @@ import (
 // rewrites them (see Policy.rewriteMarkers).
 
 const (
-	// maxCommandScan is how much of a command line is analysed; the rest
-	// is dropped (the emitted field is far smaller anyway).
-	maxCommandScan = shellx.MaxInput
-	// maxNestedTexts bounds how many inline-code and decoded payloads are
-	// re-lexed for structural redaction.
+	// maxCommandScan is how much of a command line is analysed, and so the
+	// most of it that can be emitted. Every emitted byte must have been
+	// seen by every view (word lexer, shellx, the nested re-lex and the
+	// syntax-blind view): a view that stops early and lets the rest be
+	// copied out unseen is how a password after 65,536 tokens leaked. The
+	// costliest view to run to the end, argument-vector redaction of every
+	// syntax-blind segment and every quoted multi-word value, takes about
+	// 25-30 ms each for 64 KiB of worst-case input, so that is the cap. The
+	// emitted field (MaxField) is far smaller anyway; a longer line loses
+	// its tail, never its redaction.
+	maxCommandScan = 64 << 10
+	// minShellxCover is the length below which a truncated shellx analysis
+	// is accepted. shellx's count budgets (2,048 commands, 400,000 work
+	// units, 256 sub-analyses) cannot be exhausted by a line this short;
+	// what still truncates it is nesting deeper than MaxDepth, which no
+	// shorter cut would fix. Above it, a truncated analysis means shellx
+	// stopped somewhere in the line, at an offset it does not report, so
+	// the line is halved until shellx sees all of it.
+	minShellxCover = 2 << 10
+	// maxCoverPasses bounds the shrinking (64 KiB halves to minShellxCover
+	// in five passes).
+	maxCoverPasses = 8
+	// maxNestedTexts bounds how many inline-code and decoded payloads from
+	// shellx are re-lexed for structural redaction. Quoted values, heredoc
+	// bodies and comments of the line itself are disjoint spans of at most
+	// maxCommandScan bytes, so they are all re-lexed, without a count cap.
 	maxNestedTexts = 64
 	maxNestedLen   = 64 << 10
 	// maxPairs bounds the number of nested redactions tracked; a command
@@ -55,8 +76,6 @@ const (
 	// anywhere in the text. Shorter ones are only replaced where they
 	// occur as a whole argument.
 	minSearch = 4
-	// maxNaiveScan bounds the syntax-blind pass.
-	maxNaiveScan = 64 << 10
 	// maxSecretScan bounds the substring searches for recovered secrets:
 	// (number of secrets) x (bytes of text) per pass. Every secret is
 	// searched for over the whole text several times (plain, reversed,
@@ -102,11 +121,14 @@ type cmdRedactor struct {
 	topOld   map[string]string // top-level original value -> redacted value
 	fail     bool              // a secret could not be placed: emit the skeleton
 	nameMemo map[string]bool
+	lexStop  int // where the word lexer's token cap stopped it, -1 when it did not
 }
 
 // redactCommand returns cmd with credentials removed. precapped reports
-// that input beyond maxCommandScan was dropped (callers must then keep
-// only a head of the result, never a tail near the cut).
+// that the end of the input was dropped, because it lies beyond
+// maxCommandScan or beyond where a structural view stopped; the result
+// then ends in a truncation marker and callers must keep only a head of
+// it, never a tail near the cut.
 func redactCommand(cmd string, hint shellx.Dialect) (out string, precapped bool) {
 	defer func() {
 		if recover() != nil {
@@ -119,10 +141,10 @@ func redactCommand(cmd string, hint shellx.Dialect) (out string, precapped bool)
 	src, _ := controlsToSpace(cmd)
 	if len(src) > maxCommandScan {
 		src = src[:safeCut(src, maxCommandScan)]
-		precapped = true
 	}
-	f := shellx.Analyze(src, hint)
-	r := newCmdRedactor(src, f.Dialect)
+	f, r := cover(src, hint)
+	src = r.src
+	precapped = len(src) < len(cmd)
 	r.topLevel()
 	r.nested(f)
 	if !r.fail {
@@ -146,9 +168,37 @@ func redactCommand(cmd string, hint shellx.Dialect) (out string, precapped bool)
 	return out, precapped
 }
 
+// cover analyses src, shortening it until every structural view has seen
+// all of it: the word lexer (token cap) and shellx (count and work
+// budgets, which it reports only as Truncated). The syntax-blind view and
+// the nested re-lex run to the end of anything up to maxCommandScan. If
+// the views still disagree after maxCoverPasses, the redactor is marked
+// failed and the command is emitted as its skeleton.
+func cover(src string, hint shellx.Dialect) (*shellx.Facts, *cmdRedactor) {
+	for pass := 1; ; pass++ {
+		f := shellx.Analyze(src, hint)
+		r := newCmdRedactor(src, f.Dialect)
+		h := len(src)
+		if r.lexStop >= 0 && r.lexStop < h {
+			h = r.lexStop
+		}
+		if f.Truncated && len(src) > minShellxCover {
+			h = min(h, len(src)/2)
+		}
+		if h >= len(src) {
+			return f, r
+		}
+		if pass >= maxCoverPasses {
+			r.fail = true
+			return f, r
+		}
+		src = src[:safeCut(src, h)]
+	}
+}
+
 func newCmdRedactor(src string, d shellx.Dialect) *cmdRedactor {
 	r := &cmdRedactor{src: src, d: d, topOld: map[string]string{}}
-	r.toks = lex(src, d)
+	r.toks, r.lexStop = lexStop(src, d)
 	r.vals = make([]string, len(r.toks))
 	r.dirty = make([]bool, len(r.toks))
 	for i, t := range r.toks {
@@ -231,12 +281,24 @@ func (r *cmdRedactor) topLevel() {
 // command shellx found at any depth is redacted as an argument vector.
 func (r *cmdRedactor) nested(f *shellx.Facts) {
 	texts := 0
-	addText := func(text string, d shellx.Dialect, strict bool) {
-		if texts >= maxNestedTexts || text == "" || len(text) > maxNestedLen {
+	addText := func(text string, d shellx.Dialect, strict, own bool) {
+		if text == "" {
 			return
 		}
-		texts++
+		if !own {
+			// Payloads from shellx (inline code, decoded text) are not
+			// spans of the line and can repeat it; they are bounded.
+			if texts >= maxNestedTexts || len(text) > maxNestedLen {
+				return
+			}
+			texts++
+		}
 		sub := newCmdRedactor(text, d)
+		if sub.lexStop >= 0 {
+			// Cannot happen for a span of a line under maxCommandScan;
+			// if it does, nothing of that text may be trusted as seen.
+			r.fail = true
+		}
 		sub.nameMemo = r.nameMemo
 		sub.topLevel()
 		r.nameMemo = sub.nameMemo
@@ -264,11 +326,11 @@ func (r *cmdRedactor) nested(f *shellx.Facts) {
 	for _, ic := range f.Inline {
 		switch ic.Lang {
 		case "sh":
-			addText(ic.Code, shellx.Posix, false)
+			addText(ic.Code, shellx.Posix, false, false)
 		case "powershell":
-			addText(ic.Code, shellx.PowerShell, false)
+			addText(ic.Code, shellx.PowerShell, false, false)
 		case "cmd":
-			addText(ic.Code, shellx.Cmd, false)
+			addText(ic.Code, shellx.Cmd, false, false)
 		default:
 			// Foreign-language code: the pattern pass covers it, and its
 			// hits are added as searchable secrets so escaping differences
@@ -283,7 +345,7 @@ func (r *cmdRedactor) nested(f *shellx.Facts) {
 		}
 	}
 	for _, d := range f.Decoded {
-		addText(d, shellx.Posix, true)
+		addText(d, shellx.Posix, true, false)
 	}
 	// Any quoted multi-word value, heredoc body or comment may hold a
 	// command line shellx does not model (watch "...", tmux send-keys
@@ -292,25 +354,24 @@ func (r *cmdRedactor) nested(f *shellx.Facts) {
 	for i, t := range r.toks {
 		switch {
 		case t.kind == tHeredoc:
-			addText(r.vals[i], r.d, false)
+			addText(r.vals[i], r.d, false, true)
 		case t.kind == tComment:
-			addText(strings.TrimLeft(t.val, "#"), r.d, false)
+			addText(strings.TrimLeft(t.val, "#"), r.d, false, true)
 		case t.kind == tWord && t.quote != 0 && strings.ContainsAny(t.val, " \t\n"):
-			addText(t.val, r.d, false)
+			addText(t.val, r.d, false, true)
 		}
 	}
 	// A last, syntax-blind view: split the line on whitespace and
 	// separators with quote characters stripped. Unbalanced quotes,
 	// brackets or backticks make the shell reject a line (and make both
 	// parsers see one long word), but its text is still emitted; this view
-	// still hands every flag and value to argument-vector redaction.
-	if len(r.src) <= maxNaiveScan {
-		for _, argv := range naiveSegments(r.src) {
-			red := redactArgs(argv)
-			for k := range argv {
-				if k < len(red) && red[k] != argv[k] {
-					r.addPair(&pair{oldVal: argv[k], newVal: red[k], secrets: alignSecrets(argv[k], red[k]), optional: true})
-				}
+	// still hands every flag and value to argument-vector redaction. It
+	// covers the whole line (at most maxCommandScan bytes).
+	for _, argv := range naiveSegments(r.src) {
+		red := redactArgs(argv)
+		for k := range argv {
+			if k < len(red) && red[k] != argv[k] {
+				r.addPair(&pair{oldVal: argv[k], newVal: red[k], secrets: alignSecrets(argv[k], red[k]), optional: true})
 			}
 		}
 	}
@@ -609,6 +670,8 @@ func (r *cmdRedactor) skeleton() string {
 }
 
 // naiveSegments splits s into argument vectors without honouring quotes.
+// There is no segment cap: a capped view would stop seeing the line part of
+// the way through, and s is at most maxCommandScan bytes.
 func naiveSegments(s string) [][]string {
 	var out [][]string
 	for _, seg := range strings.FieldsFunc(s, func(r rune) bool {
@@ -622,9 +685,6 @@ func naiveSegments(s string) [][]string {
 		}
 		if len(argv) > 0 {
 			out = append(out, argv)
-		}
-		if len(out) >= 1024 {
-			break
 		}
 	}
 	return out

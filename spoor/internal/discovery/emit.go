@@ -88,9 +88,10 @@ func observationDigest(a *event.Asset) string {
 func changeDigest(a *event.Asset) string { return a.SHA256 }
 
 // finish builds the result: inventory events with stable asset ids,
-// differential against Options.Prev.
+// differential against Options.Prev, then the posture checks the scanner
+// itself produces (refused files), which are emitted on every scan.
 func (s *scanner) finish(fullScan bool) *Result {
-	var events []*event.Event
+	var events, checks []*event.Event
 	seen := map[string]bool{}
 	for _, r := range s.recs {
 		a := r.a
@@ -102,6 +103,11 @@ func (s *scanner) finish(fullScan bool) *Result {
 			continue
 		}
 		seen[a.ID] = true
+		if r.check != nil {
+			c := *r.check
+			c.AssetID = a.ID
+			checks = append(checks, s.newCheck(&c, r.uc))
+		}
 		a.LastSeen = event.At(s.now)
 		if s.o.Prev != nil {
 			prev, ok := s.o.Prev[a.ID]
@@ -132,7 +138,39 @@ func (s *scanner) finish(fullScan bool) *Result {
 		}
 		return ai.ID < aj.ID
 	})
+	for _, cr := range s.checks {
+		c := *cr.c
+		checks = append(checks, s.newCheck(&c, cr.uc))
+	}
+	sort.SliceStable(checks, func(i, j int) bool {
+		ci, cj := checks[i].Check, checks[j].Check
+		if ci.Subject != cj.Subject {
+			return ci.Subject < cj.Subject
+		}
+		return ci.AssetID < cj.AssetID
+	})
+	events = append(events, checks...)
 	return &Result{Events: events, Ledger: s.led.snapshot()}
+}
+
+// newCheck wraps a posture check of this scan in an event.
+func (s *scanner) newCheck(c *event.Check, uc *userCtx) *event.Event {
+	ev := event.New(event.KindPosture, event.TypePostureCheck, event.SourceScan)
+	ev.TS = event.At(s.now)
+	ev.Fidelity = event.FidelityObserved
+	ev.Host = &event.Host{ID: s.host.ID, Name: s.host.Name, OS: s.host.OS, Arch: s.host.Arch}
+	if s.o.Container != nil {
+		cc := *s.o.Container
+		ev.Container = &cc
+	}
+	if uc != nil {
+		ev.User = &event.User{Name: uc.u.Name, ID: uc.u.UID}
+	}
+	if c.AgentID != "" {
+		ev.Agent = &event.Agent{ID: c.AgentID}
+	}
+	ev.Check = c
+	return ev
 }
 
 // removed reports assets of Prev that this scan did not see. Only a

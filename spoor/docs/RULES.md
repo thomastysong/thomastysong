@@ -148,7 +148,7 @@ On a list field every element must match the glob, so an exception written for a
 
 ### Tests
 
-Every rule carries at least one inline test (at most 64). A test has a `name`, either one `event` or a list of `events` (up to 64, evaluated in order on one session), optional `content` (local-only material such as tool input or file content being written), `feat` (feature values to force), `flags` (session flags set before the first event), and `expect: match` or `expect: no_match` for the last event. Events use the record's own field names in YAML flow style:
+Every rule carries at least one inline test (at most 64). A test has a `name`, either one `event` or a list of `events` (up to 64, evaluated in order on one session, one second apart), and `expect: match` or `expect: no_match` for the last event. Optional: `content` (local-only material for the last event, such as tool input or file content being written), `feat` (feature values forced on the last event) and `flags` (session flags preset for the last event's thread). Events use the record's own field names in YAML flow style:
 
 ```yaml
     tests:
@@ -159,7 +159,7 @@ Every rule carries at least one inline test (at most 64). A test has a `name`, e
         expect: match
 ```
 
-`spoor rules test` runs every inline test against one engine built from the whole set, so a test also catches interference from other rules' flags. Inline tests show that a rule does what it says; they are not a measure of its quality. That is what the benchmarks under `bench/` are for ([Measured quality](#measured-quality)).
+`spoor rules test` runs each inline test on a fresh engine built from the whole set, so a test also sees the flags other rules set. Inline tests show that a rule does what it says; they are not a measure of its quality. That is what the benchmarks under `bench/` are for ([Measured quality](#measured-quality)).
 
 ## Writing, testing and linting a rule
 

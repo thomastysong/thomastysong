@@ -4,11 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/thomastysong/spoor/internal/event"
+	"github.com/thomastysong/spoor/internal/platform"
 )
 
 // The owner rule as a decision table: it runs on every OS and needs no
@@ -42,6 +46,13 @@ func TestUntrustedWhy(t *testing.T) {
 		{"group-writable, alice's primary but bob is a member", fmeta{owner: "1000", group: "60", perm: 0o664, nlink: 1}, false, "group 60"},
 		{"group-writable, unknown group", fmeta{owner: "1000", group: "4242", perm: 0o660, nlink: 1}, false, "group 4242"},
 		{"group-writable root file, root's private group", fmeta{owner: "0", group: "0", perm: 0o664, nlink: 1}, true, ""},
+		// Provisioned by root for the account to edit: writable by root and
+		// the account only.
+		{"group-writable root file, the account's private group", fmeta{owner: "0", group: "1000", perm: 0o664, nlink: 1}, true, ""},
+		{"group-writable root file, a group bob is in", fmeta{owner: "0", group: "60", perm: 0o664, nlink: 1}, false, "group 60"},
+		{"group-writable root file, bob's group", fmeta{owner: "0", group: "50", perm: 0o664, nlink: 1}, false, "group 50"},
+		{"group-writable account file, root's private group", fmeta{owner: "1000", group: "0", perm: 0o664, nlink: 1}, true, ""},
+		{"bob's file in the account's private group", fmeta{owner: "1001", group: "1000", perm: 0o644, nlink: 1}, false, "owned by uid 1001"},
 	} {
 		why := g.untrustedWhy(tc.m, "1000")
 		if (why == "") != tc.ok || !strings.Contains(why, tc.cause) {
@@ -189,6 +200,35 @@ func TestOwnerRuleScan(t *testing.T) {
 		!strings.Contains(pc.Detail[flagUntrustedOwner], "uid 1001") || pc.Detail["project"] != project {
 		t.Errorf("project file: %+v", pc)
 	}
+	// Each refused file is also a failing posture check on its asset: high
+	// when someone else wrote it, medium when only its mode lets others.
+	sev := map[string]string{h + "/.cursor/mcp.json": event.SevHigh, h + "/.copilot/mcp-config.json": event.SevHigh,
+		project + "/.mcp.json": event.SevHigh, h + "/.gemini/settings.json": event.SevMedium, h + "/.codex/config.toml": event.SevMedium}
+	ids := map[string]string{}
+	for _, e := range res.Events {
+		if a := e.Asset; a != nil && has(a.RiskFlags, flagUntrustedOwner) {
+			ids[a.Path] = a.ID
+		}
+	}
+	got := map[string]bool{}
+	for _, e := range res.Events {
+		c := e.Check
+		if c == nil {
+			continue
+		}
+		want, ok := sev[c.Subject]
+		if e.Kind != event.KindPosture || e.Type != event.TypePostureCheck || !ok || c.ID != checkUntrustedOwner || c.Status != "fail" ||
+			c.Severity != want || c.AssetID == "" || c.AssetID != ids[c.Subject] || c.Owner != "alice" || c.Actual == "" || c.Remedy == "" ||
+			e.User == nil || e.User.Name != "alice" {
+			t.Errorf("posture check %+v (event %s/%s)", c, e.Kind, e.Type)
+		}
+		got[c.Subject] = true
+	}
+	for p := range sev {
+		if !got[p] {
+			t.Errorf("no posture check for refused %s", p)
+		}
+	}
 	notes := strings.Join(res.Ledger.Notes, "\n")
 	for _, w := range []string{"owned by uid 1001", "writable by every account", "writable by group 50", "links"} {
 		if !strings.Contains(notes, w) {
@@ -236,5 +276,139 @@ func TestOwnerRuleScanProject(t *testing.T) {
 	}
 	if pc := x.one(t, event.AssetProjectConfig, ".vscode/tasks.json"); has(pc.RiskFlags, flagUntrustedOwner) {
 		t.Errorf("the account's own tasks.json flagged: %+v", pc)
+	}
+}
+
+// The refusals kept are bounded per directory and per account, not per
+// scan: alice filling her own home with refused files (300 world-writable
+// SKILL.md) hides nothing in bob's home, and inside her home a file another
+// account wrote displaces one that is only world-writable. What is over the
+// caps becomes one summary check.
+func TestUntrustedCapPerHome(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root to create files owned by several accounts")
+	}
+	f := newFixture(t)
+	f.file("/etc/passwd", "root:x:0:0:root:/root:/bin/sh\nalice:x:1000:1000::/home/alice:/bin/sh\nbob:x:1001:1001::/home/bob:/bin/sh\n", 0o644)
+	f.file("/etc/group", "root:x:0:\nalice:x:1000:\nbob:x:1001:\n", 0o644)
+	const n = 300
+	for i := 0; i < n; i++ {
+		f.file(fmt.Sprintf("/home/alice/.claude/skills/s%03d/SKILL.md", i), "---\nname: s\n---\n", 0o666)
+	}
+	// Read after the cap is full: bob's planted skill in alice's home.
+	f.file("/home/alice/.claude/skills/zzz/SKILL.md", "---\nname: canary-planted\n---\n", 0o644)
+	// bob: an MCP config planted by alice.
+	f.file("/home/bob/.cursor/mcp.json", `{"mcpServers":{"canary-planted":{"command":"x"}}}`, 0o644)
+	chownR := func(dir string, uid, gid int) {
+		t.Helper()
+		err := filepath.WalkDir(f.real(dir), func(p string, _ fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			return os.Lchown(p, uid, gid)
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	chownR("/home/alice", 1000, 1000)
+	chownR("/home/bob", 1001, 1001)
+	for p, uid := range map[string]int{"/home/bob/.cursor/mcp.json": 1000, "/home/alice/.claude/skills/zzz/SKILL.md": 1001} {
+		if err := os.Lchown(f.real(p), uid, uid); err != nil {
+			t.Fatal(err)
+		}
+	}
+	alice := platform.UserHome{Name: "alice", UID: "1000", Home: "/home/alice"}
+	bob := platform.UserHome{Name: "bob", UID: "1001", Home: "/home/bob"}
+	o := f.opts(alice, bob)
+	o.adminUID = "0"
+	o.Projects = false
+	res, err := Scan(context.Background(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(res)
+	if strings.Contains(string(b), "canary-") {
+		t.Fatal("content of a refused file reached the result")
+	}
+	assets := map[string]int{}
+	var planted []string
+	for _, e := range res.Events {
+		if a := e.Asset; a != nil && has(a.RiskFlags, flagUntrustedOwner) {
+			assets[a.Owner]++
+			if a.Path == "/home/bob/.cursor/mcp.json" || a.Path == "/home/alice/.claude/skills/zzz/SKILL.md" {
+				planted = append(planted, a.Path)
+			}
+		}
+	}
+	if len(planted) != 2 {
+		t.Errorf("planted files reported: %v (untrusted_owner assets per account %v)", planted, assets)
+	}
+	if assets["alice"] != maxUntrustedPerDir || assets["bob"] != 1 {
+		t.Errorf("untrusted_owner assets per account %v, want alice %d, bob 1", assets, maxUntrustedPerDir)
+	}
+	var summary *event.Check
+	for _, e := range res.Events {
+		if c := e.Check; c != nil && c.AssetID == "" {
+			if summary != nil {
+				t.Fatalf("two summary checks: %+v, %+v", summary, c)
+			}
+			summary = c
+		}
+	}
+	// 301 refused in alice's home, 64 listed: 237 more, all hers.
+	want := fmt.Sprintf("%d more refused files are not listed (0 written by another account)", n+1-maxUntrustedPerDir)
+	if summary == nil || summary.Subject != "/home/alice" || summary.Owner != "alice" || summary.Severity != event.SevMedium ||
+		summary.ID != checkUntrustedOwner || !strings.HasPrefix(summary.Actual, want) {
+		t.Errorf("summary check %+v, want subject /home/alice and %q", summary, want)
+	}
+	if res.Ledger.Denied < n+2 {
+		t.Errorf("refusals over the cap not counted as denied: %+v", res.Ledger)
+	}
+}
+
+// recordUntrusted directly: the per-account cap holds across directories,
+// a foreign file displaces only a non-foreign one of its own directory, the
+// same path counts once, and the summary says how many foreign files were
+// dropped.
+func TestRecordUntrustedCaps(t *testing.T) {
+	s := &scanner{goos: "linux", adminUID: "0", untrusted: map[string]*untrustedSet{}, untrustedKept: map[string]int{},
+		untrustedSeen: map[string]bool{}, led: newLedger()}
+	own := fmeta{owner: "1000", perm: 0o666, nlink: 1}
+	foreign := fmeta{owner: "1001", perm: 0o644, nlink: 1}
+	at := func(root string, i int) loc {
+		return loc{root: root, rel: fmt.Sprintf("f%04d", i), user: true, uid: "1000", inHome: true}
+	}
+	for i := 0; i < maxUntrustedPerDir+10; i++ {
+		s.recordUntrusted(at("/home/alice", i), own, "w")
+	}
+	s.recordUntrusted(at("/home/alice", 0), own, "w") // again: not counted twice
+	home := s.untrusted[s.untrustedKey("1000", "/home/alice")]
+	if len(home.files) != maxUntrustedPerDir || home.dropped != 10 {
+		t.Fatalf("home set: %d kept, %d dropped", len(home.files), home.dropped)
+	}
+	s.recordUntrusted(at("/home/alice", 9000), foreign, "planted")
+	if home.dropped != 11 || home.droppedForeign != 0 || !home.files[len(home.files)-1].foreign {
+		t.Fatalf("foreign file did not displace a world-writable one: dropped %d/%d", home.dropped, home.droppedForeign)
+	}
+	// Fill the account cap through projects.
+	for p := 0; s.untrustedKept["1000"] < maxUntrustedPerAccount; p++ {
+		s.recordUntrusted(at(fmt.Sprintf("/home/alice/p%d", p), 0), own, "w")
+	}
+	s.recordUntrusted(at("/home/alice/late", 0), foreign, "planted")
+	late := s.untrusted[s.untrustedKey("1000", "/home/alice/late")]
+	if late == nil || len(late.files) != 0 || late.dropped != 1 || late.droppedForeign != 1 {
+		t.Fatalf("over the account cap: %+v", late)
+	}
+	// Another account is unaffected.
+	s.recordUntrusted(loc{root: "/home/bob", rel: "x", user: true, uid: "1001", inHome: true}, fmeta{owner: "1000", perm: 0o644, nlink: 1}, "planted")
+	if bob := s.untrusted[s.untrustedKey("1001", "/home/bob")]; bob == nil || len(bob.files) != 1 || !bob.files[0].foreign {
+		t.Fatalf("bob's set: %+v", bob)
+	}
+	uc := &userCtx{u: platform.UserHome{Name: "alice", UID: "1000", Home: "/home/alice"}, home: "/home/alice"}
+	s.reportUntrusted(uc, "/home/alice/late", true)
+	if len(s.checks) != 1 || s.checks[0].c.Severity != event.SevHigh || s.checks[0].c.Scope != event.ScopeProject ||
+		!strings.Contains(s.checks[0].c.Actual, "1 more refused files are not listed (1 written by another account)") {
+		t.Fatalf("summary for a dropped foreign file: %+v", s.checks)
 	}
 }

@@ -222,10 +222,27 @@ func TestMultiUserOwnership(t *testing.T) {
 	if res.Ledger.Denied == 0 {
 		t.Error("ownership refusal not counted")
 	}
+	checks := 0
 	for _, e := range res.Events {
-		if e.User == nil || (e.User.Name != e.Asset.Owner && e.Asset.Owner != "") {
-			t.Errorf("event user %+v does not match owner %q", e.User, e.Asset.Owner)
+		owner := ""
+		switch {
+		case e.Asset != nil:
+			owner = e.Asset.Owner
+		case e.Check != nil:
+			owner = e.Check.Owner
+			checks++
+			if e.Check.Subject != "/home/alice/.gemini/settings.json" || e.Check.Severity != event.SevHigh {
+				t.Errorf("posture check for the planted file: %+v", e.Check)
+			}
+		default:
+			t.Fatalf("event with neither asset nor check: %+v", e)
 		}
+		if e.User == nil || (e.User.Name != owner && owner != "") {
+			t.Errorf("event user %+v does not match owner %q", e.User, owner)
+		}
+	}
+	if checks != 1 {
+		t.Errorf("%d posture checks, want 1 for bob's file in alice's home", checks)
 	}
 }
 

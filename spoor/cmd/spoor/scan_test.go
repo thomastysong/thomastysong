@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -218,5 +219,70 @@ func TestScanOutboxUsesOutputGroup(t *testing.T) {
 	}
 	if fi, err := os.Stat(data); err != nil || fi.Mode().Perm() != 0o711 {
 		t.Fatalf("data directory mode %v", fi.Mode())
+	}
+}
+
+// A planted, foreign-owned agent config in an account's home is refused
+// unread and reported as a failing posture check on its untrusted_owner
+// asset, which reaches the state database (the Fleet policy "no high or
+// critical agent configuration failure" reads it) and is re-emitted by a
+// differential scan in which the asset did not change.
+func TestScanUntrustedOwnerIsPosture(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root to chown")
+	}
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "etc", "passwd"), "alice:x:1000:1000::/home/alice:/bin/sh\nbob:x:1001:1001::/home/bob:/bin/sh\n", 0o644)
+	writeTestFile(t, filepath.Join(root, "etc", "group"), "alice:x:1000:\nbob:x:1001:\n", 0o644)
+	cfgf := filepath.Join(root, "home", "alice", ".cursor", "mcp.json")
+	writeTestFile(t, cfgf, `{"mcpServers":{"planted":{"command":"npx","args":["-y","evil-mcp"]}}}`, 0o644)
+	for _, p := range []string{"home/alice", "home/alice/.cursor"} {
+		if err := os.Lchown(filepath.Join(root, p), 1000, 1000); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Lchown(cfgf, 1001, 1001); err != nil {
+		t.Fatal(err)
+	}
+	cfg, data := testConfig(t, "")
+	ta := newTestApp(t)
+	for run := 0; run < 2; run++ {
+		var res scanResult
+		decodeJSON(t, ta.mustRun(t, exitOK, "scan", "--config", cfg, "--host-root", root, "--projects=false", "--state", "--json"), &res)
+		asset := ""
+		for _, e := range res.Records {
+			if e.Asset != nil && strings.Contains(strings.Join(e.Asset.RiskFlags, ","), "untrusted_owner") {
+				asset = e.Asset.ID
+			}
+		}
+		if run == 0 && asset == "" {
+			t.Fatalf("no untrusted_owner asset; counts %v", res.Counts)
+		}
+		var checks []*event.Check
+		for _, e := range res.Records {
+			if e.Kind == event.KindPosture && e.Check != nil && e.Check.Status == "fail" && strings.HasSuffix(e.Check.Subject, "/.cursor/mcp.json") {
+				checks = append(checks, e.Check)
+			}
+		}
+		if len(checks) != 1 || checks[0].Severity != event.SevHigh || checks[0].AssetID == "" || (asset != "" && checks[0].AssetID != asset) || checks[0].Owner != "alice" {
+			t.Fatalf("scan %d: posture checks for the refused file %+v (counts %v)", run+1, checks, res.Counts)
+		}
+		for _, e := range res.Records {
+			if b, _ := json.Marshal(e); strings.Contains(string(b), "evil-mcp") {
+				t.Fatalf("content of the refused file was read: %s", b)
+			}
+		}
+	}
+	st, err := state.OpenReadOnly(filepath.Join(data, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	rows, err := st.Query("posture", []string{"check_id", "severity", "subject", "owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0]["severity"] != "high" || !strings.HasSuffix(rows[0]["subject"], "/.cursor/mcp.json") || rows[0]["owner"] != "alice" || rows[0]["check_id"] == "" {
+		t.Fatalf("posture rows %v", rows)
 	}
 }

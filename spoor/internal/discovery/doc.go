@@ -48,7 +48,14 @@
 //     world writable; a sticky bit does not excuse a drop-in directory).
 //   - Files in an account's home that the owner rule refuses (see Safety):
 //     a project_config asset each, risk flag untrusted_owner, with the
-//     reason in Detail["untrusted_owner"] and no hash (never read).
+//     reason in Detail["untrusted_owner"] and no hash (never read), and a
+//     failing posture.check SPR-SCAN-001 on that asset (high when another
+//     account wrote the file or it may be a hard link to a root file,
+//     medium when only its mode lets others write it). The scanner emits
+//     the check itself, on every scan, whatever rule set is loaded. At most
+//     64 refusals are listed per home or project and 256 per account (a
+//     file another account wrote displaces one with loose permissions);
+//     the rest are one summary check on the directory.
 //   - MCP servers from every catalogued config (user, managed, system,
 //     project, plugin), parsed with mcpconf: Asset.MCP, the definition hash
 //     as SHA256, mcpconf risk flags plus untrusted_location.
@@ -116,14 +123,17 @@
 // config files are capped at 20 MiB. Inside an account's home (the home and
 // projects below it) a file is read only when the account or root owns it
 // and nobody else can write it (not world-writable; group-writable only
-// with a group private to the owner, the umask 002 user-private-group
-// setup), and a root-owned file there must have a single link (it may
+// with a group nobody but the owner, the account and root is in, such as
+// the umask 002 user-private-group setup), and a root-owned file there must have a single link (it may
 // otherwise be a hard link the account made to a root file); this holds
 // privileged or not, since the node sensor runs as an ordinary uid with
 // read capabilities. A refused file is checked on the open descriptor, so
 // none of its content is read, and is reported as a project_config asset
 // with risk flag untrusted_owner (scope user, Parent the agent whose
-// location holds it; scope project in a project). Outside the home (a
+// location holds it; scope project in a project) plus a failing posture
+// check on it. A group-writable file passes when every account in its
+// group is the owner, the account or root (root:account 0664 provisioned
+// for the account to edit passes; a group shared with others does not). Outside the home (a
 // project elsewhere), when privileged, a file must belong to the account.
 // When privileged a directory must belong to the account before it is
 // listed (checked on the open descriptor): another user's skill, plugin or

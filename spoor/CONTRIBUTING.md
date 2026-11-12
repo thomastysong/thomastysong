@@ -59,14 +59,14 @@ make fmt-check         # gofmt
 make lint              # fmt-check, vet, staticcheck when installed, then `make rules`
 ```
 
-Unit tests need no network, no Docker and no root, and write nothing outside `t.TempDir()`. They are table-driven and include hostile input (huge, deeply nested, invalid UTF-8, path traversal, symbolic links, FIFOs where relevant): every input spoor reads (hook stdin, transcripts, configuration, command lines, rule packs) is attacker-controlled somewhere. A new parser or reader comes with tests of that kind.
+Unit tests must not use the network or Docker, must write nothing outside `t.TempDir()`, and skip (rather than fail) what needs root. They are table-driven and include hostile input (huge, deeply nested, invalid UTF-8, path traversal, symbolic links, FIFOs where relevant): every input spoor reads (hook stdin, transcripts, configuration, command lines, rule packs) is attacker-controlled somewhere. A new parser or reader comes with tests of that kind.
 
 Some files are generated, and their tests fail until they are regenerated:
 
 | Change | Regenerate | Checked by |
 |---|---|---|
 | `internal/event` (the record types) | `go test ./internal/event -run TestSchema -update` (writes `docs/schema/event.schema.json` and the field reference in `docs/EVENTS.md`) | `go test ./internal/event`, which also validates `docs/schema/examples/*.ndjson` |
-| record shapes the binary writes | `sudo docs/schema/examples/regen.sh`, then update the examples quoted in `docs/EVENTS.md` | same |
+| record shapes the binary writes | `sudo env "PATH=$PATH" docs/schema/examples/regen.sh`, then update the examples quoted in `docs/EVENTS.md` | same |
 | `internal/rules/packs/*.yaml`, `internal/rules/lists.yaml` | `go generate ./internal/rules` (writes `packs/embedded.cache`) | `go test ./internal/rules` |
 | the shipped packs | the catalogue in `docs/RULES.md` (jq program shown there) | review |
 
@@ -114,7 +114,7 @@ The end-to-end suites live in `test/e2e`, behind the `e2e` build tag, and run re
 | Fluent Bit: tags and event time per stream, the kill test (output down, restart, 5,000 of 5,000 delivered), head-of-line blocking, rejected chunks kept, an oversized record | `SPOOR_E2E_FLUENTBIT=1 go test -tags e2e ./test/e2e -run FluentBit -v` | Docker and the `fluent/fluent-bit:latest` image present locally (the tests never pull). |
 | Containers and packages: the Kubernetes node sensor in Docker (`--pid=host`, two capabilities, planted symlinks refused), in-image hook mode, deb and rpm install, upgrade, remove and purge | `SPOOR_E2E_CONTAINER=1 go test -tags e2e ./test/e2e -run 'Container\|Package' -v` | Docker with `mirror.gcr.io/library/redis:7` (and `mirror.gcr.io/library/rockylinux:9` for rpm) present locally, the Dockerfile's base images; nfpm (`SPOOR_NFPM` or on `PATH`) for the package tests, which skip without it; root for the ptrace probe. |
 | Fleet harness: generated Fleet content, state databases written through the daemon's writer, the Fleet install scripts in a container | `SPOOR_E2E_FLEET=1 go test -tags e2e ./test/e2e -run Fleet -v` | Docker with `mirror.gcr.io/library/redis:7` for the install scripts. |
-| Fleet, live: applies the content to a running Fleet server, runs every `spoor_*` table and policy as a live query on an enrolled osquery host, restores the server's agent options | `deploy/fleet/verify.sh` (read its header first) | A Fleet server you may change temporarily, `fleetctl` logged in, one enrolled osquery host. It never runs `fleetctl gitops` for real and deletes what it applied. |
+| Fleet, live: applies the content to a running Fleet server, runs every `spoor_*` table and policy as a live query on an enrolled osquery host, restores the server's agent options | `deploy/fleet/verify.sh` (read its header first; the output of a run is `deploy/fleet/VERIFIED.md`) <!-- VERIFY: not re-run while this page was written, because it changes a shared Fleet server while it runs --> | A Fleet server you may change temporarily, `fleetctl` logged in, one enrolled osquery host. It never runs `fleetctl gitops` for real and deletes what it applied. |
 | Real agent: a real Claude Code process (`claude -p`) against a local stand-in for the model API, with the hooks `spoor hooks install` registered, the daemon, Fluent Bit when available, then guard mode | `SPOOR_E2E_AGENT=1 go test -tags e2e ./test/e2e -run RealAgent -v` | Linux, root (private mount and PID namespaces), `unshare`, `nsenter`, overlayfs, Claude Code and node (`SPOOR_E2E_CLAUDE`, `SPOOR_E2E_NODE`, `PATH` or `/opt/node22/bin`) not installed under `/root` or `/home`. No model API key: the model is a local stand-in. |
 
 `make e2e-container` runs the container, package, Fluent Bit and Fleet-script suites together. Results of these suites on real software are committed as `deploy/fluent-bit/VERIFIED.md`, `deploy/fleet/VERIFIED.md`, `deploy/kubernetes/VERIFIED.md` and `test/e2e/REAL-AGENT.md`; regenerate the one your change affects.

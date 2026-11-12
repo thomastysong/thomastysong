@@ -10,7 +10,7 @@ Everything spoor writes for other systems is one record format: a JSON object on
 
 | Where | What | Notes |
 |---|---|---|
-| `<data_dir>/outbox/<stream>-<YYYYMMDD>-<HH>-<NNNN>.ndjson` | every record that may leave the host | The file Fluent Bit tails. The hour is UTC; `NNNN` is a roll counter (`output.max_segment_bytes`, default 16 MiB). On Linux the daemon makes the directory mode 2750 (setgid) with group `output.group` (default `spoor`, when that group exists) and the files 0640, so only root and that group (the shipper) can read them. A file name never changes once the file exists. |
+| `<data_dir>/outbox/<stream>-<YYYYMMDD>-<HH>-<NNNN>.ndjson` | every record that may leave the host | The file Fluent Bit tails. The hour is UTC; `NNNN` is a roll counter (`output.max_segment_bytes`, default 16 MiB). On Linux the daemon makes the directory mode 2750 (setgid) with group `output.group` (default `spoor`, when that group exists) and the files 0640, so only root and that group (the shipper) can read them. <!-- VERIFY: directory ownership and modes are receiving integration fixes in internal/daemon. --> A file name never changes once the file exists. |
 | `<data_dir>/local/` | activity that must not leave the host (the `minimal` profile) | The local ring: same file naming, files 0600, never tailed, bounded by `retention.local` / `retention.local_bytes`. |
 | standard output | the outbox records too, when `output.stdout: true` | For containers (the Kubernetes node sensor). |
 | `spoor detect --ndjson`, `spoor scan --ndjson` | findings, posture checks and session summaries (`detect`); inventory and posture records (`scan`) | Same format and the same privacy stage as the outbox. |
@@ -28,7 +28,7 @@ The stream is the record's `kind`, so the tag Fluent Bit gives a record (`spoor.
 | `health` | `health.heartbeat`, `health.error` | the pipeline (heartbeat), the daemon (errors) | every profile |
 | `summary` | `session.summary` | the pipeline | every profile |
 
-`output.streams` can restrict which streams are written; empty means the profile's default.
+`output.streams` can restrict which streams are shipped (empty means the profile's default); records of the other streams go to the local ring instead (heartbeat counter `records.withheld`).
 
 ### Types
 
@@ -102,7 +102,7 @@ Delivery is at least once (a Fluent Bit replay, a tail database that was deleted
   - `session.summary` and `health.heartbeat`: derived from the writer and a sequence, so each one is distinct.
 - **`dedupe`** (24 hex characters) is identical for every record that describes the same action, whichever surface reported it. For activity it is computed from host id, user id, agent, session id, the natural key and the type; the natural key is the agent's tool-call id for `tool.pre`/`tool.post`, a keyed digest of the prompt text plus its occurrence number in the session for `prompt.submit` (the same text submitted twice is two actions), and the session for `session.start`/`session.end`. The user id is part of it, so two accounts never collapse into one record. The pipeline uses it to write one activity record per action, hook first (a transcript record waits up to 10 s for its hook twin); downstream it groups records of one action.
 - **Keys.** Everything in `dedupe` and `id` except content (host, user, agent, session, type, time) is visible in the record, so any part derived from content (the prompt text, the digest behind a derived id) is an HMAC-SHA256 under the pipeline's identity key; an unkeyed hash would let a reader of the logs confirm a guess about a prompt or about a redacted secret. The daemon keeps its key in `<data_dir>/checkpoints/identity.key` (32 random bytes, hex, mode 0600), created on first start, so ids hold across restarts (heartbeat counter `identity.key_stored: 1`). `spoor scan`, `spoor detect` and the hook use a random key per process: ids are deterministic within one run and differ between runs. Details: `go doc ./internal/engine` ("Identity keys").
-- **`writer`** is `<mode>-<16 hex>`, random per process start (`daemon-…`, `detect-…`, `scan-…`). **`seq`** is monotonic per writer and stream, starting at 1. A gap in `seq` for one writer and stream is a lost record; a new writer value is a restart. The heartbeat states which sequence numbers it covers (below).
+- **`writer`** is `<mode>-<16 hex>`, random per process start (`daemon-…`, `detect-…`, `scan-…`); records in the local ring carry `<writer>.local` with their own sequence. **`seq`** is monotonic per writer and stream, starting at 1. A gap in `seq` for one writer and stream is a lost record; a new writer value is a restart. The heartbeat states which sequence numbers it covers (below).
 - **`sources`** lists the surfaces that corroborated an activity record before it was written (`["hook","transcript"]`). In the daemon the hook record is usually written within milliseconds and its transcript twin arrives a poll later; a record already handed to the sink is not rewritten, so that corroboration is counted instead: heartbeat `correlate.corroborated_after_write`, and on the session summary `summary.surfaces` plus the labels `corroborated` and `corroborated_after_write` (see the summary example below).
 
 ## Time: `ts` and `emitted`
@@ -168,22 +168,22 @@ For every stream written since the previous heartbeat, the counters hold `stream
 
 ### Counters
 
-The other counters are totals since the process started, under stable names (dashboards and the state database read them). The groups written by the pipeline (`internal/engine`, `health.go`):
+The other counters are totals since the process started (a few, such as `engine.sessions`, `engine.pending`, `baseline.keys` and the `coverage.<state>` row counts, are current values), under stable names that dashboards and the state database read. The groups written by the pipeline (`internal/engine`, `health.go`):
 
 | Counters | Meaning |
 |---|---|
-| `events_in`, `events_out`, `dropped`, `detections`, `errors` | headline totals (the state database's health table reads these) |
-| `ingest.processed`, `.excluded`, `.malformed`, `.queue_dropped`, `.disabled_dropped`, `.closed_dropped`, `.unknown_vocab` | records taken in, excluded by `privacy.exclude`, refused, or dropped (full queue, kill switch, shutdown) |
+| `events_in`, `events_out`, `dropped`, `detections`, `errors` | headline totals, copied into the state database's health row (the `spoor_health` table Fleet reads) |
+| `ingest.processed`, `.excluded`, `.malformed`, `.queue_dropped`, `.disabled_dropped`, `.closed_dropped`, `.unknown_vocab` | records taken in; excluded by `privacy.exclude`; malformed; dropped (full queue, kill switch, shutdown); an unknown `tool.kind` rewritten to `other` |
 | `correlate.*` | cross-surface correlation: held, released, matched, duplicates, late hooks, corroborated, corroborated after write, OTel attribution |
 | `coverage.*` | coverage rows by state, hook-bypass findings and signals, unknown agents, untrusted process records |
 | `detections.below_min_class`, `detections.context` | findings not written because of `rules.min_class`; context records written |
-| `records.late`, `.withheld`, `.emit_refused`, `.linecap_dropped`, `.secret_flow_scrubbed` | records that got `emitted`; evidence withheld; records refused by the privacy stage, too large to write, or reduced to a skeleton after secret flow |
+| `records.late`, `.withheld`, `.emit_refused`, `.linecap_dropped`, `.secret_flow_scrubbed` | records that got `emitted`; records kept local because `output.streams` excludes their stream; records the privacy stage refused; records too large to write; records reduced to a skeleton after secret flow |
 | `outbox.write_errors`, `outbox.dropped`, `local.written`, `local.dropped`, `local.discarded`, `local.write_errors` | sink results |
 | `state.applied`, `state.errors`, `baseline.*`, `identity.key_stored`, `identity.key_errors` | state database batches, first-seen baseline, identity key |
 | `session.summaries`, `session.synthesized_start`, `activity.suppressed` | summaries written, inferred session starts, activity dropped by the rate limit |
 | `engine.*`, `rules.*` | pipeline queues, panics and rule timeouts; the rules engine's own statistics (evaluations, matches, per-rule time in `rules.rule_ns.<id>`) |
 
-The daemon adds its own gauges in the same map (in the examples: `outbox.*` pruning and size, `procmon.*`, `scan.*`, `hooks.status_refreshes`, `transcript.primes`, `procs_total`, `procs_unreadable`, `users`, and `hook_errors.<reason>` for errors the hook supervisor reported through the spool). <!-- VERIFY: the daemon's gauge names are receiving integration fixes; the pipeline counters above are stable. -->
+The daemon adds its own gauges in the same map: in the examples `outbox.*` (pruning and size), `procmon.*`, `scan.*`, `hooks.status_refreshes`, `transcript.primes`, `procs_total`, `procs_unreadable` and `users`; when they occur, `spool.<problem>` for spool lines the daemon refused (`spool.forged_kind` for a line that claimed a kind other than activity, `spool.owner_mismatch`, `spool.symlink_refused`, `spool.not_regular`, `spool.oversize_line`, `spool.rate_limited`, `spool.malformed`) and `hook_errors.<reason>` for failures the hook supervisor reported through the spool (worker crash, timeout, bad reply). <!-- VERIFY: the daemon's gauge names are receiving integration fixes; the pipeline counters above are stable. -->
 
 `health.error` records carry `health.reason` and `health.detail`. For example, when `retention.outbox_bytes` forces the daemon to delete segments no consumer had read, it writes reason `outbox.dropped_unshipped` with per-stream counters `<stream>.events`, `.bytes`, `.seq_first` and `.seq_last` for what was lost, and the label `streams`.
 
@@ -424,7 +424,7 @@ The example files hold every other record of the same runs: the detection contex
 [`schema/examples/regen.sh`](schema/examples/regen.sh) builds the binary and, for the `minimal` and `standard` profiles, starts `spoor run` with a temporary data directory, plays one Claude Code session (session start, a prompt, four tool calls, stop, session end) through `spoor hook` with the payload shapes Claude Code sends, writes that session's transcript, waits for a heartbeat and the final summary, stops the daemon and keeps every outbox line. It runs the daemon in private mount, PID and UTS namespaces with empty `/root` and `/home`, so the host's real agent sessions and processes cannot appear; the host name is `devbox` and `host_id` is set in the run's configuration. It also runs `spoor detect` over the numbat fixtures in `internal/adapter/testdata` (`detect-numbat.ndjson`). It needs Linux, root, Go, jq and unshare:
 
 ```
-sudo docs/schema/examples/regen.sh
+sudo env "PATH=$PATH" docs/schema/examples/regen.sh
 ```
 
 After regenerating, update the quoted examples above (the test requires each to be a line of the named file) and run `go test ./internal/event`.
@@ -438,6 +438,14 @@ go test ./internal/event -run TestSchema -update
 ```
 
 What it enforces: JSON types; required fields (those the encoder always writes); `additionalProperties: false` on every object whose Go type is a struct (open maps are only `labels`, `asset.detail`, `detection.evidence`, `health.counters`, `summary.tool_calls` and `tool.input`); the closed vocabularies declared as constants in `internal/event` plus `detection.context` from `internal/privacy` (kind, type, source, fidelity, integrity, tool kind, asset kind, scope, change, detection class, severity); `v` equal to 1; the time format. Values described only in a field comment (for example `outcome.status`, `coverage.state`) are documented below but not enforced. The test also validates every example line, checks the validator rejects records with an unknown field, a value outside a vocabulary, a missing required field or a malformed time, and fails when the committed schema or the field reference below differs from what the code generates.
+
+To check other records against the schema (a live outbox, the local ring, a SIEM export as NDJSON), name files or directories in `SPOOR_SCHEMA_VALIDATE` (separated by `:`, or `;` on Windows):
+
+```
+$ SPOOR_SCHEMA_VALIDATE=<data_dir>/outbox:<data_dir>/local go test ./internal/event -run TestSchemaValidatesGivenFiles -v
+```
+
+It reports every line that does not validate, and the count it checked (`validated 248 records in 19 files` over the outputs of the runs made for this page).
 
 `v` is the schema version. It changes only on a breaking change; new optional fields are not breaking, so consumers should ignore fields they do not know rather than reject the record.
 
@@ -864,7 +872,7 @@ Event.Type: the activity types (Kind activity) and the types of the other kinds.
 | `health.heartbeat` | `TypeHealthHeartbeat` |  |
 | `health.error` | `TypeHealthError` |  |
 | `session.summary` | `TypeSessionSummary` |  |
-| `detection.context` | `privacy.TypeContext` |  |
+| `detection.context` | `privacy.TypeContext` | TypeContext is the Type of a detection-context record. |
 
 ### `Source` values
 

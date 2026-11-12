@@ -21,6 +21,16 @@ type record struct {
 	// content is the hook command text: local-only material for detection,
 	// carried in Event.Content and never serialized.
 	content string
+	// check is a failing posture check on this asset, emitted with it on
+	// every scan (the state store prunes a failure a complete scan does
+	// not re-observe), whether or not the asset itself changed.
+	check *event.Check
+}
+
+// checkRec is a posture check about no single asset (a summary).
+type checkRec struct {
+	c  *event.Check
+	uc *userCtx
 }
 
 type scanner struct {
@@ -66,10 +76,11 @@ type scanner struct {
 	// Files of a home the owner rule refused (trust.go), and the project
 	// directories scanned per uid, which decide how each is reported.
 	untrustedMu   sync.Mutex
-	untrusted     []untrustedFile
+	untrusted     map[string]*untrustedSet // by untrustedKey
+	untrustedKept map[string]int           // files kept per uid
 	untrustedSeen map[string]bool
-	untrustedDone map[string]bool
 	projDirs      map[string][]string
+	checks        []*checkRec
 }
 
 type docResult struct {
@@ -186,7 +197,8 @@ func newScanner(ctx context.Context, o Options) (*scanner, context.CancelFunc, e
 		sysEv: map[string]*evidence{}, userEv: map[*userCtx]map[string]*evidence{},
 		managed: map[string]*managedFacts{}, docs: map[string]docResult{}, projSeen: map[string]bool{},
 		projectHits: map[string]map[string]bool{}, adminUID: "0",
-		untrustedSeen: map[string]bool{}, untrustedDone: map[string]bool{}, projDirs: map[string][]string{},
+		untrusted: map[string]*untrustedSet{}, untrustedKept: map[string]int{},
+		untrustedSeen: map[string]bool{}, projDirs: map[string][]string{},
 	}
 	if o.adminUID != "" {
 		s.adminUID = o.adminUID

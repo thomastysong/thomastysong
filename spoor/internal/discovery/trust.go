@@ -18,9 +18,9 @@ import (
 //   - the account or root owns it (an administrator may provision a
 //     read-only configuration into a home), and
 //   - nobody else can write it: not world-writable, and group-writable only
-//     when the group is private to the owner (the user-private-group scheme
-//     with umask 002, Debian and Ubuntu's default for login users, where
-//     only the owner is in the group),
+//     when nobody but the owner, the account and root is in the group (the
+//     user-private-group scheme with umask 002, Debian and Ubuntu's default
+//     for login users, or a root file in the account's own group),
 //   - and, for a root-owned file in another account's home, it has a
 //     single link: on kernels or mounts without protected_hardlinks an
 //     account can hard-link a root file it cannot read (a container's
@@ -28,9 +28,9 @@ import (
 //     the account.
 //
 // Anything else is refused on the open descriptor before a byte is read,
-// counted as denied, and reported as posture: the risk flag
-// untrusted_owner on the agent whose file it is, or a project_config asset
-// for a project file. This holds whether or not the scan is privileged:
+// counted as denied, and reported as posture: a project_config asset with
+// the risk flag untrusted_owner (Parent the agent whose location holds it)
+// and a failing posture check SPR-SCAN-001 on it. This holds whether or not the scan is privileged:
 // the node sensor runs as an ordinary uid with read capabilities. Files a
 // scan reads for an account outside its home (a project elsewhere, a
 // relocated state directory) keep the older rule: when privileged, the
@@ -61,22 +61,37 @@ func (g *gate) checkFile(l loc, m fmeta, owner string) error {
 // untrustedWhy says why a file in the home of account (a uid) is not
 // trusted, or "".
 func (g *gate) untrustedWhy(m fmeta, account string) string {
-	admin := g.adminUID
-	if admin == "" {
-		admin = "0"
-	}
+	admin := adminOr(g.adminUID)
 	mode := fmt.Sprintf("mode %04o", uint32(m.perm&fs.ModePerm))
 	switch {
 	case m.owner != account && m.owner != admin:
 		return "owned by uid " + m.owner + ", neither the account (uid " + account + ") nor root"
-	case m.owner == admin && account != admin && m.nlink > 1:
+	case rootLinked(m, account, admin):
 		return fmt.Sprintf("owned by root with %d links: possibly a hard link to a file the account cannot read", m.nlink)
 	case m.perm&0o002 != 0:
 		return "writable by every account (" + mode + ")"
-	case m.perm&0o020 != 0 && !g.privateGroup(m.group, m.owner):
-		return "writable by group " + m.group + ", which is not private to the owner (" + mode + ")"
+	case m.perm&0o020 != 0 && !g.groupWithin(m.group, m.owner, account, admin):
+		return "writable by group " + m.group + ", which holds accounts other than the owner, the account and root (" + mode + ")"
 	}
 	return ""
+}
+
+func adminOr(uid string) string {
+	if uid == "" {
+		return "0"
+	}
+	return uid
+}
+
+func rootLinked(m fmeta, account, admin string) bool {
+	return m.owner == admin && account != admin && m.nlink > 1
+}
+
+// foreignWrite reports a refusal whose file someone other than the
+// account and root wrote, or may be a link to a file the account cannot
+// read: a planted file, not merely loose permissions on the account's own.
+func foreignWrite(m fmeta, account, admin string) bool {
+	return m.owner != account && m.owner != admin || rootLinked(m, account, admin)
 }
 
 // acctDB is what the owner rule needs from the account database of the
@@ -87,21 +102,46 @@ type acctDB struct {
 	members map[string][]string // gid -> supplementary member names
 }
 
-// privateGroup reports whether only owner is in group gid: the owner's
-// primary group, nobody else's, and no other account listed as a member.
-// Without a readable account database no group is private.
-func (g *gate) privateGroup(gid, owner string) bool {
+// groupWithin reports whether every account in group gid is the file's
+// owner, the account whose home holds it, or root: the gid is the primary
+// group of at least one of them and of nobody else, and no other account
+// is listed as a member. That covers the user-private-group scheme (umask
+// 002: the account's own group on its own file) and a root-provisioned
+// file the account may edit (root:account 0664), both writable by nobody
+// but the account and root. Without a readable account database no group
+// qualifies.
+func (g *gate) groupWithin(gid string, uids ...string) bool {
 	g.acctOnce.Do(func() { g.acct = g.loadAccounts() })
 	db := g.acct
 	if db == nil || gid == "" {
 		return false
 	}
-	if us := db.primary[gid]; len(us) != 1 || us[0] != owner {
+	allowed := func(uid string) bool {
+		for _, u := range uids {
+			if u != "" && u == uid {
+				return true
+			}
+		}
 		return false
 	}
-	name := db.name[owner]
+	us := db.primary[gid]
+	if len(us) == 0 {
+		return false
+	}
+	for _, u := range us {
+		if !allowed(u) {
+			return false
+		}
+	}
 	for _, m := range db.members[gid] {
-		if m != name {
+		ok := false
+		for _, u := range uids {
+			if n, known := db.name[u]; known && n == m {
+				ok = true
+				break
+			}
+		}
+		if !ok {
 			return false
 		}
 	}
@@ -164,22 +204,74 @@ func numeric(s string) bool {
 // untrustedFile is a file checkFile refused, kept for the posture report.
 type untrustedFile struct {
 	uid, path, why string
+	foreign        bool // someone else wrote it (see foreignWrite)
 }
 
-// maxUntrusted bounds the refusals kept per scan: a hostile home can plant
-// one in every catalogued location.
-const maxUntrusted = 256
+// untrustedSet is the refusals kept for one directory reported as a unit:
+// a home, or a project.
+type untrustedSet struct {
+	files []untrustedFile
+	// dropped counts the distinct refused files over the caps, and
+	// droppedForeign those of them someone else wrote.
+	dropped, droppedForeign int
+}
+
+// The refusals kept are bounded per directory and per account, never per
+// scan: a hostile home can plant one in every catalogued location and
+// multiply skills at will, and a scan-wide cap would let one account fill
+// it from its own home and hide a file planted in the home of an account
+// scanned after it. Within a directory a file someone else wrote displaces
+// one that only has loose permissions, so the account's own world-writable
+// files cannot hide a planted one either. What is dropped is still counted
+// as denied and reported as one summary check per directory.
+const (
+	maxUntrustedPerDir     = 64
+	maxUntrustedPerAccount = 256
+)
+
+// untrustedKey identifies the set a refused file at l belongs to.
+func (s *scanner) untrustedKey(uid, root string) string {
+	k := uid + "\x00" + cleanLogical(root)
+	if foldCase(s.goos) {
+		k = strings.ToLower(k)
+	}
+	return k
+}
 
 // recordUntrusted is the gate's untrusted callback.
-func (s *scanner) recordUntrusted(l loc, _ fmeta, why string) {
+func (s *scanner) recordUntrusted(l loc, m fmeta, why string) {
 	p := l.String()
+	f := untrustedFile{uid: l.uid, path: p, why: why, foreign: foreignWrite(m, l.uid, adminOr(s.adminUID))}
 	s.untrustedMu.Lock()
 	defer s.untrustedMu.Unlock()
-	if s.untrustedSeen[p] || len(s.untrusted) >= maxUntrusted {
+	if s.untrustedSeen[p] {
 		return
 	}
 	s.untrustedSeen[p] = true
-	s.untrusted = append(s.untrusted, untrustedFile{uid: l.uid, path: p, why: why})
+	k := s.untrustedKey(l.uid, l.root)
+	set := s.untrusted[k]
+	if set == nil {
+		set = &untrustedSet{}
+		s.untrusted[k] = set
+	}
+	if len(set.files) < maxUntrustedPerDir && s.untrustedKept[l.uid] < maxUntrustedPerAccount {
+		set.files = append(set.files, f)
+		s.untrustedKept[l.uid]++
+		return
+	}
+	if f.foreign {
+		// Displace the last file of this directory that nobody else wrote.
+		for i := len(set.files) - 1; i >= 0; i-- {
+			if !set.files[i].foreign {
+				set.files[i], f = f, set.files[i]
+				break
+			}
+		}
+	}
+	set.dropped++
+	if f.foreign {
+		set.droppedForeign++
+	}
 }
 
 // productHomeBases lists the static prefixes of every home location the
@@ -226,23 +318,24 @@ func (s *scanner) inScannedProject(uc *userCtx, p string) bool {
 	return false
 }
 
-// reportUntrusted records the refused files below dir (a project, or the
-// home when project is false) that are not reported yet, one
-// project_config asset each, flagged untrusted_owner. Their content was not
-// read, so they carry no hash. A home file names as Parent the agent whose
-// catalogued location holds it: the agent asset itself may not exist (a
-// state directory several products share identifies none of them).
+// reportUntrusted reports the refused files of dir (a project, or the home
+// when project is false) that are not reported yet: one project_config
+// asset each, flagged untrusted_owner, and a failing posture check on it
+// (untrustedCheck). Their content was not read, so they carry no hash. A
+// home file names as Parent the agent whose catalogued location holds it:
+// the agent asset itself may not exist (a state directory several products
+// share identifies none of them). Files over the caps are reported as one
+// summary check for dir.
 func (s *scanner) reportUntrusted(uc *userCtx, dir string, project bool) {
 	s.untrustedMu.Lock()
-	var files []untrustedFile
-	for _, f := range s.untrusted {
-		if !s.untrustedDone[f.path] && f.uid == uidOf(uc) && withinLogical(dir, f.path, s.goos) {
-			files = append(files, f)
-			s.untrustedDone[f.path] = true
-		}
-	}
+	k := s.untrustedKey(uidOf(uc), dir)
+	set := s.untrusted[k]
+	delete(s.untrusted, k)
 	s.untrustedMu.Unlock()
-	for _, f := range files {
+	if set == nil {
+		return
+	}
+	for _, f := range set.files {
 		if !project && s.inScannedProject(uc, f.path) {
 			continue
 		}
@@ -267,8 +360,71 @@ func (s *scanner) reportUntrusted(uc *userCtx, dir string, project bool) {
 		if uc != nil {
 			a.Owner = uc.u.Name
 		}
-		s.add(&record{a: a, uc: uc})
+		s.add(&record{a: a, uc: uc, check: untrustedCheck(a, f.foreign)})
 	}
+	if set.dropped > 0 {
+		s.led.note(fmt.Sprintf("%d more files refused by the owner rule in %s are not listed (limits: %d per directory, %d per account)",
+			set.dropped, dir, maxUntrustedPerDir, maxUntrustedPerAccount))
+		c := &event.Check{
+			ID:       checkUntrustedOwner,
+			Title:    "More agent configuration files written or writable by other accounts",
+			Status:   "fail",
+			Severity: event.SevMedium,
+			Scope:    event.ScopeUser,
+			Subject:  safeText(dir, 1024),
+			Expected: untrustedExpected,
+			Actual: fmt.Sprintf("%d more refused files are not listed (%d written by another account); limits %d per directory, %d per account",
+				set.dropped, set.droppedForeign, maxUntrustedPerDir, maxUntrustedPerAccount),
+			Remedy: untrustedRemedy,
+		}
+		if set.droppedForeign > 0 {
+			c.Severity = event.SevHigh
+		}
+		if project {
+			c.Scope = event.ScopeProject
+		}
+		if uc != nil {
+			c.Owner = uc.u.Name
+		}
+		s.checks = append(s.checks, &checkRec{c: c, uc: uc})
+	}
+}
+
+// checkUntrustedOwner is the id of the posture check for a refused file.
+// The scanner itself emits it, not a rule pack: the refusal is the
+// scanner's decision about a file it did not read, and it is reported
+// whatever rule set or bundle is loaded. The SCAN area keeps it apart from
+// the pack rule ids (SPR-POST-*).
+const checkUntrustedOwner = "SPR-SCAN-001"
+
+const (
+	untrustedExpected = "owned by the account or root and writable by nobody else"
+	untrustedRemedy   = "Find out who wrote the file. If the account did not, remove it and treat the account as targeted; " +
+		"if it did, give the file to the account (chown) and remove group and world write (chmod go-w). " +
+		"spoor does not read the file until then."
+)
+
+// untrustedCheck is the failing posture check reported with the asset of a
+// refused file: high when someone else wrote it (a planted file), medium
+// when only its permissions let others write it.
+func untrustedCheck(a *event.Asset, foreign bool) *event.Check {
+	c := &event.Check{
+		ID:       checkUntrustedOwner,
+		Title:    "Agent configuration file written or writable by another account",
+		Status:   "fail",
+		Severity: event.SevMedium,
+		AgentID:  a.Parent,
+		Scope:    a.Scope,
+		Subject:  a.Path,
+		Expected: untrustedExpected,
+		Actual:   a.Detail[flagUntrustedOwner],
+		Owner:    a.Owner,
+		Remedy:   untrustedRemedy,
+	}
+	if foreign {
+		c.Severity = event.SevHigh
+	}
+	return c
 }
 
 // ownerProduct is the catalog id of the product (agents first) whose home

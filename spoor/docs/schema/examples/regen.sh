@@ -4,7 +4,10 @@
 # what the daemon wrote to its outbox, or what `spoor detect` printed, after
 # the binary's own privacy stage.
 #
-#   sudo docs/schema/examples/regen.sh [out-dir]    (default: docs/schema/examples)
+#   sudo env "PATH=$PATH" docs/schema/examples/regen.sh [out-dir]
+#
+# (out-dir defaults to docs/schema/examples; PATH is passed so that root
+# finds the same go and jq).
 #
 # Needs Linux, root, Go, jq and unshare. The daemon runs as root and would
 # otherwise read every account's agent logs and see every process on the
@@ -13,7 +16,8 @@
 # activity it can see), the process monitor sees only this run, and the host
 # name is "devbox". host_id is set in the run's configuration, so no real
 # machine id ends up in the examples. Nothing is written outside a temporary
-# work directory and the output directory.
+# work directory ($TMPDIR), the output directory and the Go build cache.
+# KEEP=1 keeps the work directory (daemon logs, data directories).
 #
 # Per privacy profile (minimal, the default, and standard) it starts
 # `spoor run`, plays one Claude Code session through `spoor hook` (the same

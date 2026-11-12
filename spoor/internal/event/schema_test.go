@@ -104,6 +104,16 @@ func docText(groups ...*ast.CommentGroup) string {
 	return strings.Join(parts, " ")
 }
 
+// specDoc is a constant's comment: its own, or the declaration's when the
+// declaration holds only this one spec ("// X is ...\nconst X = ...").
+func specDoc(gd *ast.GenDecl, vs *ast.ValueSpec) string {
+	doc := docText(vs.Doc, vs.Comment)
+	if doc == "" && len(gd.Specs) == 1 {
+		doc = docText(gd.Doc)
+	}
+	return doc
+}
+
 func readSourceFacts(t *testing.T) *srcFacts {
 	t.Helper()
 	f := &srcFacts{
@@ -185,7 +195,7 @@ func readSourceFacts(t *testing.T) *srcFacts {
 					if err != nil {
 						t.Fatal(err)
 					}
-					v := enumValue{Value: val, Const: n.Name, Doc: docText(vs.Doc, vs.Comment)}
+					v := enumValue{Value: val, Const: n.Name, Doc: specDoc(gd, vs)}
 					if id, ok := vs.Type.(*ast.Ident); ok {
 						if named[id.Name] {
 							f.enums[id.Name] = append(f.enums[id.Name], v)
@@ -214,23 +224,25 @@ func readSourceFacts(t *testing.T) *srcFacts {
 		t.Fatal(err)
 	}
 	found := false
-	ast.Inspect(af, func(n ast.Node) bool {
-		vs, ok := n.(*ast.ValueSpec)
-		if !ok {
-			return true
+	for _, d := range af.Decls {
+		gd, ok := d.(*ast.GenDecl)
+		if !ok || gd.Tok != token.CONST {
+			continue
 		}
-		for i, id := range vs.Names {
-			if id.Name != "TypeContext" || i >= len(vs.Values) {
-				continue
-			}
-			if lit, ok := vs.Values[i].(*ast.BasicLit); ok && lit.Kind == token.STRING {
-				val, _ := strconv.Unquote(lit.Value)
-				f.enums["EventType"] = append(f.enums["EventType"], enumValue{Value: val, Const: "privacy.TypeContext", Doc: docText(vs.Doc, vs.Comment)})
-				found = true
+		for _, sp := range gd.Specs {
+			vs := sp.(*ast.ValueSpec)
+			for i, id := range vs.Names {
+				if id.Name != "TypeContext" || i >= len(vs.Values) {
+					continue
+				}
+				if lit, ok := vs.Values[i].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+					val, _ := strconv.Unquote(lit.Value)
+					f.enums["EventType"] = append(f.enums["EventType"], enumValue{Value: val, Const: "privacy.TypeContext", Doc: specDoc(gd, vs)})
+					found = true
+				}
 			}
 		}
-		return true
-	})
+	}
 	if !found {
 		t.Fatalf("%s: const TypeContext not found", privacyContextSrc)
 	}
@@ -990,6 +1002,69 @@ func TestSchemaValidatesExampleRecords(t *testing.T) {
 	t.Logf("validated example records by kind %v, by type %v", kinds, types)
 }
 
+// TestSchemaValidatesGivenFiles checks other NDJSON against the schema, for
+// example a live outbox: SPOOR_SCHEMA_VALIDATE is a list of files or
+// directories (their *.ndjson files) separated by the OS path-list
+// separator. Skipped when unset.
+func TestSchemaValidatesGivenFiles(t *testing.T) {
+	spec := os.Getenv("SPOOR_SCHEMA_VALIDATE")
+	if spec == "" {
+		t.Skip("set SPOOR_SCHEMA_VALIDATE to files or directories of NDJSON records")
+	}
+	schema, _ := generateSchema(t)
+	v, err := newValidator(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var files []string
+	for _, p := range filepath.SplitList(spec) {
+		fi, err := os.Stat(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !fi.IsDir() {
+			files = append(files, p)
+			continue
+		}
+		m, err := filepath.Glob(filepath.Join(p, "*.ndjson"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, m...)
+	}
+	n := 0
+	for _, f := range files {
+		fh, err := os.Open(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sc := bufio.NewScanner(fh)
+		sc.Buffer(make([]byte, 1<<20), 1<<20)
+		line := 0
+		for sc.Scan() {
+			line++
+			raw := strings.TrimRight(sc.Text(), "\r")
+			if raw == "" {
+				continue
+			}
+			n++
+			x, err := decodeJSON([]byte(raw))
+			if err != nil {
+				t.Errorf("%s:%d: %v", f, line, err)
+				continue
+			}
+			for _, e := range v.Validate(x) {
+				t.Errorf("%s:%d: %s", f, line, e)
+			}
+		}
+		if err := sc.Err(); err != nil {
+			t.Errorf("%s: %v", f, err)
+		}
+		fh.Close()
+	}
+	t.Logf("validated %d records in %d files", n, len(files))
+}
+
 func TestSchemaRejectsInvalidRecords(t *testing.T) {
 	schema, _ := generateSchema(t)
 	v, err := newValidator(schema)
@@ -1065,6 +1140,78 @@ func TestSchemaRejectsInvalidRecords(t *testing.T) {
 				t.Fatalf("accepted: %s", short(m))
 			}
 		})
+	}
+}
+
+// TestSchemaValidatorHostileInput: the validator is bounded by the schema,
+// not by the input, and refuses schemas it cannot fully check.
+func TestSchemaValidatorHostileInput(t *testing.T) {
+	schema, _ := generateSchema(t)
+	v, err := newValidator(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nested := func(depth int, leaf string) string {
+		return strings.Repeat(`{"a":`, depth) + leaf + strings.Repeat(`}`, depth)
+	}
+	manyFields := func(n int) string {
+		var b strings.Builder
+		for i := 0; i < n; i++ {
+			fmt.Fprintf(&b, `,"x%d":1`, i)
+		}
+		return b.String()
+	}
+	base := `"v":1,"id":"x","ts":"2026-11-12T09:00:00.000000Z","kind":"activity","type":"tool.pre","source":"hook"`
+	cases := []struct {
+		name    string
+		line    string
+		valid   bool
+		decodes bool
+	}{
+		{"deep JSON inside the open tool.input", `{` + base + `,"tool":{"input":` + nested(5000, `"x"`) + `}}`, true, true},
+		{"deep JSON where labels want strings", `{` + base + `,"labels":` + nested(5000, `"x"`) + `}`, false, true},
+		{"a 1 MiB command", `{` + base + `,"target":{"command":"` + strings.Repeat("A", 1<<20) + `"}}`, true, true},
+		{"invalid UTF-8 in a string", `{` + base + `,"target":{"command":"` + "\xff\xfe" + `"}}`, true, true},
+		{"an unknown field", `{` + base + `,"x":1}`, false, true},
+		{"10,000 unknown fields", `{` + base + manyFields(10000) + `}`, false, true},
+		{"trailing data", `{` + base + `} {}`, false, false},
+		{"not an object", `[1,2,3]`, false, true},
+		{"null", `null`, false, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			start := time.Now()
+			x, err := decodeJSON([]byte(c.line))
+			if (err == nil) != c.decodes {
+				t.Fatalf("decode error %v, want decodes=%v", err, c.decodes)
+			}
+			if err != nil {
+				return
+			}
+			errs := v.Validate(x)
+			if (len(errs) == 0) != c.valid {
+				t.Fatalf("valid=%v, want %v: %v", len(errs) == 0, c.valid, errs)
+			}
+			if d := time.Since(start); d > 5*time.Second {
+				t.Fatalf("took %v", d)
+			}
+		})
+	}
+
+	// A schema the validator cannot fully check is an error, never a pass.
+	for name, s := range map[string]string{
+		"unknown keyword": `{"type":"object","maxProperties":1}`,
+		"ref cycle":       `{"$defs":{"A":{"$ref":"#/$defs/A"}},"$ref":"#/$defs/A"}`,
+		"dangling ref":    `{"$ref":"#/$defs/Missing"}`,
+		"remote ref":      `{"$ref":"https://example.com/s.json"}`,
+	} {
+		v, err := newValidator([]byte(s))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if errs := v.Validate(map[string]any{}); len(errs) == 0 {
+			t.Errorf("%s: schema %s accepted a record", name, s)
+		}
 	}
 }
 

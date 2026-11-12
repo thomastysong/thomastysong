@@ -9,6 +9,14 @@ $Ext  = Join-Path $Dir 'spoor.ext.exe'
 $Data = Join-Path $env:ProgramData 'spoor'
 $Load = Join-Path $env:ProgramFiles 'osquery\extensions.load'
 
+# While the binary exists: no agent keeps calling it (fail-closed entries
+# would block tool calls), as packaging/windows/install-service.ps1 does.
+$Exe = Join-Path $Dir 'spoor.exe'
+if (Test-Path $Exe) {
+  & $Exe hooks uninstall --scope managed | Out-Null
+  if ($LASTEXITCODE -ne 0) { Write-Warning 'managed hook entries not removed' }
+}
+
 # sc.exe reports failure only through its exit code. No 2>&1: under
 # 'Stop', Windows PowerShell 5.1 turns redirected stderr into an error.
 if (Get-Service -Name $Name -ErrorAction SilentlyContinue) {

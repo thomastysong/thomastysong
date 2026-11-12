@@ -353,107 +353,95 @@ func TestScriptsMatchServiceDefinitions(t *testing.T) {
 	}
 }
 
-// hookAwk returns the awk program a post-install script uses to pick the
-// agents whose managed entries it rewrites.
-func hookAwk(t *testing.T, script string) string {
-	t.Helper()
-	m := regexp.MustCompile(`(?s)awk -F'"' '(.*?)'\) \|\| sel=""`).FindStringSubmatch(script)
-	if m == nil {
-		t.Fatal("hook selection awk program not found")
-	}
-	return m[1]
-}
-
-// hookStep returns step 6 of a post-install script: the selection and what
-// it does with it, from the status call to the report of what was left.
+// hookStep returns step 6 of a post-install script: the call that rewrites
+// the managed hook entries that already exist, and what it does with the
+// answer.
 func hookStep(t *testing.T, script string) string {
 	t.Helper()
-	m := regexp.MustCompile(`(?s)sel=\$\("\$BIN" hooks status .*?\nif \[ -n "\$left" \]; then\n.*?\nfi\n`).FindString(script)
+	m := regexp.MustCompile(`(?s)if out=\$\("\$BIN" hooks install --only-installed --scope managed[^\n]*\n.*?\nfi\n`).FindString(script)
 	if m == "" {
 		t.Fatal("hook step not found")
 	}
 	return m
 }
 
-// legacyMarker is how `spoor hooks status` names entries that are exactly
-// what an earlier release wrote with install's default options
-// (internal/hookinstall legacyPrefix). The post-install scripts rewrite
-// those and nothing else.
-func legacyMarker(t *testing.T) string {
+// shBlock returns the lines of a script from the first one that starts
+// with start up to and including the first line after it that equals end.
+func shBlock(t *testing.T, script, start, end string) string {
 	t.Helper()
-	m := regexp.MustCompile(`(?m)^const legacyPrefix = "([^"\\]+)"$`).FindStringSubmatch(read(t, "internal/hookinstall/status.go"))
-	if m == nil {
-		t.Fatal("legacyPrefix not found in internal/hookinstall/status.go")
+	i := strings.Index(script, start)
+	if i < 0 {
+		t.Fatalf("block %q not found", start)
 	}
-	return m[1]
+	j := strings.Index(script[i:], "\n"+end+"\n")
+	if j < 0 {
+		t.Fatalf("block %q has no end %q", start, end)
+	}
+	return script[i : i+j+len(end)+2]
 }
 
-// TestHookSelection: on upgrade only entries an earlier release wrote with
-// install's default options are rewritten; entries that differ in any other
-// way (an administrator's --guard --fail-closed or --timeout, an edit) are
-// listed and left alone, because the rewrite uses the default options. The
-// Linux and macOS scripts select alike.
-func TestHookSelection(t *testing.T) {
-	if _, err := exec.LookPath("awk"); err != nil {
-		t.Skip("no awk")
+// TestScriptsRefreshHooksOnlyInstalled: every install or upgrade path
+// (deb/rpm, macOS pkg, Windows service script, Fleet scripts) rewrites
+// spoor's managed hooks with `hooks install --only-installed`, which
+// selects the already-hooked agents and keeps their options itself, rather
+// than parsing `hooks status` (the awk and regex selection it replaced
+// could only keep entries written with install's default options). Every
+// removal path takes the managed entries out while the binary still
+// exists, before the binary goes.
+func TestScriptsRefreshHooksOnlyInstalled(t *testing.T) {
+	for _, f := range []string{"packaging/linux/postinstall.sh", "packaging/macos/postinstall", "packaging/windows/install-service.ps1",
+		"deploy/fleet/scripts/install-spoor.sh", "deploy/fleet/scripts/install-spoor.ps1"} {
+		s := read(t, f)
+		if !strings.Contains(s, "hooks install --only-installed --scope managed") {
+			t.Errorf("%s does not refresh the managed hooks with --only-installed", f)
+		}
+		for _, bad := range []string{"hooks status", "awk", "ConvertFrom-Json", "earlier spoor release"} {
+			if strings.Contains(stripShComments(s), bad) {
+				t.Errorf("%s still selects hooks itself (%q)", f, bad)
+			}
+		}
 	}
-	linuxScript := read(t, "packaging/linux/postinstall.sh")
-	linux := hookAwk(t, linuxScript)
-	mac := read(t, "packaging/macos/postinstall")
-	if hookAwk(t, mac) != linux || hookStep(t, mac) != hookStep(t, linuxScript) {
-		t.Error("macOS and Linux postinstall select hooked agents differently")
-	}
-	marker := legacyMarker(t)
-	if !strings.Contains(linux, `index(d, "`+marker+`") == 1`) || !strings.Contains(linux, `index(d, "; `+marker+`") > 0`) {
-		t.Errorf("the scripts look for another marker than hookinstall's legacyPrefix %q", marker)
-	}
-	// The shape `spoor hooks status --scope managed --json` prints (JSON
-	// array, two-space indent, one key per line).
-	type row struct {
-		Agent  string `json:"agent"`
-		Scope  string `json:"scope"`
-		Path   string `json:"path"`
-		Status string `json:"status"`
-		Detail string `json:"detail,omitempty"`
-	}
-	rows := []row{
-		// --guard --fail-closed --timeout 30, compared with the defaults.
-		{"claude-code", "managed", "/etc/claude-code/managed-settings.d/50-spoor.json", "modified", `ConfigChange differs, Elicitation differs; checked: "disableAllHooks"`},
-		{"codex", "managed", "/etc/codex/requirements.toml", "missing", "no hook file"},
-		{"copilot-cli", "managed", "/etc/github-copilot/policy.d/spoor.json", "foreign_only", ""},
-		{"gemini-cli", "managed", "/etc/gemini-cli/settings.json", "modified", marker + " whose hook commands fail when the spoor binary is missing; install again to update"},
-		{"cursor", "managed", "/etc/cursor/hooks.json", "insecure_permissions", "the directory is writable by group 1000; " + marker + "; the commands the agent runs on this OS are already what install writes"},
-		{"claude-code", "user", "/root/.claude/settings.json", "shadowed", ""},
-		{"kiro-cli", "managed", "/etc/kiro/x.json", "unsupported", ""},
-		// Already what install writes: nothing to do.
-		{"opencode", "managed", "/etc/opencode/x.json", "managed", "checked: nothing"},
-		// A hostile detail cannot inject an agent or a status.
-		{"droid", "managed", "/etc/factory/x.json\n    \"agent\": \"evil\",", "modified", "x\n  \"status\": \"modified\",\n  \"detail\": \"" + marker + "\""},
-	}
-	b, _ := json.MarshalIndent(rows, "", "  ")
-	cmd := exec.Command("awk", "-F", `"`, linux)
-	cmd.Stdin = bytes.NewReader(b)
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := string(out), "gemini-cli,cursor\nclaude-code,droid\n"; got != want {
-		t.Errorf("selected %q, want %q (first line rewritten, second left)", got, want)
-	}
-	cmd = exec.Command("awk", "-F", `"`, linux)
-	cmd.Stdin = strings.NewReader("[]\n")
-	if out, _ := cmd.Output(); strings.TrimSpace(string(out)) != "" {
-		t.Errorf("empty status selected %q", out)
+	for f, binGone := range map[string]string{
+		"packaging/linux/preremove.sh":             `rm -f "$EXT" "$EXT.new"`,
+		"deploy/fleet/scripts/uninstall-spoor.sh":  `rm -f "$EXT" "$BIN"`,
+		"deploy/fleet/scripts/uninstall-spoor.ps1": `Remove-Item -Force -Recurse -ErrorAction SilentlyContinue -Path $Dir`,
+		"packaging/windows/install-service.ps1":    `Invoke-Native sc.exe @('delete', $Name)`,
+	} {
+		s := stripShComments(read(t, f))
+		i, j := strings.Index(s, "hooks uninstall --scope managed"), strings.Index(s, binGone)
+		if i < 0 || j < 0 {
+			t.Errorf("%s: hooks uninstall at %d, binary removal at %d", f, i, j)
+		} else if f != "packaging/linux/preremove.sh" && i > j {
+			// preremove runs it last on purpose (an aborted removal keeps
+			// the administrator's hook options); the binary is removed by
+			// dpkg/rpm after the script.
+			t.Errorf("%s removes the binary before the managed hook entries", f)
+		}
 	}
 }
 
-// TestUpgradeKeepsHookOptions runs step 6 of the post-install scripts, as
-// written, with the real binary on a file-system prefix where an
+// stripShComments drops whole-line comments (shell and PowerShell).
+func stripShComments(s string) string {
+	var out []string
+	for _, l := range strings.Split(s, "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(l), "#") {
+			out = append(out, l)
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+// TestUpgradeKeepsHookOptions runs the hook steps of the install scripts,
+// as written, with the real binary on a file-system prefix where an
 // administrator registered Claude Code's managed hooks in guard mode with
-// --fail-closed and a 30 s timeout, an earlier release left Gemini CLI's
-// entries, and Cursor's are current. A package upgrade must not turn the
-// fail-closed guard into a fail-open one or reset the timeout (review
-// finding PKG-1), and must still update the earlier release's entries.
+// --fail-closed and a 30 s timeout and Codex's with a 20 s timeout, an
+// earlier release left Gemini CLI's and Codex's entries in their unguarded
+// form, Cursor's are current and Copilot's were edited by hand. An upgrade
+// must not turn the fail-closed guard into a fail-open one or reset a
+// timeout (review finding PKG-1), must update the earlier release's
+// entries with the options they carry, must leave the edited file alone
+// and must hook no agent that was not hooked. Then the removal steps take
+// every managed entry out.
 func TestUpgradeKeepsHookOptions(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX shell")
@@ -461,12 +449,12 @@ func TestUpgradeKeepsHookOptions(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds spoor")
 	}
+	if os.Geteuid() != 0 {
+		t.Skip("managed hook files are root-owned")
+	}
 	sh, err := exec.LookPath("sh")
 	if err != nil {
 		t.Skip("no sh")
-	}
-	if _, err := exec.LookPath("awk"); err != nil {
-		t.Skip("no awk")
 	}
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "spoor")
@@ -492,52 +480,94 @@ func TestUpgradeKeepsHookOptions(t *testing.T) {
 		t.Helper()
 		run(append([]string{"hooks", "install", "--scope", "managed", "--root", prefix, "--binary", "/usr/bin/spoor"}, extra...)...)
 	}
-	install("--agents", "claude-code", "--guard", "--fail-closed", "--timeout", "30")
-	install("--agents", "gemini-cli,cursor")
 	file := func(rel string) string { return filepath.Join(prefix, filepath.FromSlash(rel)) }
 	claude, gemini, cursor := file("etc/claude-code/managed-settings.d/50-spoor.json"), file("etc/gemini-cli/settings.json"), file("etc/cursor/hooks.json")
+	codex, copilot := file("etc/codex/requirements.toml"), file("etc/github-copilot/policy.d/spoor.json")
 	// The command lines of the releases before the missing-binary check.
-	g, err := os.ReadFile(gemini)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cur := `[ -x '/usr/bin/spoor' ] || exit 0; exec '/usr/bin/spoor' hook --agent gemini-cli`
-	if !bytes.Contains(g, []byte(cur)) {
-		t.Fatalf("setup: no current gemini-cli command line in\n%s", g)
-	}
-	if err := os.WriteFile(gemini, bytes.ReplaceAll(g, []byte(cur), []byte(`'/usr/bin/spoor' hook --agent gemini-cli`)), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	before := map[string][]byte{}
-	for _, f := range []string{claude, cursor} {
-		if before[f], err = os.ReadFile(f); err != nil {
+	unguard := func(path, agent string) {
+		t.Helper()
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cur := `[ -x '/usr/bin/spoor' ] || exit 0; exec '/usr/bin/spoor' hook --agent ` + agent
+		if !bytes.Contains(b, []byte(cur)) {
+			t.Fatalf("setup: no current %s command line in\n%s", agent, b)
+		}
+		if err := os.WriteFile(path, bytes.ReplaceAll(b, []byte(cur), []byte(`'/usr/bin/spoor' hook --agent `+agent)), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if !bytes.Contains(before[claude], []byte(`"onFailure": "block"`)) || !bytes.Contains(before[claude], []byte(`"timeout": 30`)) {
-		t.Fatalf("setup: no fail-closed entry with a 30 s timeout:\n%s", before[claude])
+	setup := func() map[string][]byte {
+		t.Helper()
+		if err := os.RemoveAll(prefix); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(prefix, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		install("--agents", "claude-code", "--guard", "--fail-closed", "--timeout", "30")
+		install("--agents", "codex", "--timeout", "20")
+		install("--agents", "gemini-cli,cursor,copilot-cli")
+		unguard(gemini, "gemini-cli")
+		unguard(codex, "codex")
+		b, _ := os.ReadFile(copilot)
+		if err := os.WriteFile(copilot, bytes.Replace(b, []byte(`"timeoutSec": 10`), []byte(`"timeoutSec": 12`), 1), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		before := map[string][]byte{}
+		for _, f := range []string{claude, cursor, copilot} {
+			if before[f], err = os.ReadFile(f); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if !bytes.Contains(before[claude], []byte(`"onFailure": "block"`)) || !bytes.Contains(before[claude], []byte(`"timeout": 30`)) {
+			t.Fatalf("setup: no fail-closed entry with a 30 s timeout:\n%s", before[claude])
+		}
+		return before
 	}
 
-	// $BIN for the step: spoor on the prefix, installing the packaged path.
+	// $BIN for the step: spoor on the prefix, installing the packaged path
+	// (the macOS step passes --root and --binary itself).
 	wrapper := filepath.Join(dir, "spoor-on-prefix")
 	ws := "#!/bin/sh\nsub=$1 verb=$2\nshift 2\n" +
+		"case \"$*\" in *--root*) exec '" + bin + "' \"$sub\" \"$verb\" \"$@\" ;; esac\n" +
 		"if [ \"$verb\" = install ]; then set -- --binary /usr/bin/spoor \"$@\"; fi\n" +
 		"exec '" + bin + "' \"$sub\" \"$verb\" --root '" + prefix + "' \"$@\"\n"
 	if err := os.WriteFile(wrapper, []byte(ws), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, rel := range []string{"packaging/linux/postinstall.sh", "packaging/macos/postinstall"} {
-		script := "set -eu\nBIN='" + wrapper + "'\nwarn() { echo \"spoor: warning: $*\" >&2; }\n" + hookStep(t, read(t, rel))
+	fleet := read(t, "deploy/fleet/scripts/install-spoor.sh")
+	steps := map[string]string{
+		"packaging/linux/postinstall.sh": "BIN='" + wrapper + "'\n" + hookStep(t, read(t, "packaging/linux/postinstall.sh")),
+		// On another volume: $ROOT is the prefix, the binary is found there.
+		"packaging/macos/postinstall": "ROOT='" + prefix + "'\nBIN='" + bin + "'\n" + strings.ReplaceAll(hookStep(t, read(t, "packaging/macos/postinstall")), "--binary /usr/local/bin/spoor", "--binary /usr/bin/spoor"),
+		// The Fleet script with its test prefix: BIN is $ROOT/usr/bin/spoor.
+		"deploy/fleet/scripts/install-spoor.sh": "ROOT='" + prefix + "'\nBIN='" + prefix + "/usr/bin/spoor'\nmkdir -p '" + prefix + "/usr/bin' && cp '" + bin + "' \"$BIN\"\n" +
+			shBlock(t, fleet, `"$BIN" hooks install --only-installed`, `	echo "spoor install: warning: managed hooks not refreshed" >&2`),
+	}
+	for _, rel := range []string{"packaging/linux/postinstall.sh", "packaging/macos/postinstall", "deploy/fleet/scripts/install-spoor.sh"} {
+		before := setup()
+		script := "set -eu\nwarn() { echo \"spoor: warning: $*\" >&2; }\n" + steps[rel]
 		out, err := exec.Command(sh, "-c", script).CombinedOutput()
-		t.Logf("%s step 6:\n%s", rel, out)
+		t.Logf("%s hook step:\n%s", rel, out)
 		if err != nil {
 			t.Fatalf("%s: %v", rel, err)
 		}
-		if rel == "packaging/linux/postinstall.sh" && !strings.Contains(string(out), "managed hooks rewritten for gemini-cli\n") {
-			t.Errorf("the earlier release's gemini-cli entries were not rewritten")
-		}
-		if !strings.Contains(string(out), "managed hooks of claude-code left as they are") {
-			t.Errorf("the administrator's claude-code entries are not reported as left alone")
+		o := string(out)
+		if rel != "deploy/fleet/scripts/install-spoor.sh" {
+			for _, w := range []string{
+				"spoor: managed hooks rewritten for gemini-cli\n",
+				"spoor: managed hooks rewritten for codex with --timeout 20\n",
+				"spoor: managed hooks of claude-code left as they are: already what install writes (--guard --fail-closed --timeout 30)",
+				"spoor: managed hooks of copilot-cli left as they are: the spoor entries differ",
+			} {
+				if !strings.Contains(o, w) {
+					t.Errorf("%s: output lacks %q", rel, w)
+				}
+			}
+		} else if !strings.Contains(o, "managed hooks rewritten for gemini-cli\n") {
+			t.Errorf("%s: the earlier release's gemini-cli entries were not rewritten", rel)
 		}
 		for f, b := range before {
 			after, err := os.ReadFile(f)
@@ -545,27 +575,62 @@ func TestUpgradeKeepsHookOptions(t *testing.T) {
 				t.Fatal(err)
 			}
 			if !bytes.Equal(after, b) {
-				t.Errorf("%s changed:\n%s", f, after)
+				t.Errorf("%s: %s changed:\n%s", rel, f, after)
 			}
 		}
+		var st []struct{ Agent, Status, Detail, Hash string }
+		if err := json.Unmarshal(run("hooks", "status", "--scope", "managed", "--root", prefix, "--json"), &st); err != nil {
+			t.Fatal(err)
+		}
+		for _, s := range st {
+			switch s.Agent {
+			case "gemini-cli":
+				if s.Status != "managed" {
+					t.Errorf("%s: gemini-cli after the upgrade: %s (%s)", rel, s.Status, s.Detail)
+				}
+			case "claude-code", "codex", "cursor", "copilot-cli":
+				if strings.Contains(s.Detail, "earlier spoor release") {
+					t.Errorf("%s: %s still in the earlier form: %s", rel, s.Agent, s.Detail)
+				}
+			default:
+				if s.Hash != "" {
+					t.Errorf("%s: %s was hooked by the upgrade", rel, s.Agent)
+				}
+			}
+		}
+		if b, _ := os.ReadFile(codex); !bytes.Contains(b, []byte("timeout = 20")) {
+			t.Errorf("%s: codex lost its 20 s timeout:\n%s", rel, b)
+		}
 	}
-	var st []struct{ Agent, Status, Detail string }
-	if err := json.Unmarshal(run("hooks", "status", "--scope", "managed", "--root", prefix, "--agents", "gemini-cli", "--json"), &st); err != nil || len(st) != 1 {
-		t.Fatalf("status: %v %v", err, st)
+
+	// Removal: the Fleet uninstall script's hook step, with the binary in
+	// place, takes every managed entry out.
+	setup()
+	un := read(t, "deploy/fleet/scripts/uninstall-spoor.sh")
+	script := "set -eu\nROOT='" + prefix + "'\nBIN='" + prefix + "/usr/bin/spoor'\nmkdir -p '" + prefix + "/usr/bin' && cp '" + bin + "' \"$BIN\"\n" +
+		shBlock(t, un, `if [ -x "$BIN" ]; then`, "fi")
+	if out, err := exec.Command(sh, "-c", script).CombinedOutput(); err != nil {
+		t.Fatalf("uninstall hook step: %v\n%s", err, out)
 	}
-	if st[0].Status != "managed" {
-		t.Errorf("gemini-cli after the upgrade: %s (%s)", st[0].Status, st[0].Detail)
+	var st []struct{ Agent, Hash string }
+	if err := json.Unmarshal(run("hooks", "status", "--scope", "managed", "--root", prefix, "--json"), &st); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range st {
+		if s.Hash != "" {
+			t.Errorf("uninstall-spoor.sh left %s's managed entries", s.Agent)
+		}
 	}
 }
 
-// TestWindowsInstallScript: install-service.ps1 selects hooks the way the
+// TestWindowsInstallScript: install-service.ps1 refreshes hooks the way the
 // POSIX scripts do, lets hooks read the configuration without opening the
 // rest of the data directory, and handles the osquery extension copy the way
 // the Fleet scripts register it.
 func TestWindowsInstallScript(t *testing.T) {
 	ps := read(t, "packaging/windows/install-service.ps1")
-	if !strings.Contains(ps, "$legacy = '"+legacyMarker(t)+"'") || !strings.Contains(ps, "([string]$_.detail).Contains($legacy)") {
-		t.Error("install-service.ps1 does not select by hookinstall's legacyPrefix")
+	if !strings.Contains(ps, "& $Exe hooks install --only-installed --scope managed\nif ($LASTEXITCODE -ne 0)") {
+		t.Error("install-service.ps1 does not refresh the managed hooks with --only-installed, checking its exit code")
 	}
 	if strings.Contains(ps, "'modified', 'shadowed'") {
 		t.Error("install-service.ps1 still rewrites every modified entry with default options")

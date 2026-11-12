@@ -8,6 +8,9 @@ pipeline:
       port: ${SPOOR_HTTP_PORT:-443}
       uri: ${SPOOR_HTTP_URI:-/}
       tls: on
+      # A receiver whose certificate is issued by a private CA: give Fluent
+      # Bit that CA's certificate (PEM) rather than switching tls.verify off.
+      # tls.ca_file: /etc/fluent-bit/ca/receiver-ca.pem
       format: json_lines
       json_date_key: false
       header: Authorization Bearer ${SPOOR_HTTP_TOKEN}

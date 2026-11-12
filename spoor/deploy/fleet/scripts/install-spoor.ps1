@@ -96,6 +96,11 @@ try {
   Invoke-Native sc.exe @('failure', $Name, 'reset=', '86400', 'actions=', 'restart/5000/restart/5000/restart/5000')
   if ((Get-Service -Name $Name).Status -ne 'Running') { Start-Service -Name $Name }
 
+  # Hooks: entries an earlier release wrote read "modified" until
+  # reinstalled. Only already-hooked agents, each with its own options.
+  & $Exe hooks install --only-installed --scope managed
+  if ($LASTEXITCODE -ne 0) { Write-Warning 'managed hooks not refreshed' }
+
   Remove-Item -Force -ErrorAction SilentlyContinue -Path "$Ext.old"
   $restart = $false
   $lines = @()

@@ -111,7 +111,7 @@ func (f *fx) canary(kind string) string {
 	var c string
 	switch kind {
 	case "anthropic":
-		c = "sk-ant-api03-" + randString(93, base62) + "AA"
+		c = "sk-ant-" + "api03-" + randString(93, base62) + "AA"
 	case "github":
 		c = "ghp_" + randString(36, base62)
 	case "aws":

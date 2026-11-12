@@ -91,8 +91,9 @@ func TestSelfExePaths(t *testing.T) {
 	if got := selfExePaths("/host", "linux"); !reflect.DeepEqual(got, want) {
 		t.Errorf("host root: %v", got)
 	}
-	t.Setenv("ProgramFiles", `C:\Program Files`)
-	if got := selfExePaths("", "windows"); len(got) != 1 || filepath.Base(filepath.Dir(got[0])) != "spoor" {
+	pf := filepath.Join(t.TempDir(), "Program Files") // absolute on the build host
+	t.Setenv("ProgramFiles", pf)
+	if got := selfExePaths("", "windows"); len(got) != 1 || got[0] != filepath.Join(pf, "spoor", "spoor.exe") {
 		t.Errorf("windows: %v", got)
 	}
 	t.Setenv("ProgramFiles", "relative")

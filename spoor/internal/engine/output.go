@@ -168,9 +168,19 @@ func (p *Pipeline) fitLine(out *event.Event) bool {
 	return false
 }
 
+// lineFits reports whether a record already accepted by write still fits
+// the line cap (after a change to it, such as a corroborating surface).
+func (p *Pipeline) lineFits(out *event.Event) bool {
+	b, err := json.Marshal(out)
+	return err == nil && len(b)+1 <= p.maxLine()
+}
+
 // flushWrites hands the buffered records to the sinks and does the
 // per-stream accounting.
 func (p *Pipeline) flushWrites() {
+	// From here on the buffered records are written: a twin arriving later
+	// is counted, not added (correlate.go).
+	p.corr.flushed()
 	if len(p.outbox) > 0 {
 		batch := p.outbox
 		p.outbox = nil

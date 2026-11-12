@@ -238,6 +238,12 @@ type interpSpec struct {
 	shell             bool
 }
 
+// UNVERIFIED: the option letters below come from the interpreters' usage
+// texts as remembered, not re-read for this table: the stop letters that
+// matter most (sh -c/-n/-s, python -c/-m, node -e/-p/-c, perl -e/-c,
+// ruby -e/-c, php -r/-l) are long-standing; the value-taking letters of
+// perl, ruby and php are less certain. A wrong value letter only shifts
+// which argument counts as the script.
 func interpSpecs(name string) (interpSpec, bool) {
 	switch name {
 	case "sh", "bash", "zsh", "dash", "ksh", "mksh", "ash", "yash", "posh", "rbash", "fish", "csh", "tcsh":
@@ -290,6 +296,10 @@ func versionTail(s string) bool {
 	return true
 }
 
+// UNVERIFIED: that every parameter accepts an unambiguous prefix and that
+// Windows PowerShell 5.1 also takes /Parameter is from memory of the
+// about_Pwsh / PowerShell.exe help, not re-read here.
+//
 // pwshScriptArg finds the script of a PowerShell command line: the value
 // of -File (any unambiguous prefix, case-insensitive), or the first
 // positional when no -Command / -EncodedCommand came first. Parameter

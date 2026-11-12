@@ -44,19 +44,24 @@ type session struct {
 	created     time.Time
 	dirty       bool
 	ended       bool
-	finalDue    bool // ended; the final summary waits for held records
+	finalDue    bool      // ended; the final summary waits for held records and HoldFor
+	endAt       time.Time // arrival of the record that ended the session
 	finalSent   bool
 	heldN       int // records of the session waiting for their hook twin
 	sumN        int
 
 	events, prompts, subagents, denied, blocked, suppressed int
-	toolCalls                                               map[string]int
-	uses                                                    map[string]bool
-	useOrder                                                []string
-	hosts, hostClasses, pathClasses, mcp, installs          orderedSet
-	detections, flags                                       orderedSet
-	maxSev                                                  string
-	surfaces                                                map[event.Source]bool
+	// corroborated: activity records another surface also reported;
+	// corroboratedLate: those whose record was written before the twin
+	// came, so their Sources do not show it (correlate.go).
+	corroborated, corroboratedLate                 int
+	toolCalls                                      map[string]int
+	uses                                           map[string]bool
+	useOrder                                       []string
+	hosts, hostClasses, pathClasses, mcp, installs orderedSet
+	detections, flags                              orderedSet
+	maxSev                                         string
+	surfaces                                       map[event.Source]bool
 
 	bkt bucket // activity token bucket
 
@@ -522,6 +527,15 @@ func (p *Pipeline) summary(s *session, now time.Time, final bool, reason string)
 	if s.suppressed > 0 {
 		ev.Labels["activity_suppressed"] = strconv.Itoa(s.suppressed)
 	}
+	if s.corroborated > 0 {
+		// How many of the session's actions a second surface confirmed;
+		// the activity records written before their twin arrived do not
+		// list it in their Sources (correlate.go).
+		ev.Labels["corroborated"] = strconv.Itoa(s.corroborated)
+	}
+	if s.corroboratedLate > 0 {
+		ev.Labels["corroborated_after_write"] = strconv.Itoa(s.corroboratedLate)
+	}
 	if s.hosts.cut || s.mcp.cut || s.installs.cut || s.detections.cut {
 		ev.Labels["summary_capped"] = "true"
 	}
@@ -571,11 +585,18 @@ func (p *Pipeline) sweepSessions(now time.Time, closing bool) {
 		case closing:
 			// A daemon restart does not end anyone's session.
 			final := p.mode != ModeDaemon || s.ended
+			reason := "close"
+			if s.finalDue {
+				// Ended, its final summary waiting for the hold window.
+				reason = "session_end"
+			}
 			if s.dirty || s.finalDue {
-				p.summary(s, now, final, "close")
+				p.summary(s, now, final, reason)
 			}
 		case now.Sub(s.lastWall) >= SessionIdle:
 			idle = append(idle, s)
+		case s.finalDue:
+			p.maybeFinal(s, now)
 		case s.dirty && !s.ended && now.Sub(s.lastSummary) >= SummaryEvery:
 			p.summary(s, now, false, "")
 		}

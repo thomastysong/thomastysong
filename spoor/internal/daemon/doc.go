@@ -36,6 +36,12 @@
 //     tables through internal/osqexec when sources.osquery_exec is enabled,
 //     then polling). The monitor's agent table answers the pipeline's RootSaw
 //     and supplies configuration-home overrides and project directories.
+//     spoor's own hook processes are recognised by the file identity of the
+//     running binary and of the installed copies (/usr/bin/spoor,
+//     /usr/local/bin/spoor, %ProgramFiles%\spoor\spoor.exe) and not
+//     reported. The heartbeat counts procs_total and procs_unreadable (live
+//     user-space processes, and those that refused the monitor with EACCES
+//     or EPERM): a sensor short of privilege shows it there.
 //   - OTel: the loopback otelrecv receiver when sources.otlp.enabled.
 //   - Adapters: numbat NDJSON files from sources.adapters, with the file
 //     owner as the user. As for transcripts, files that exist when their
@@ -51,7 +57,14 @@
 //     records and from agent processes; at most once per directory in six
 //     hours and 60 per account per hour; privacy exclusions honoured; only a
 //     real directory owned by the session's account, whose files discovery
-//     again refuses when another account owns them).
+//     again refuses when another account owns them). The working directory
+//     of an agent process is scanned only when the process shares the
+//     sensor's file system view: the same mount namespace, or the same root
+//     directory (systemd's private namespace over the host's root). In node
+//     mode (the host's pid namespace, host_root empty) an agent in another
+//     container names a path in its own namespace, which in the sensor's
+//     names one of the sensor's directories; it is skipped and counted
+//     (scan.project_foreign_ns).
 //   - Hook state: hookinstall.Status per user, refreshed with the scans,
 //     answers the pipeline's Hooked.
 //   - Bundle: the installed signed bundle is loaded at start (embedded packs,
@@ -80,6 +93,23 @@
 //   - State: state.Store at <data>/state.db; the pipeline applies records;
 //     the daemon runs Prune on the heartbeat interval and MarkScan.
 //   - Pipeline: engine.New in daemon mode, Tick about every second.
+//
+// # Privilege
+//
+// platform.IsPrivileged (root, or on Linux both CAP_DAC_READ_SEARCH and
+// CAP_SYS_PTRACE effective) decides what is read: every account's homes,
+// spools and processes, and records stamped integrity root. Without it only
+// the daemon's own account is followed. platform.IsAdmin (root) decides
+// what is written for others: the per-account spool directories and the
+// chown and chgrp of the layout. The Kubernetes node sensor (uid 65532 with
+// the two capabilities) reads everything and makes a spool directory for
+// its own account only.
+//
+// # Host identity
+//
+// platform.HostInfo, with config host_id over SPOOR_HOST_ID for the id.
+// SPOOR_HOST_NAME overrides the host name: in a pod the kernel's host name
+// is the pod's, and the DaemonSet sets both variables from spec.nodeName.
 //
 // # Files the daemon writes
 //

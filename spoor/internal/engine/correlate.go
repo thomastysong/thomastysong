@@ -36,6 +36,21 @@ import (
 // A held record is counted on its session (heldN): a session that ends
 // while some of its records are held writes its final summary once they
 // have been processed, so the one final summary is complete.
+//
+// Corroboration on the record. When a twin from another surface collapses
+// into an activity record, that surface goes into the Sources of the record
+// that is written, if it has not been written yet: a held transcript or
+// OTel record whose hook arrives (Sources [hook, transcript]), or a record
+// still buffered in this processing round (written and corroborated within
+// one batch). A record that has already been handed to its sink cannot
+// change, so a twin that arrives after that is counted instead: heartbeat
+// correlate.corroborated_after_write and, per session, the summary label
+// corroborated. In the daemon the hook record is written within
+// milliseconds and the transcript tailer delivers its copy a poll later, so
+// hook-first corroboration is usually the counted kind; the session
+// summary's Surfaces and coverage show it as well.
+// correlate.corroborated counts every activity record another surface
+// confirmed, written with it or counted.
 
 type corrAction int
 
@@ -51,6 +66,14 @@ type corrEntry struct {
 	primary bool // a record for the key was processed
 	hook    bool // a hook record for the key was seen
 	held    *held
+	// out is the activity record written for the key while it is still
+	// buffered (until the next flushWrites): a twin that arrives meanwhile
+	// is added to its Sources.
+	out *event.Event
+	// corroborated: another surface confirmed the action (counted once).
+	corroborated bool
+	// synthetic: the entry of a session start the pipeline synthesized.
+	synthetic bool
 }
 
 type held struct {
@@ -74,6 +97,8 @@ type correlator struct {
 	entries map[string]*corrEntry
 	fifo    []corrFIFO // insertion order, for expiry and the size cap
 	held    []*held    // arrival order
+	// buffered are the entries whose out record is not flushed yet.
+	buffered []*corrEntry
 }
 
 func newCorrelator() *correlator {
@@ -150,7 +175,7 @@ func (c *correlator) markPrimary(key string, src event.Source, now time.Time) {
 		e.sources = addSource(e.sources, src)
 		return
 	}
-	c.put(key, &corrEntry{sources: []event.Source{src}, at: now, primary: true}, now)
+	c.put(key, &corrEntry{sources: []event.Source{src}, at: now, primary: true, synthetic: true}, now)
 }
 
 // decide applies the rules above to ev; pmu is held.
@@ -172,7 +197,8 @@ func (c *correlator) decide(p *Pipeline, ev *event.Event, s *session, now time.T
 			c.put(key, &corrEntry{sources: []event.Source{event.SourceHook}, at: now, primary: true, hook: true}, now)
 			return corrProcess
 		case ent.held != nil:
-			// The transcript/OTel twin was waiting for this record.
+			// The transcript/OTel twin was waiting for this record: the
+			// record written now carries both surfaces.
 			ent.held.done = true
 			if s.heldN > 0 {
 				s.heldN--
@@ -182,6 +208,7 @@ func (c *correlator) decide(p *Pipeline, ev *event.Event, s *session, now time.T
 			ent.sources = addSource(ent.sources, event.SourceHook)
 			ev.Sources = append([]event.Source{event.SourceHook}, without(ent.sources, event.SourceHook)...)
 			p.ctr.matched++
+			p.markCorroborated(ent, s)
 			return corrProcess
 		case ent.hook:
 			// The same hook record again (at-least-once spool replay).
@@ -195,6 +222,7 @@ func (c *correlator) decide(p *Pipeline, ev *event.Event, s *session, now time.T
 				s.matchedLate(ev.Tool.UseID)
 			}
 			p.ctr.lateHook++
+			p.corroborate(ent, event.SourceHook, s)
 			return corrDuplicate
 		default:
 			ent.primary, ent.hook = true, true
@@ -223,16 +251,98 @@ func (c *correlator) decide(p *Pipeline, ev *event.Event, s *session, now time.T
 			return corrHeld
 		default:
 			// A second surface for a call already seen: corroboration only.
+			known := hasSource(ent.sources, ev.Source)
 			ent.sources = addSource(ent.sources, ev.Source)
-			if ent.held != nil {
-				ent.held.ev.Sources = addSource(ent.held.ev.Sources, ev.Source)
-			}
 			p.ctr.duplicates++
+			if ent.held != nil {
+				// Not written yet: the held record carries it (and the hook
+				// record, should the hook still come, takes ent.sources).
+				ent.held.ev.Sources = addSource(ent.held.ev.Sources, ev.Source)
+				return corrDuplicate
+			}
+			if ent.primary && !known {
+				p.corroborate(ent, ev.Source, s)
+			}
 			return corrDuplicate
 		}
 	}
 	// Root-observed and sensor records are never folded into a hook record.
 	return corrProcess
+}
+
+func hasSource(l []event.Source, s event.Source) bool {
+	for _, x := range l {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+// corroborate records that surface src also reported the action of ent,
+// whose activity record was processed already: added to that record's
+// Sources while it is still buffered, counted once it has been written.
+// The session start the pipeline synthesized is inferred, not reported by
+// a surface, and is not corroborated.
+func (p *Pipeline) corroborate(ent *corrEntry, src event.Source, s *session) {
+	if ent.synthetic {
+		return
+	}
+	if out := ent.out; out != nil && out.Source != src {
+		orig := out.Sources
+		next := append([]event.Source(nil), orig...)
+		if len(next) == 0 {
+			next = []event.Source{out.Source}
+		}
+		out.Sources = addSource(next, src)
+		if p.lineFits(out) {
+			p.markCorroborated(ent, s)
+			return
+		}
+		// The record is at the line cap: it is written as it was.
+		out.Sources = orig
+	}
+	p.markCorroborated(ent, s)
+	p.ctr.corroboratedLate++
+	if s != nil {
+		s.corroboratedLate++
+	}
+}
+
+// markCorroborated counts an action that another surface confirmed, once.
+func (p *Pipeline) markCorroborated(ent *corrEntry, s *session) {
+	if ent.corroborated {
+		return
+	}
+	ent.corroborated = true
+	p.ctr.corroborated++
+	if s != nil {
+		s.corroborated++
+	}
+}
+
+// noteWritten links an activity record that was just buffered for writing
+// to its correlation entry, until the next flush.
+func (c *correlator) noteWritten(key string, out *event.Event) {
+	if key == "" || out == nil {
+		return
+	}
+	if e := c.entries[key]; e != nil {
+		e.out = out
+		c.buffered = append(c.buffered, e)
+	}
+}
+
+// flushed forgets the buffered records: they have reached their sinks.
+func (c *correlator) flushed() {
+	for _, e := range c.buffered {
+		e.out = nil
+	}
+	clear(c.buffered)
+	c.buffered = c.buffered[:0]
+	if cap(c.buffered) > 4096 {
+		c.buffered = nil
+	}
 }
 
 func without(l []event.Source, s event.Source) []event.Source {

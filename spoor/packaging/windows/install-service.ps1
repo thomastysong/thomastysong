@@ -5,12 +5,12 @@
 # `sc.exe ... binPath=`: Windows PowerShell 5.1 does not escape quotes
 # embedded in a native argument, so sc.exe would receive `C:\Program` as the
 # program (found by the Fleet script builder; deploy/fleet/README.md). Every
-# native call checks its exit code. After an update the managed hook entries
-# that are exactly what an earlier release wrote with install's default
-# options are rewritten (they report "modified" until `spoor hooks install`
-# runs again); entries installed with other options (--guard --fail-closed,
-# --timeout) or edited are left as they are and listed, because a rewrite
-# with default options would turn a fail-closed guard into a fail-open one.
+# native call checks its exit code. After an update spoor's managed hook
+# entries are rewritten where they already exist (`spoor hooks install
+# --only-installed`: entries an earlier release wrote report "modified"
+# until install runs again), keeping the options each file was installed
+# with (--guard --fail-closed, --timeout); entries edited by hand are left
+# as they are and listed, and agents never hooked stay unhooked.
 # When spoor is registered as an osquery extension (deploy/fleet/scripts),
 # the copy osquery runs is refreshed on update and unregistered on
 # -Uninstall, as the Fleet scripts do.
@@ -147,25 +147,9 @@ Invoke-Native sc.exe @('config', $Name, 'start=', 'delayed-auto')
 Invoke-Native sc.exe @('failure', $Name, 'reset=', '86400', 'actions=', 'restart/5000/restart/5000/restart/5000')
 Start-Service -Name $Name
 
-# Managed hooks: rewrite only the agents whose entries are exactly what an
-# earlier release wrote with install's default options; `hooks status` says
-# so in their detail (internal/hookinstall, legacyPrefix; the Linux and macOS
-# post-install scripts select the same way). Any other "modified" entry
-# carries options the administrator chose (--guard --fail-closed,
-# --timeout) or an edit, which a rewrite with default options would undo.
-$legacy = 'written by an earlier spoor release'
-$states = & $Exe hooks status --scope managed --json | Out-String
-if ($LASTEXITCODE -eq 0 -and $states) {
-  $rows = ($states | ConvertFrom-Json)
-  $hooked = @($rows | Where-Object { ([string]$_.detail).Contains($legacy) } | ForEach-Object { $_.agent } | Select-Object -Unique)
-  $left = @($rows | Where-Object { $_.status -eq 'modified' -and -not ([string]$_.detail).Contains($legacy) } | ForEach-Object { $_.agent } | Select-Object -Unique)
-  if ($hooked.Count -gt 0) {
-    & $Exe hooks install --scope managed --agents ($hooked -join ',') | Out-Null
-    if ($LASTEXITCODE -ne 0) { Write-Warning "could not rewrite the managed hooks of $($hooked -join ',')" }
-    else { Write-Output "managed hooks rewritten for $($hooked -join ',')" }
-  }
-  if ($left.Count -gt 0) {
-    Write-Output "managed hooks of $($left -join ',') left as they are: they differ from install's default options (--guard, --fail-closed, --timeout ...) or were edited; if an earlier release wrote them, run spoor.exe hooks install --scope managed --agents $($left -join ',') with the options they were installed with"
-  }
-}
+# Managed hooks: --only-installed rewrites only the files that already hold
+# spoor entries and reads each file's options back from them; it prints one
+# line per file and exits 0 when there is nothing to do.
+& $Exe hooks install --only-installed --scope managed
+if ($LASTEXITCODE -ne 0) { Write-Warning 'could not refresh the managed hooks; run: spoor.exe hooks install --only-installed --scope managed' }
 Write-Output "spoor service installed: $Exe"

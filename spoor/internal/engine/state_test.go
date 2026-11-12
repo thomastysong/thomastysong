@@ -53,6 +53,7 @@ func TestStateAppliedOnTick(t *testing.T) {
 	if n := len(rows(t, st, "detections")); n != 0 {
 		t.Fatalf("state written before Tick: %d rows", n)
 	}
+	h.endWindow()
 	h.tick()
 	det := rows(t, st, "detections")
 	if len(det) != 1 || det[0]["rule_id"] != "SPR-T-001" || det[0]["user"] != "dev" || det[0]["dedup_key"] == "" {

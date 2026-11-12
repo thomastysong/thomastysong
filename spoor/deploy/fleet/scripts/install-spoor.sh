@@ -213,6 +213,11 @@ EOF
 	fi
 fi
 
+# Hooks: entries an earlier release wrote read "modified" until reinstalled.
+# Only already-hooked agents, each with the options it was installed with.
+"$BIN" hooks install --only-installed --scope managed ${ROOT:+--root "$ROOT"} --binary "${BIN#"$ROOT"}" ||
+	echo "spoor install: warning: managed hooks not refreshed" >&2
+
 # osquery loads an extension only from a root-owned path that others cannot
 # write, named *.ext. A copy, not a link: osquery checks the file it opens.
 changed=0

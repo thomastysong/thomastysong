@@ -202,6 +202,11 @@ func FuzzImportSession(f *testing.F) {
 	key := strings.Repeat("c", 32)
 	f.Add([]byte(`{"v":1,"k":"` + key + `","c":1,"l":1,"f":{"":{"x":{"x":5,"a":1,"e":"id"}}},"w":["0123456789abcdef"]}`))
 	f.Add([]byte(`{"v":1}`))
+	// A remembered script (write-then-run), so mutations reach the
+	// ScriptFacts validation.
+	f.Add([]byte(`{"v":1,"k":"` + key + `","c":1,"l":1,"w":["0123456789abcdef"],"sc":[{"d":"0123456789abcdef","a":1,` +
+		`"f":{"l":"sh","b":{"shell.download_and_execute":true,"shell.parse_ok":true},"s":{"shell.hosts":["x.example.com"],` +
+		`"shell.opaque":["eval"]},"c":[{"n":"curl","a":["-s","https://x.example.com"],"o":"top"}],"x":["shell.cmds"]},"k":["aws"],"c":true}]}`))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		e := NewEngine(fuzzSet(t), Options{})
 		if err := e.ImportSession(key, data); err != nil {

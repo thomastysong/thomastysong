@@ -1,6 +1,7 @@
 package features
 
 import (
+	"runtime"
 	"strings"
 
 	"github.com/thomastysong/spoor/internal/event"
@@ -161,7 +162,7 @@ func AnalyzeScript(name, content string, ctx Context) (facts *ScriptFacts, text 
 		return nil, ""
 	}
 	if ctx.OS == "" {
-		ctx.OS = "linux"
+		ctx.OS = runtime.GOOS
 	}
 	c := &computer{e: &event.Event{}, f: make(map[string]any, 32), ctx: ctx}
 	// A long file is analysed as its head and its tail separately, like an

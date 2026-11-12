@@ -39,6 +39,13 @@ else
 	rm -f "$ROOT/Library/LaunchDaemons/$LABEL.plist"
 fi
 
+# While the binary exists: no agent keeps calling it (fail-closed entries
+# would block tool calls), as the deb/rpm pre-removal script does.
+if [ -x "$BIN" ]; then
+	"$BIN" hooks uninstall --scope managed ${ROOT:+--root "$ROOT"} >/dev/null ||
+		echo "spoor uninstall: warning: managed hook entries not removed" >&2
+fi
+
 restart=0
 if [ -f "$LOAD" ] && grep -qxF "$EXT" "$LOAD"; then
 	tmp=$(mktemp)

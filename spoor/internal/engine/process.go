@@ -305,16 +305,28 @@ func (p *Pipeline) evaluate(ev *event.Event, s *session, now time.Time) {
 			s.ended = true
 			// Records of the session still waiting for their hook twin
 			// belong in its final summary: it is written when the last of
-			// them has been processed (maybeFinal).
+			// them has been processed, and not before HoldFor after the
+			// end (maybeFinal).
 			s.finalDue = true
+			if s.endAt.IsZero() {
+				s.endAt = now
+			}
 		}
 	}
 }
 
 // maybeFinal writes the final summary of an ended session once none of its
-// records is held.
+// records is held and HoldFor has passed since the session ended. The wait
+// is the correlation hold window: the other surfaces' copies of the
+// session's last records (the transcript tailer polls, OTel batches) arrive
+// within it, after the SessionEnd hook record that ends the session, and
+// the summary's surfaces and coverage must include them. In the real-agent
+// run the transcript delivered 0.2 s after SessionEnd, and a summary
+// written at once said surfaces [hook], coverage partial, while the
+// coverage table said covered. Tick writes it when the window has passed
+// (sweepSessions); Close writes it at once.
 func (p *Pipeline) maybeFinal(s *session, now time.Time) {
-	if !s.finalDue || s.heldN > 0 {
+	if !s.finalDue || s.heldN > 0 || now.Sub(s.endAt) < HoldFor {
 		return
 	}
 	s.finalDue = false
@@ -337,7 +349,9 @@ func (p *Pipeline) emitActivity(ev *event.Event, s *session, now time.Time) {
 		p.ctr.activitySuppressed++
 		return
 	}
-	p.emit(ev, now, false)
+	if out, ok := p.emit(ev, now, false); ok {
+		p.corr.noteWritten(ev.Dedupe, out)
+	}
 }
 
 // inventory evaluates inventory rules (they yield posture failures) and

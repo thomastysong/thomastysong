@@ -254,7 +254,11 @@ func newHarness(t testing.TB, mod func(*config.Config, *Options)) *harness {
 func (h *harness) ingest(evs ...*event.Event) { h.p.Ingest(evs...) }
 func (h *harness) tick()                      { h.p.Tick(h.clk.now()) }
 func (h *harness) advance(d time.Duration)    { h.clk.add(d) }
-func (h *harness) stats() map[string]uint64   { return h.p.Stats() }
+
+// endWindow lets the hold window after a session end pass, so the final
+// summary is written by the next tick (maybeFinal).
+func (h *harness) endWindow()               { h.clk.add(HoldFor) }
+func (h *harness) stats() map[string]uint64 { return h.p.Stats() }
 
 // ---- event builders ----
 

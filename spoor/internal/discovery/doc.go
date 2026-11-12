@@ -46,6 +46,9 @@
 //     managed_policy_missing and managed_policy_world_writable (a managed
 //     file, or the directory holding it, is not owned by root or is group or
 //     world writable; a sticky bit does not excuse a drop-in directory).
+//   - Files in an account's home that the owner rule refuses (see Safety):
+//     a project_config asset each, risk flag untrusted_owner, with the
+//     reason in Detail["untrusted_owner"] and no hash (never read).
 //   - MCP servers from every catalogued config (user, managed, system,
 //     project, plugin), parsed with mcpconf: Asset.MCP, the definition hash
 //     as SHA256, mcpconf risk flags plus untrusted_location.
@@ -110,9 +113,19 @@
 // agent's rename-over of its own config fail while the scanner reads it.
 // The final component is never followed, opens are non-blocking (a FIFO
 // named like a config cannot hang the scan), only regular files are read,
-// config files are capped at 20 MiB, and when privileged a file in a home
-// or project must belong to that user (a root-owned file in a user's home
-// is refused: it may be a hard link), and so must a directory before it is
+// config files are capped at 20 MiB. Inside an account's home (the home and
+// projects below it) a file is read only when the account or root owns it
+// and nobody else can write it (not world-writable; group-writable only
+// with a group private to the owner, the umask 002 user-private-group
+// setup), and a root-owned file there must have a single link (it may
+// otherwise be a hard link the account made to a root file); this holds
+// privileged or not, since the node sensor runs as an ordinary uid with
+// read capabilities. A refused file is checked on the open descriptor, so
+// none of its content is read, and is reported as a project_config asset
+// with risk flag untrusted_owner (scope user, Parent the agent whose
+// location holds it; scope project in a project). Outside the home (a
+// project elsewhere), when privileged, a file must belong to the account.
+// When privileged a directory must belong to the account before it is
 // listed (checked on the open descriptor): another user's skill, plugin or
 // extension names are not this user's assets. A skill is reported only
 // after its SKILL.md was opened through that check. Personal directories
@@ -147,6 +160,8 @@
 //   - Browser extensions: browser profiles are personal directories.
 //   - "env" settings probes: they describe a running process and belong to
 //     the process monitor.
+//   - POSIX ACLs (setfacl) that let another account write a file are not
+//     read: the owner rule sees mode bits only.
 //   - Windows: file ownership is not checked (ACLs, not uids), the
 //     registry is read for Uninstall entries and policy-key existence only,
 //     and the Windows code paths were compiled but not executed here.

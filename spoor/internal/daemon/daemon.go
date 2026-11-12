@@ -47,7 +47,7 @@ const (
 // runEnv holds what Run takes from the operating system. Tests replace it
 // to run the daemon against a fake home without root.
 type runEnv struct {
-	users      func() ([]platform.UserHome, error)
+	users    func() ([]platform.UserHome, error)
 	disabled func() bool
 	// privileged: the process can read every account's files and
 	// processes (root, or CAP_DAC_READ_SEARCH and CAP_SYS_PTRACE).

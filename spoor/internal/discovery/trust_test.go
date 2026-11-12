@@ -167,27 +167,26 @@ func TestOwnerRuleScan(t *testing.T) {
 			t.Errorf("%s owner %q", name, a.Owner)
 		}
 	}
+	// One record per refused file, parented to the agent whose location
+	// holds it (the agent asset itself need not exist: ~/.cursor alone is
+	// shared by two products and identifies neither).
+	for rel, parent := range map[string]string{".cursor/mcp.json": "cursor", ".gemini/settings.json": "gemini-cli", ".codex/config.toml": "codex", ".copilot/mcp-config.json": "copilot-cli"} {
+		a := x.one(t, event.AssetProjectConfig, rel)
+		if !has(a.RiskFlags, flagUntrustedOwner) || a.Scope != event.ScopeUser || a.Path != h+"/"+rel || a.Owner != "alice" || a.SHA256 != "" || a.Detail[flagUntrustedOwner] == "" {
+			t.Errorf("%s: %+v", rel, a)
+		}
+		if a.Parent != parent && !(parent == "cursor" && strings.HasPrefix(a.Parent, "cursor")) {
+			t.Errorf("%s: parent %q, want %q", rel, a.Parent, parent)
+		}
+	}
 	for _, e := range res.Events {
-		if a := e.Asset; a != nil && a.Kind == event.AssetAgent {
-			t.Logf("agent %s %s evidence %v flags %v", a.CatalogID, a.Owner, a.Evidence, a.RiskFlags)
+		if a := e.Asset; a != nil && has(a.RiskFlags, flagUntrustedOwner) && (a.Name == ".claude.json" || a.Name == ".factory/mcp.json") {
+			t.Errorf("a trusted file was reported: %+v", a)
 		}
-	}
-	flagged := map[string]string{}
-	for _, e := range res.Events {
-		if a := e.Asset; a != nil && has(a.RiskFlags, flagUntrustedOwner) {
-			flagged[firstNonEmptyStr(a.CatalogID, a.Name)] = a.Detail[flagUntrustedOwner]
-		}
-	}
-	for id, path := range map[string]string{"cursor": "/.cursor/mcp.json", "gemini-cli": "/.gemini/settings.json", "codex": "/.codex/config.toml", "copilot-cli": "/.copilot/mcp-config.json"} {
-		if d, ok := flagged[id]; !ok || !strings.Contains(d, h+path) {
-			t.Errorf("%s: untrusted_owner not reported (detail %q); flagged: %v", id, d, flagged)
-		}
-	}
-	if d := flagged["claude-code"]; d != "" {
-		t.Errorf("claude-code flagged for a trusted file: %s", d)
 	}
 	pc := x.one(t, event.AssetProjectConfig, ".mcp.json")
-	if !has(pc.RiskFlags, flagUntrustedOwner) || pc.SHA256 != "" || !strings.Contains(pc.Detail[flagUntrustedOwner], "uid 1001") || pc.Detail["project"] != project {
+	if !has(pc.RiskFlags, flagUntrustedOwner) || pc.SHA256 != "" || pc.Scope != event.ScopeProject ||
+		!strings.Contains(pc.Detail[flagUntrustedOwner], "uid 1001") || pc.Detail["project"] != project {
 		t.Errorf("project file: %+v", pc)
 	}
 	notes := strings.Join(res.Ledger.Notes, "\n")
@@ -238,13 +237,4 @@ func TestOwnerRuleScanProject(t *testing.T) {
 	if pc := x.one(t, event.AssetProjectConfig, ".vscode/tasks.json"); has(pc.RiskFlags, flagUntrustedOwner) {
 		t.Errorf("the account's own tasks.json flagged: %+v", pc)
 	}
-}
-
-func firstNonEmptyStr(v ...string) string {
-	for _, s := range v {
-		if s != "" {
-			return s
-		}
-	}
-	return ""
 }

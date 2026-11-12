@@ -23,15 +23,14 @@
 #     adds), refresh the copy osquery runs and restart osquery detached;
 #  5. systemd: reload; enable and start on first install, restart a running
 #     service on upgrade (a service the administrator disabled stays disabled);
-#  6. rewrite spoor's managed hook entries written by an earlier release
-#     (they report "modified" until `spoor hooks install` runs again), but
-#     only where they are exactly what that release wrote with install's
-#     default options: the rewrite uses the default options too, so it would
-#     turn an administrator's --guard --fail-closed registration into a
-#     fail-open one and reset a --timeout. Entries installed with other
-#     options or edited by hand are left as they are and reported. Agents
-#     that were never hooked are left alone; hooking is the administrator's
-#     decision.
+#  6. rewrite spoor's managed hook entries where they already exist
+#     (entries an earlier release wrote report "modified" until install runs
+#     again) with `spoor hooks install --only-installed`, which keeps the
+#     options each file was installed with (--guard --fail-closed,
+#     --timeout: read back from the entries, so an administrator's
+#     fail-closed registration does not turn fail-open) and leaves entries
+#     edited by hand as they are, reporting them. Agents that were never
+#     hooked are left alone; hooking is the administrator's decision.
 # Failures of 3 to 6 are reported and do not fail the package: the binary
 # works with built-in defaults and `spoor doctor` shows what is missing.
 set -e
@@ -162,48 +161,15 @@ else
 	echo "spoor: systemd is not running; start the daemon with: $BIN run --config $CONF"
 fi
 
-# 6. Hooks. `hooks status --json` prints one object per (agent, scope),
-# one key per line, with "agent" first; catalog ids are [a-z0-9-]. Its
-# detail starts with "written by an earlier spoor release" (after
-# "<reason>; " when the file's permissions are also reported) for entries
-# that equal what an earlier release wrote with the default options
-# (internal/hookinstall, legacyPrefix; packaging_test.go holds the two
-# together); $4 is the detail up to its first escaped quote, so text
-# quoted inside it cannot match. Only those agents are rewritten (first
-# output line). Agents whose entries differ from install's default output
-# in any other way carry options the administrator chose, or an edit, and
-# are only listed (second line).
-sel=$("$BIN" hooks status --scope managed --json 2>/dev/null | awk -F'"' '
-	function flush() {
-		if (a != "" && old && !(a in seen)) {
-			seen[a] = 1
-			out = out (out == "" ? "" : ",") a
-		} else if (a != "" && !old && s == "modified" && !(a in kept)) {
-			kept[a] = 1
-			left = left (left == "" ? "" : ",") a
-		}
-		a = ""
-		s = ""
-		old = 0
-	}
-	/^[ \t]*"agent": "/ { flush(); a = $4 }
-	/^[ \t]*"status": "/ { s = $4 }
-	/^[ \t]*"detail": "/ {
-		d = $4
-		if (index(d, "written by an earlier spoor release") == 1 || index(d, "; written by an earlier spoor release") > 0) old = 1
-	}
-	END { flush(); print out; print left }') || sel=""
-hooked=$(printf '%s\n' "$sel" | sed -n 1p)
-left=$(printf '%s\n' "$sel" | sed -n 2p)
-if [ -n "$hooked" ]; then
-	if "$BIN" hooks install --scope managed --agents "$hooked" >/dev/null 2>&1; then
-		echo "spoor: managed hooks rewritten for $hooked"
-	else
-		warn "could not rewrite managed hooks for $hooked; run: $BIN hooks install --scope managed --agents $hooked"
-	fi
-fi
-if [ -n "$left" ]; then
-	echo "spoor: managed hooks of $left left as they are: they differ from install's default options (--guard, --fail-closed, --timeout ...) or were edited; if an earlier release wrote them, run $BIN hooks install --scope managed --agents $left with the options they were installed with"
+# 6. Hooks. --only-installed selects the agents whose managed hook files
+# already hold spoor entries and recovers each file's options itself; it
+# prints one line per file ("managed hooks rewritten for X", "... left as
+# they are: ...") and exits 0 when there is nothing to do.
+if out=$("$BIN" hooks install --only-installed --scope managed 2>&1); then
+	[ -z "$out" ] || printf '%s\n' "$out" | sed 's/^/spoor: /'
+else
+	[ -z "$out" ] || printf '%s\n' "$out" | sed 's/^/spoor: /' >&2
+	warn "could not refresh the managed hooks; run: $BIN hooks install --only-installed --scope managed"
 fi
 
 if ! getent group spoor 2>/dev/null | cut -d: -f4 | grep -q .; then

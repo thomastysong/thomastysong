@@ -35,7 +35,14 @@
 //     hook-run counts (claude_code.hook_execution_complete,
 //     gemini_cli.hook_call) are compared with the hook records received. A
 //     session's first record synthesizes its session.start (Fidelity
-//     inferred), so the SessionStart hook is not required.
+//     inferred), so the SessionStart hook is not required. A twin from
+//     another surface goes into the Sources of the activity record that is
+//     written when that record is still to be written (held, or buffered in
+//     the same processing round); a twin that arrives after the record was
+//     written (the usual hook-first case: the transcript tailer polls) is
+//     counted instead: correlate.corroborated_after_write, and per session
+//     the summary labels corroborated and corroborated_after_write.
+//     correlate.corroborated counts every corroborated record.
 //  4. Coverage per (agent, account) and per session, and the hook-bypass
 //     finding (coverage.go). The finding needs the process monitor
 //     (root-observed) to see the agent for the same account; with only
@@ -62,9 +69,10 @@
 //     with each finding or alert into the detection stream
 //     (privacy.Policy.ContextFor), so a case is self-contained in minimal.
 //  8. Session summary on session end (once none of the session's records is
-//     held, so the final summary is complete), after SessionIdle (15 min)
-//     of silence, and every SummaryEvery (15 min) while active
-//     (Final=false). A record processed after the final summary (a late
+//     held and HoldFor has passed since the end, so the other surfaces'
+//     copies of the last records are in it; Close writes it at once), after
+//     SessionIdle (15 min) of silence, and every SummaryEvery (15 min) while
+//     active (Final=false). A record processed after the final summary (a late
 //     collector) produces one more final summary at idle, labelled
 //     end_reason=late_records, which supersedes it.
 //  9. Activity token buckets (limits.go, config limits): per session, or

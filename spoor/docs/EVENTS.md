@@ -49,7 +49,7 @@ The stream is the record's `kind`, so the tag Fluent Bit gives a record (`spoor.
 | `process.exec` | activity | A child process attributed to an agent session (process connector, osquery exec pull or polling). |
 | `hook.payload_anomaly` | activity | A hook payload that could not be read as an agent event (empty, malformed, too large, too deep): its size and a digest instead of nothing. |
 | `inventory.asset` | inventory | One asset: agent, app, extension, MCP server, hook, rules file, skill and so on (`asset`). |
-| `posture.check` | posture | One failed (or passed) configuration check from an inventory rule (`check`). |
+| `posture.check` | posture | A failed configuration check: an inventory rule matched an asset (`check`). |
 | `detection.finding` | detection | A rule matched (`detection`). |
 | `detection.context` | detection | One of the session's records that preceded a finding, attached to it (labels `context_for` and others, below). |
 | `health.heartbeat` | health | The sensor heartbeat (`health`). |
@@ -58,7 +58,7 @@ The stream is the record's `kind`, so the tag Fluent Bit gives a record (`spoor.
 
 ## What each profile ships
 
-`privacy.profile` decides what is written for shipping; detection always runs on the full record in memory ([PRIVACY.md](PRIVACY.md)). Per kind: `detection`, `inventory`, `posture`, `health` and `summary` records are written to the outbox in every profile. `activity` records go to the outbox in `standard` and `full`; in `minimal` they go to the local ring, and the last `privacy.context_events` (default 5) records of a session travel with each finding as `detection.context` records. In `minimal` and `standard` every record, context included, gets the same field policy; `full` uses a wider one. Per field (from `internal/privacy`, `fields.go`):
+`privacy.profile` decides what is written for shipping; detection always runs on the full record in memory ([PRIVACY.md](PRIVACY.md)). Per kind: `detection`, `inventory`, `posture`, `health` and `summary` records are written to the outbox in every profile. `activity` records go to the outbox in `standard` and `full`; in `minimal` they go to the local ring, and the last `privacy.context_events` (default 5) records of a session travel with each finding as `detection.context` records. `minimal` and `standard` apply the same field policy to everything they write; `full` applies a wider one, except to detection context, which always gets the standard policy (`labels.context_policy`). Per field (from `internal/privacy`, `fields.go`):
 
 <!-- BEGIN PROFILE FIELDS -->
 | Field | `minimal` and `standard` | `full` |
@@ -73,7 +73,7 @@ The stream is the record's `kind`, so the tag Fluent Bit gives a record (`spoor.
 | `tool.output_sha256` | keyed digest or absent | same |
 | `tool.output_len` | rounded up to a power of four | exact |
 | `target.command` | structurally redacted, then by pattern | same |
-| `target.url` | userinfo, query and fragment removed | redacted, query kept |
+| `target.url` | userinfo, query and fragment removed | userinfo removed; query and fragment kept, values of secret-named parameters replaced |
 | `target.query` | never (a web search query is prompt-derived) | redacted |
 | `session.transcript` | never | never |
 | `session.cwd` | paths under the acting user's home become `~/...` | same |
@@ -81,7 +81,7 @@ The stream is the record's `kind`, so the tag Fluent Bit gives a record (`spoor.
 | `process.args` | redacted as an argument vector | same |
 | `outcome.error` | redacted, at most 256 bytes | redacted, up to the field cap |
 | `account.id` | keyed digest `a_<hex>`, or removed without a key | as reported, pattern-redacted |
-| `user.name` | as is, or a keyed pseudonym with `privacy.pseudonymize_users` | same |
+| `user.name` | as is; with `privacy.pseudonymize_users`, a keyed pseudonym (removed when no key is configured), also in `user.id`, `process.user`, `asset.owner`, `check.owner` and coverage rows | same |
 | `asset.sha256` | for MCP servers, hooks, rules files, subagents, commands and project configs (text a user wrote): keyed digest or removed; other assets keep the binary or package hash | same |
 | `asset.mcp.command` | base name of the program | as declared |
 | `asset.mcp.args` | redacted as an argument vector | same |
@@ -89,14 +89,14 @@ The stream is the record's `kind`, so the tag Fluent Bit gives a record (`spoor.
 | `detection.dedup_key` | re-keyed with the tenant key, removed without one | same |
 <!-- END PROFILE FIELDS -->
 
-In every profile, every string field is then passed once more through pattern redaction, invalid UTF-8 is replaced (`labels.lossy: "true"`), each string is capped at 4 KiB and the encoded line at `output.max_line_bytes`. A detected secret's value, or an unkeyed fingerprint of it, is never written: classify's `[REDACTED:<kind>:<fingerprint>]` markers become `[REDACTED:<kind>:hmac=<keyed digest>]` with a tenant key and lose the fingerprint without one. When a keyed digest or pseudonym was written, `labels.key_id` carries `privacy.key_id`.
+In every profile, every string field is then passed once more through pattern redaction, invalid UTF-8 is replaced (`labels.lossy: "true"`), each string is capped at 4 KiB and the encoded line at `output.max_line_bytes`. A detected secret's value, or an unkeyed fingerprint of it, is never written: classify's `[REDACTED:<kind>:<fingerprint>]` markers become `[REDACTED:<kind>:hmac=<8 hex digits of a keyed hash>]` with a tenant key and `[REDACTED:<kind>]` without one (as in the activity example below). When a keyed digest or pseudonym was written, `labels.key_id` carries `privacy.key_id`.
 
 ## Identity: `id`, `dedupe`, `seq`, `writer`
 
 Delivery is at least once (a Fluent Bit replay, a tail database that was deleted, a shipper retry), and one action can be reported by several surfaces (the hook and the transcript of the same tool call). Records are therefore identified deterministically.
 
 - **`id`** is UUID-shaped and starts with the record time in milliseconds, so ids sort by time. Version 7 ids (third group starts with `7`) are random, for records that have no natural key, such as inventory records made by a scan. Version 8 ids (`8`) are derived (`event.StableID`): the same input gives the same id. Deduplicate deliveries on `id` (the Elasticsearch output in [FLUENT-BIT.md](FLUENT-BIT.md) uses it as the document id).
-  - activity: the id the source set is kept (the hook keys its own payload digest; transcript ids come from the log's record ids), otherwise it is derived from the source, the type and a keyed digest of the record;
+  - activity: the id the source set is kept (the hook derives it from the tool-call id, or from a keyed digest of its payload; transcript ids come from the log's record ids or a keyed digest of the line), otherwise it is derived from the source, the type and a keyed digest of the record;
   - `detection.finding`: derived from the triggering record's time, the rule id and the triggering record's `dedupe`, so the same finding raised again from a replay, or from the transcript twin of a hook record, has the same id;
   - `detection.context`: derived from the finding's id and the copied record, so context never collides with the activity record itself or with another finding's context (`labels.context_event_id` is the copied record's id);
   - `session.summary` and `health.heartbeat`: derived from the writer and a sequence, so each one is distinct.
@@ -133,18 +133,18 @@ A `detection.finding` record is a copy of the triggering record (host, user, age
 - `evidence`: the fields the rule names, copied from a fixed allowlist of non-content fields (list values as JSON arrays in a string).
 - `event_ids`: the records that produced the match, oldest first; for a sequence rule, the chain.
 - `response` is what the rule asks for in guard mode (`none`, `ask`, `block`); `enforced` is true only when spoor actually returned that answer to the agent. With guard mode off (the default) `enforced` is absent.
-- `count`: how many matches the record stands for after deduplication (repeats inside `rules.suppress_for` are counted, not re-emitted); `dedup_key` groups repeats; `escalate` marks findings worth a second look by a human or an LLM judge.
+- `count`: how many matches the record stands for after deduplication (repeats inside `rules.suppress_for` are counted, not re-emitted); `dedup_key` groups repeats (written only with a tenant key, see the profile table); `escalate` marks findings worth a second look by a human or an LLM judge.
 - Labels stamped on every finding so that a rule change is attributable: `rule_pack`, `rule_pack_version`, `rules_hash` (first 12 hex digits of the rule set's hash), `rules_version` (every loaded `pack@version`), and `bundle_version` when a signed bundle is installed.
 
 Classes below `rules.min_class` (default `finding`) are not written, but still count into the session summary. Rules are documented in [RULES.md](RULES.md).
 
 `detection.context` records carry `labels.context_for` (the finding's `id`), `context_kind`, `context_type` and `context_event_id` (what the copied record was) and `context_policy: standard`. They are routed to the detection stream, so a case is complete in `minimal` without the activity stream.
 
-Inventory rules write `posture.check` records to the posture stream instead: `check.id` is the rule id, `status` is `fail` (or `pass`), and `actual` shows the facts that matched.
+Inventory rules write `posture.check` records to the posture stream instead: `check.id` is the rule id, `status` is `fail`, `asset_id` names the asset and `actual` shows the facts that matched.
 
 ## Session summaries
 
-One `session.summary` per session when it ends (once none of its records is still held for correlation), after 15 minutes of silence, and every 15 minutes while it is active (`final: false`). It carries counts, classes and identifiers, never content: tool calls by kind, distinct hosts contacted through tools, sensitive path classes touched, MCP servers, packages installed, rule ids that fired (signals included), the session flags rules set, the surfaces that reported the session and the resulting coverage. Labels: `end_reason` (`session_end`, or `late_records` for a final summary that supersedes an earlier one because a late collector delivered more), `corroborated`, `corroborated_after_write`, and `activity_suppressed` when the activity rate limit dropped records.
+One `session.summary` per session when it ends (once none of its records is still held for correlation), after 15 minutes of silence, and every 15 minutes while it is active (`final: false`). It carries counts, classes and identifiers, never content: tool calls by kind, distinct hosts contacted through tools, sensitive path classes touched, MCP servers, packages installed, rule ids that fired (signals included), the session flags rules set, the surfaces that reported the session and the resulting coverage. Labels on a final summary: `end_reason`, one of `session_end`, `idle` (no end was seen), `evicted` (the in-memory session table was full), `close` (the process stopped, for example `spoor detect` at the end of its input; on shutdown the daemon writes a non-final summary instead, since a restart does not end anyone's session) or `late_records` (records arrived after the final summary, and this one supersedes it). On any summary: `corroborated`, `corroborated_after_write`, and `activity_suppressed` when the activity rate limit dropped records.
 
 ## Heartbeat
 

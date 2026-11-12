@@ -59,15 +59,16 @@ func TestOverridesAndDurations(t *testing.T) {
 
 func TestRejectsTyposAndWeakeningValues(t *testing.T) {
 	bad := map[string]string{
-		"unknown key":           "privcy:\n  profile: full\n",
-		"bad profile":           "privacy:\n  profile: everything\n",
-		"bad guard":             "guard:\n  mode: enforce\n",
-		"line cap too large":    "output:\n  max_line_bytes: 1000000\n",
-		"pseudonym without key": "privacy:\n  pseudonymize_users: true\n",
-		"unsigned bundle":       "bundle:\n  url: https://example.invalid/b.tgz\n",
-		"negative duration":     "heartbeat: -5m\n",
-		"tiny heartbeat":        "heartbeat: 1s\n",
-		"unknown adapter":       "sources:\n  adapters:\n    - format: other\n",
+		"unknown key":                            "privcy:\n  profile: full\n",
+		"bad profile":                            "privacy:\n  profile: everything\n",
+		"bad guard":                              "guard:\n  mode: enforce\n",
+		"line cap too large":                     "output:\n  max_line_bytes: 1000000\n",
+		"line cap below the outbox writer floor": "output:\n  max_line_bytes: 4096\n",
+		"pseudonym without key":                  "privacy:\n  pseudonymize_users: true\n",
+		"unsigned bundle":                        "bundle:\n  url: https://example.invalid/b.tgz\n",
+		"negative duration":                      "heartbeat: -5m\n",
+		"tiny heartbeat":                         "heartbeat: 1s\n",
+		"unknown adapter":                        "sources:\n  adapters:\n    - format: other\n",
 	}
 	for name, body := range bad {
 		if _, err := Load(write(t, body), "/d"); err == nil {

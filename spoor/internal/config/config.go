@@ -378,8 +378,11 @@ func (c *Config) Validate() error {
 	default:
 		return fmt.Errorf("rules.min_class %q: want signal, finding or alert", c.Rules.MinClass)
 	}
-	if c.Output.MaxLine < 2048 || c.Output.MaxLine > 64<<10 {
-		return fmt.Errorf("output.max_line_bytes %d: want 2048..65536 (Fluent Bit's default tail buffer is 32k)", c.Output.MaxLine)
+	// The floor is the outbox writer's: below 8 KiB even a record cut to its
+	// identifying fields may not fit. The ceiling keeps lines well inside the
+	// shipped Fluent Bit tail buffer (buffer_max_size 1M).
+	if c.Output.MaxLine < 8<<10 || c.Output.MaxLine > 64<<10 {
+		return fmt.Errorf("output.max_line_bytes %d: want 8192..65536", c.Output.MaxLine)
 	}
 	if c.Privacy.PseudonymizeUsers && c.Privacy.HMACKeyFile == "" {
 		return errors.New("privacy.pseudonymize_users needs privacy.hmac_key_file")

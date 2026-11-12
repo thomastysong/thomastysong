@@ -159,7 +159,7 @@
 // scanned shortest first, a string over 64 KiB on its head and tail, only
 // distinct candidates of a remembered value's length are fingerprinted,
 // every step (useless label runs included) is charged to a per-event work
-// budget of about 25 ms, and the scan ends at half the per-event deadline
+// budget (measured: about 25 ms), and the scan ends at half the per-event deadline
 // so the rules always run; whenever a bound is hit
 // session.secret_flow_truncated is set so a rule can treat the request as
 // opaque. ExportSession and ImportSession move

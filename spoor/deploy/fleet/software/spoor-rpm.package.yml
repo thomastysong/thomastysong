@@ -1,0 +1,8 @@
+# EXAMPLE, Fleet Premium only (software deployment; self-hosted Fleet also
+# needs an S3 bucket). Not validated against a server: the verification
+# server runs Fleet Free. Replace url with your build's and pin its hash.
+- url: https://downloads.example.com/spoor/0.1.0/spoor_0.1.0_linux_amd64.rpm
+  # Pin the package: Fleet refuses it when the download's hash differs.
+  # hash_sha256: <SHA-256 of the package file>
+  post_install_script:
+    path: ../scripts/register-extension.sh

@@ -1,0 +1,32 @@
+# Example global GitOps file for Fleet Free (Fleet 4.94 vocabulary: fleets,
+# reports). It deploys the "stock" spoor profile to every host and makes the
+# install scripts available to run. Validated with
+#   fleetctl gitops -f deploy/fleet/gitops/default.yml --dry-run
+# (deploy/fleet/VERIFIED.md). GitOps resets or deletes everything a file
+# omits: copy the spoor entries into your own default.yml, never apply this
+# file as it stands to a server that has other configuration.
+org_settings:
+  server_settings:
+    server_url: $FLEET_URL
+  org_info:
+    org_name: Example
+  secrets:
+    - secret: $FLEET_GLOBAL_ENROLL_SECRET
+# Your own agent options with the ATC fragment merged in (tier 2). For tier 3
+# (spoor extension) use your agent options WITHOUT the spoor_* ATC tables.
+agent_options:
+  path: ../lib/agent-options.example.yml
+controls:
+  scripts:
+    - path: ../scripts/install-spoor.sh
+    - path: ../scripts/uninstall-spoor.sh
+    - path: ../scripts/install-spoor.ps1
+    - path: ../scripts/uninstall-spoor.ps1
+labels:
+  - path: ../lib/stock/labels.yml
+policies:
+  - path: ../lib/stock/policies.yml
+reports:
+  - path: ../lib/stock/reports.yml
+  # Opt-in only, read the privacy warning in the file first:
+  # - path: ../lib/opt-in/exec-events.reports.yml

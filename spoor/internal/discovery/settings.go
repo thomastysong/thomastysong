@@ -205,18 +205,22 @@ func (s *scanner) scanManagedFacts() {
 }
 
 // checkManagedFile records a managed file that a non-administrator could
-// have written: it is not owned by root, or it or its directory is group or
-// world writable (the CVE-2026-35603 class). Windows ACLs are not read.
+// have written: it or its directory is not owned by root, or either is
+// group or world writable (the CVE-2026-35603 class). A sticky bit does not
+// excuse a writable directory: in a drop-in directory such as
+// managed-settings.d, adding a new file is the attack. Windows ACLs are not
+// read.
 func (s *scanner) checkManagedFile(l loc, m fmeta, mf *managedFacts) {
 	insecure := m.kind == kindSymlink
-	if m.hasOwner && m.owner != "0" {
+	if m.hasOwner && m.owner != s.adminUID {
 		insecure = true
 	}
 	if s.goos != "windows" && m.perm&0o022 != 0 {
 		insecure = true
 	}
 	if s.goos != "windows" {
-		if dm, err := s.g.stat(systemLoc(l.root)); err == nil && dm.perm&0o022 != 0 && dm.perm&0o1000 == 0 {
+		if dm, err := s.g.stat(systemLoc(l.root)); err == nil &&
+			(dm.perm&0o022 != 0 || dm.hasOwner && dm.owner != s.adminUID) {
 			insecure = true
 		}
 	}

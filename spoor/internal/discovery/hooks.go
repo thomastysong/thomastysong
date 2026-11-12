@@ -141,13 +141,16 @@ func hookRiskFlags(cmd string, projectScope bool) (flags []string) {
 		if len(f.NetTools) > 0 || f.Downloads || len(f.Exfil) > 0 {
 			fs.add(flagHookNetworkTool)
 		}
+		// Only what the analyzer says is executed counts: a hook that merely
+		// mentions the project directory (echo $CLAUDE_PROJECT_DIR >> log)
+		// runs nothing from the repository.
 		for _, p := range f.ExecutesPaths {
-			if repoRelative(p) || projectScope && !strings.HasPrefix(p, "/") {
+			if repoRelative(p) || projectScope && !anchoredOutside(p) {
 				fs.add(flagHookRunsRepoScript)
 			}
 		}
-		for _, v := range projectDirVars[:4] {
-			if strings.Contains(line, "$"+v) || strings.Contains(line, "${"+v) || strings.Contains(line, "%"+v+"%") || strings.Contains(line, "$env:"+v) {
+		for _, c := range f.Commands {
+			if mentionsProjectDir(c.Path) {
 				fs.add(flagHookRunsRepoScript)
 			}
 		}
@@ -161,19 +164,51 @@ func repoRelative(p string) bool {
 	if p == "" {
 		return false
 	}
-	if strings.HasPrefix(p, "./") || strings.HasPrefix(p, `.\`) || strings.HasPrefix(p, "../") {
+	if strings.HasPrefix(p, "./") || strings.HasPrefix(p, `.\`) || strings.HasPrefix(p, "../") || strings.HasPrefix(p, `..\`) {
 		return true
 	}
-	for _, v := range projectDirVars {
-		if strings.Contains(p, v) {
-			return true
-		}
+	if mentionsProjectDir(p) {
+		return true
 	}
-	if strings.HasPrefix(p, "/") || strings.HasPrefix(p, "~") || strings.HasPrefix(p, "$") || strings.HasPrefix(p, "%") ||
-		len(p) >= 2 && p[1] == ':' || strings.HasPrefix(p, `\\`) {
+	if anchoredOutside(p) {
 		return false
 	}
 	return strings.ContainsAny(p, `/\`)
+}
+
+// anchoredOutside reports a path anchored somewhere other than the working
+// directory: absolute, home-relative, a drive or UNC path, or built from a
+// variable (the project-root variables are checked before this).
+func anchoredOutside(p string) bool {
+	return strings.HasPrefix(p, "/") || strings.HasPrefix(p, "~") || strings.HasPrefix(p, "$") || strings.HasPrefix(p, "%") ||
+		len(p) >= 2 && p[1] == ':' || strings.HasPrefix(p, `\\`)
+}
+
+// mentionsProjectDir reports a reference to a project-root variable in
+// shell, cmd or PowerShell syntax ($V, ${V}, %V%, $env:V, ${env:V}).
+func mentionsProjectDir(s string) bool {
+	if !strings.ContainsAny(s, "$%") {
+		return false
+	}
+	up := strings.ToUpper(s)
+	for _, v := range projectDirVars {
+		for _, form := range []string{"$" + v, "${" + v, "%" + v + "%", "$ENV:" + v, "${ENV:" + v} {
+			i := strings.Index(up, form)
+			if i < 0 {
+				continue
+			}
+			// $PWDX is another variable; ${V and %V% end themselves.
+			end := i + len(form)
+			if strings.HasSuffix(form, "%") || end == len(up) || !isVarNameByte(up[end]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isVarNameByte(c byte) bool {
+	return c == '_' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
 }
 
 // urlHost extracts the host of a URL without a parser that might choke.

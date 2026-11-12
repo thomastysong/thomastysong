@@ -1,0 +1,11 @@
+# EXAMPLE, Fleet Premium only. Not validated against a server (the
+# verification server runs Fleet Free) and the macOS package is untested on
+# hardware. Reading other users' transcripts needs Full Disk Access for
+# /usr/local/bin/spoor, granted by an MDM PPPC profile (SystemPolicyAllFiles).
+- url: https://downloads.example.com/spoor/0.1.0/spoor_0.1.0_darwin_universal.pkg
+  # Pin the package: Fleet refuses it when the download's hash differs.
+  # hash_sha256: <SHA-256 of the package file>
+  post_install_script:
+    path: ../scripts/register-extension.sh
+  uninstall_script:
+    path: ../scripts/uninstall-spoor.sh

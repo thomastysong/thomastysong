@@ -13,8 +13,11 @@ import (
 // rootOpener confines opens with os.Root, which refuses any path (".." or a
 // link) that leaves the root. The final component is checked with Lstat
 // first and compared with the opened file, so a link there is refused rather
-// than followed. Windows ACL ownership is not checked (fmeta.hasOwner is
-// false), see the package documentation.
+// than followed. On Windows regular files are then opened with
+// FILE_SHARE_DELETE (see openShared) so an agent's own rename or delete of
+// the file never fails because the scanner is reading it. Windows ACL
+// ownership is not checked (fmeta.hasOwner is false), see the package
+// documentation.
 //
 // UNVERIFIED: compiled for windows/amd64 and windows/arm64, not executed.
 type rootOpener struct {
@@ -22,6 +25,7 @@ type rootOpener struct {
 
 	mu    sync.Mutex
 	roots map[string]*os.Root
+	final map[string]string // root -> its final path (Windows share-delete opens)
 }
 
 func newOpener(hostRoot string) (opener, error) {
@@ -34,7 +38,7 @@ func newOpener(hostRoot string) (opener, error) {
 			return nil, &os.PathError{Op: "open", Path: hostRoot, Err: errNotDir}
 		}
 	}
-	return &rootOpener{hostRoot: hostRoot, roots: map[string]*os.Root{}}, nil
+	return &rootOpener{hostRoot: hostRoot, roots: map[string]*os.Root{}, final: map[string]string{}}, nil
 }
 
 func (o *rootOpener) close() {
@@ -85,6 +89,11 @@ func (o *rootOpener) rootOf(root string) (*os.Root, error) {
 func fromLogical(p string) string { return strings.ReplaceAll(p, "/", string(os.PathSeparator)) }
 
 func (o *rootOpener) check(r *os.Root, rel string, wantDir bool) (os.FileInfo, error) {
+	if strings.Contains(rel, ":") {
+		// On Windows "name:stream" opens an alternate data stream and "C:"
+		// a drive: neither is a file below the root.
+		return nil, errBadPath
+	}
 	li, err := r.Lstat(fromLogical(rel))
 	if err != nil {
 		return nil, mapRootErr(err)
@@ -111,6 +120,9 @@ func (o *rootOpener) openFile(root, rel string) (*os.File, error) {
 	li, err := o.check(r, rel, false)
 	if err != nil {
 		return nil, err
+	}
+	if f, handled, err := o.openShared(root, rel, li); handled {
+		return f, err
 	}
 	f, err := r.Open(fromLogical(rel))
 	if err != nil {

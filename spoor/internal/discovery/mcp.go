@@ -242,34 +242,90 @@ func (s *scanner) hiddenOutsideTools(p string, uc *userCtx) bool {
 	if uc == nil {
 		return false
 	}
-	p = cleanLogical(p)
-	if strings.HasPrefix(p, "~/") {
-		p = joinLogical(uc.home, p[2:])
-	}
-	for _, v := range []string{"$HOME/", "${HOME}/"} {
-		if strings.HasPrefix(p, v) {
-			p = joinLogical(uc.home, p[len(v):])
-		}
-	}
+	p = expandHomeRef(cleanLogical(p), uc.home)
 	rel, ok := relLogical(uc.home, p, s.goos)
 	if !ok || rel == "" {
 		return false
 	}
 	first, _, _ := strings.Cut(rel, "/")
-	if !strings.HasPrefix(first, ".") || len(first) < 2 {
+	if s.goos == "windows" {
+		// Win32 path normalization drops trailing dots and spaces:
+		// "%USERPROFILE%\.evil. \x.exe" runs from ".evil".
+		first = strings.TrimRight(first, ". ")
+		if first == "" {
+			first = "."
+		}
+	}
+	if !strings.HasPrefix(first, ".") || len(first) < 2 || first == ".." {
 		return false
 	}
 	if knownToolDirs[strings.ToLower(first)] {
 		return false
 	}
 	// A hidden directory that is some catalogued product's state directory
-	// is a known tool directory too.
-	for i := range s.products {
-		for _, sd := range s.products[i].StateDirs.For(s.goos) {
-			if strings.HasPrefix(sd, "~/"+first) {
-				return false
-			}
+	// is a known tool directory too. The comparison is by whole element
+	// (".c" is not ".claude"), case-folded where the filesystem folds case.
+	for _, d := range s.stateDirHeads(uc) {
+		if d == first || foldCase(s.goos) && strings.EqualFold(d, first) {
+			return false
 		}
 	}
 	return true
+}
+
+// stateDirHeads lists the first home-relative element of every catalogued
+// state directory as expanded for the user (".claude", ".codex" ...).
+func (s *scanner) stateDirHeads(uc *userCtx) []string {
+	if uc.heads != nil {
+		return uc.heads
+	}
+	seen := map[string]bool{}
+	var out []string
+	for i := range s.products {
+		for _, sd := range s.products[i].StateDirs.For(s.goos) {
+			e, ok := s.expand(sd, uc)
+			if !ok {
+				continue
+			}
+			rel, ok := relLogical(uc.home, e, s.goos)
+			if !ok || rel == "" {
+				continue
+			}
+			head, _, _ := strings.Cut(rel, "/")
+			if strings.HasPrefix(head, ".") && !seen[head] {
+				seen[head] = true
+				out = append(out, head)
+			}
+		}
+	}
+	if out == nil {
+		out = []string{}
+	}
+	uc.heads = out
+	return out
+}
+
+// expandHomeRef resolves the spellings of "the user's home" at the start of
+// a launch path (~, $HOME, ${HOME}, %USERPROFILE%, $env:USERPROFILE,
+// ${env:USERPROFILE}), so a path written either way is classified alike.
+// Matching ignores case: Windows variable names are case-insensitive.
+func expandHomeRef(p, home string) string {
+	if p == "~" {
+		return home
+	}
+	if strings.HasPrefix(p, "~/") {
+		return joinLogical(home, p[2:])
+	}
+	for _, v := range []string{"$HOME", "${HOME}", "%USERPROFILE%", "$env:USERPROFILE", "${env:USERPROFILE}", "%HOME%"} {
+		if hasPrefixFold(p, v) {
+			rest := p[len(v):]
+			if rest == "" {
+				return home
+			}
+			if rest[0] == '/' {
+				return joinLogical(home, strings.TrimLeft(rest, "/"))
+			}
+		}
+	}
+	return p
 }

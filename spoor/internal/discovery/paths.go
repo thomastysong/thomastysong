@@ -14,6 +14,8 @@ type userCtx struct {
 	u    platform.UserHome
 	home string            // cleaned logical home
 	env  map[string]string // expansion environment (never emitted)
+	// heads caches stateDirHeads for this user.
+	heads []string
 }
 
 // windowsMachineVars are the machine-wide variables catalog paths use on

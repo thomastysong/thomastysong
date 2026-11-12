@@ -1,9 +1,11 @@
 #!/bin/sh
 # Install or update the spoor sensor and register it as an osquery extension.
 # Fleet script for macOS and Linux (runs as root); safe to run again.
-# Set the URL and SHA-256 of each build below (or as Fleet custom variables,
-# e.g. $FLEET_SECRET_SPOOR_SHA256_LINUX_AMD64). SPOOR_TIER=atc skips the
-# extension (tier 2: osquery reads the state DB through ATC agent options).
+# Set the URL and SHA-256 of each build below. A value may name a Fleet
+# custom variable (FLEET_SECRET_* with a leading dollar sign): Fleet fills it
+# in before the script runs, and fleetctl gitops then requires it to be set,
+# even in a comment. SPOOR_TIER=atc skips the extension (tier 2: osquery
+# reads the state DB through ATC agent options).
 set -eu
 umask 022
 
@@ -219,7 +221,7 @@ if [ $changed = 1 ] || [ $load_changed = 1 ]; then
 		svc=osqueryd
 		systemctl cat orbit.service >/dev/null 2>&1 && svc=orbit
 		if command -v systemd-run >/dev/null 2>&1; then
-			systemd-run --on-active=10 --unit=spoor-restart-osquery-$$ systemctl restart $svc >/dev/null
+			systemd-run --on-active=10 --unit=spoor-restart-osquery-$$ "$(command -v systemctl)" restart $svc >/dev/null
 		else
 			nohup sh -c "sleep 10; systemctl restart $svc" >/dev/null 2>&1 &
 		fi

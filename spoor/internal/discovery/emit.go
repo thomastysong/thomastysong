@@ -152,8 +152,12 @@ func (s *scanner) removed(seen map[string]bool, led Ledger) []*event.Event {
 		a := &event.Asset{ID: id, Change: event.ChangeRemoved, LastSeen: event.At(s.now)}
 		ev := event.New(event.KindInventory, event.TypeInventoryAsset, event.SourceScan)
 		ev.TS = event.At(s.now)
+		ev.Fidelity = event.FidelityObserved
 		ev.Host = &event.Host{ID: s.host.ID, Name: s.host.Name, OS: s.host.OS, Arch: s.host.Arch}
-		ev.Container = s.o.Container
+		if s.o.Container != nil {
+			c := *s.o.Container
+			ev.Container = &c
+		}
 		ev.Asset = a
 		out = append(out, ev)
 	}

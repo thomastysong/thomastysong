@@ -62,6 +62,12 @@ type Options struct {
 	Env func(u platform.UserHome) map[string]string
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
+
+	// adminUID replaces "0" as the owner a managed file must have. Only
+	// the package's own tests set it (an unprivileged test cannot create
+	// root-owned fixtures); it is unexported so no caller can weaken the
+	// check.
+	adminUID string
 }
 
 // Ledger is the coverage statement that travels with a result. "Not

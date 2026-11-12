@@ -31,18 +31,25 @@ func TestNoExecInScanPath(t *testing.T) {
 			ctx := build.Default
 			ctx.GOOS, ctx.GOARCH, ctx.CgoEnabled = goos, goarch, false
 			seen := map[string]bool{}
-			var visit func(path string, chain []string)
-			visit = func(path string, chain []string) {
-				if seen[path] || path == "C" || path == "unsafe" {
+			var visit func(path string, fromStd bool, chain []string)
+			visit = func(path string, fromStd bool, chain []string) {
+				key := path
+				if fromStd {
+					key = "std:" + path
+				}
+				if seen[key] || path == "C" || path == "unsafe" {
 					return
 				}
-				seen[path] = true
-				dir, ok := dirs[path]
+				seen[key] = true
+				dir, ok := dirs[key]
 				if !ok {
-					dir = resolveDir(t, path, modRoot)
-					dirs[path] = dir
+					dir = resolveDir(t, path, modRoot, fromStd)
+					dirs[key] = dir
 				}
 				if dir == "" {
+					// A package the walk cannot see is a hole in the check,
+					// not a pass.
+					t.Errorf("%s/%s: cannot locate %s (via %s)", goos, goarch, path, strings.Join(chain, " -> "))
 					return
 				}
 				pkg, err := ctx.ImportDir(dir, 0)
@@ -65,11 +72,11 @@ func TestNoExecInScanPath(t *testing.T) {
 					if allowed[path] {
 						continue
 					}
-					visit(imp, append(chain, path))
+					visit(imp, fromStd || isStd(path), append(chain, path))
 				}
 			}
 			for _, r := range roots {
-				visit(modulePath+"/"+r, nil)
+				visit(modulePath+"/"+r, false, nil)
 			}
 		}
 	}
@@ -95,22 +102,30 @@ func moduleRoot(t *testing.T) string {
 	return ""
 }
 
+// isStd reports a standard-library import path (no dot in the first
+// element).
+func isStd(path string) bool { return !strings.Contains(strings.Split(path, "/")[0], ".") }
+
 // resolveDir finds a package's directory without running the go tool for
-// module-internal and standard-library packages.
-func resolveDir(t *testing.T, path, modRoot string) string {
+// module-internal and standard-library packages. Imports made by the
+// standard library resolve to GOROOT/src/vendor first (net imports
+// golang.org/x/net/dns/dnsmessage from there, not from the module graph).
+func resolveDir(t *testing.T, path, modRoot string, fromStd bool) string {
 	if strings.HasPrefix(path, modulePath+"/") {
 		return filepath.Join(modRoot, filepath.FromSlash(strings.TrimPrefix(path, modulePath+"/")))
 	}
-	if !strings.Contains(strings.Split(path, "/")[0], ".") {
-		d := filepath.Join(runtime.GOROOT(), "src", filepath.FromSlash(path))
-		if _, err := os.Stat(d); err == nil {
-			return d
+	if fromStd || isStd(path) {
+		for _, d := range []string{
+			filepath.Join(runtime.GOROOT(), "src", "vendor", filepath.FromSlash(path)),
+			filepath.Join(runtime.GOROOT(), "src", filepath.FromSlash(path)),
+		} {
+			if _, err := os.Stat(d); err == nil {
+				return d
+			}
 		}
-		d = filepath.Join(runtime.GOROOT(), "src", "vendor", filepath.FromSlash(path))
-		if _, err := os.Stat(d); err == nil {
-			return d
+		if isStd(path) {
+			return ""
 		}
-		return ""
 	}
 	pkg, err := build.Default.Import(path, modRoot, build.FindOnly)
 	if err != nil {

@@ -53,6 +53,10 @@ type scanner struct {
 	projectHits map[string]map[string]bool
 	homeDenied  bool
 	docBytes    int64
+	// adminUID owns trustworthy managed files: "0" (root). Tests running
+	// unprivileged substitute their own uid, since they cannot create
+	// root-owned fixtures.
+	adminUID string
 }
 
 type docResult struct {
@@ -156,7 +160,10 @@ func newScanner(ctx context.Context, o Options) (*scanner, context.CancelFunc, e
 		sysEnv: machineEnv(goos), keys: map[string]bool{},
 		sysEv: map[string]*evidence{}, userEv: map[*userCtx]map[string]*evidence{},
 		managed: map[string]*managedFacts{}, docs: map[string]docResult{}, projSeen: map[string]bool{},
-		projectHits: map[string]map[string]bool{},
+		projectHits: map[string]map[string]bool{}, adminUID: "0",
+	}
+	if o.adminUID != "" {
+		s.adminUID = o.adminUID
 	}
 	if o.Host != nil {
 		s.host = *o.Host
@@ -284,7 +291,10 @@ func (s *scanner) scanUser(uc *userCtx) {
 
 // scanProject inspects one project's control files.
 func (s *scanner) scanProject(uc *userCtx, dir string) {
-	key := uc.u.UID + "\x00" + strings.ToLower(dir)
+	key := uc.u.UID + "\x00" + dir
+	if foldCase(s.goos) {
+		key = strings.ToLower(key)
+	}
 	if s.projSeen[key] {
 		return
 	}

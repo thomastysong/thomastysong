@@ -42,9 +42,13 @@ func (p *Policy) Emit(e *event.Event) (out *event.Event, ship bool, ok bool) {
 		if recover() != nil {
 			out = p.skeleton(e, s, string(s.profile), "privacy_error")
 			ok = out != nil
+			ship = ship && ok
 		}
 	}()
 	out = p.render(e, s, lv, string(s.profile))
+	if out == nil {
+		return nil, false, false
+	}
 	return out, ship, true
 }
 

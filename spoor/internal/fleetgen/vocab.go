@@ -14,39 +14,41 @@ import (
 
 // bypassArgs are catalog risky_flags (catalog spelling, which is what
 // spoor_agent_processes.flags stores) that make an agent run tool calls
-// without a per-call approval, or skip a consent check that guards hooks.
-// One flag string has one meaning across products: a test checks that no
-// flag is classified both ways.
+// without a per-call approval. One flag string has one meaning across
+// products: a test checks that no flag is classified both ways.
 var bypassArgs = map[string]string{
-	"--dangerously-skip-permissions":            "claude-code: every permission prompt skipped",
-	"--permission-mode bypassPermissions":       "claude-code: bypass permission mode",
+	"--dangerously-skip-permissions":             "claude-code: every permission prompt skipped",
+	"--permission-mode bypassPermissions":        "claude-code: bypass permission mode",
 	"--dangerously-bypass-approvals-and-sandbox": "codex: approvals and sandbox off",
-	"--yolo":                       "codex, copilot-cli, gemini-cli, cursor, cline: approve everything",
-	"--ask-for-approval never":     "codex: approvals off",
-	"--dangerously-bypass-hook-trust": "codex: hooks run without the trust check",
-	"--allow-all":                  "copilot-cli: every tool, path and URL allowed",
-	"--allow-all-tools":            "copilot-cli: every tool allowed without asking",
-	"--approval-mode yolo":         "gemini-cli: approve everything",
-	"--force":                      "cursor-agent: run commands without asking",
-	"--yes-always":                 "aider: confirm every prompt, shell commands included",
-	"--yes":                        "aider: older spelling of --yes-always",
-	"--auto_run":                   "open-interpreter: run generated code without confirmation",
-	"-y":                           "open-interpreter: short form of --auto_run",
+	"--yolo":                   "codex, copilot-cli, gemini-cli, cursor, cline: approve everything",
+	"--ask-for-approval never": "codex: approvals off",
+	"--allow-all":              "copilot-cli: every tool, path and URL allowed",
+	"--allow-all-tools":        "copilot-cli: every tool allowed without asking",
+	"--approval-mode yolo":     "gemini-cli: approve everything",
+	"--force":                  "cursor-agent: run commands without asking",
+	"--yes-always":             "aider: confirm every prompt, shell commands included",
+	"--yes":                    "aider: older spelling of --yes-always",
+	"--auto_run":               "open-interpreter: run generated code without confirmation",
+	"-y":                       "open-interpreter: short form of --auto_run",
 }
 
 // nonBypassArgs are the remaining catalog risky_flags, with the reason they
 // do not count as a permission bypass. They stay visible in
 // spoor_agent_processes.flags and in reports.
 var nonBypassArgs = map[string]string{
-	"--allow-dangerously-skip-permissions": "makes bypass selectable inside a session; not active by itself",
-	"--permission-mode dontAsk":            "denies tools that were not pre-approved",
-	"--permission-mode auto":               "a model classifier approves; approvals are not switched off",
-	"--permission-mode acceptEdits":        "file edits only",
-	"--bare":                               "an attribute: managed hooks still run (BUILD-B addendum 2)",
-	"--safe-mode":                          "skips user hooks; managed hooks run",
-	"--no-session-persistence":             "no transcript; reported as coverage, not as bypass",
+	"--allow-dangerously-skip-permissions":    "makes bypass selectable inside a session; not active by itself",
+	"--permission-mode dontAsk":               "denies tools that were not pre-approved",
+	"--permission-mode auto":                  "a model classifier approves; approvals are not switched off",
+	"--permission-mode acceptEdits":           "file edits only",
+	"--bare":                                  "an attribute: managed hooks still run (BUILD-B addendum 2)",
+	"--safe-mode":                             "skips user hooks; managed hooks run",
+	"--no-session-persistence":                "no transcript; reported as coverage, not as bypass",
 	"--dangerously-load-development-channels": "loads unreleased channels",
-	"--sandbox danger-full-access":         "removes the sandbox; approvals stay on",
+	"--sandbox danger-full-access":            "removes the sandbox; approvals stay on",
+	// Untrusted hooks run (an injection path, reported as a process flag),
+	// but tool approvals are unchanged; consistent with the setting
+	// hook_consent_bypassed below.
+	"--dangerously-bypass-hook-trust": "hook trust check skipped; tool approvals unchanged",
 	// UNVERIFIED: research/agent-surfaces-a.md lists both as dangerous
 	// without describing them; the name suggests an automatic reviewer.
 	"--approve-for-me":     "approvals delegated to an automatic reviewer, not switched off",

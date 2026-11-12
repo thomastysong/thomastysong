@@ -24,7 +24,27 @@ type ancestor struct {
 	name string
 	exe  string
 	args []string
+	// utilityType is the VS Code utility-process type ("extensionHost",
+	// "ptyHost", ...) of an Electron utility process, read from its
+	// environment; "" for every other process.
+	utilityType string
 }
+
+// VS Code (and its forks) start every utility process with
+// VSCODE_CRASH_REPORTER_PROCESS_TYPE=<type> in its environment, and nothing
+// on the way removes it, so an agent an extension spawns inherits
+// "extensionHost". The command line cannot tell the extension host from the
+// terminal's pty host: both are "--type=utility
+// --utility-sub-type=node.mojom.NodeService", and VS Code's own process
+// explorer only calls them "utility-process". Verified 2026-11-12 in
+// microsoft/vscode main: platform/utilityProcess/electron-main/
+// utilityProcess.ts (createEnv), extensions/electron-main/
+// extensionHostStarter.ts (type "extensionHost"), terminal/electron-main/
+// electronPtyHostStarter.ts (type "ptyHost"), base/node/ps.ts (findName).
+const (
+	vscodeProcTypeEnv = "VSCODE_CRASH_REPORTER_PROCESS_TYPE"
+	vscodeExtHost     = "extensionHost"
+)
 
 // lifecycleParent says what launched an agent when that launcher is the
 // kind of parent rule R01 (research/threats.md) cares about: a package
@@ -32,7 +52,9 @@ type ancestor struct {
 // an editor extension host, or a URL/protocol handler. The agent's own
 // environment is checked first because it is explicit: npm, yarn, pnpm and
 // bun all export npm_lifecycle_event to the scripts they run, and every
-// process below inherits it. Ancestors are checked nearest first.
+// process below inherits it. Ancestors are checked nearest first. Last, the
+// agent's inherited VS Code process type covers an extension host whose own
+// environment could not be read.
 func lifecycleParent(env map[string]string, ancestors []ancestor) string {
 	if ev := strings.TrimSpace(env["npm_lifecycle_event"]); ev != "" {
 		return managerFromEnv(env)
@@ -42,7 +64,24 @@ func lifecycleParent(env map[string]string, ancestors []ancestor) string {
 			return v
 		}
 	}
+	if env[vscodeProcTypeEnv] == vscodeExtHost {
+		return LifecycleExtensionHost
+	}
 	return ""
+}
+
+// isElectronUtility reports an Electron utility process, the only kind of
+// ancestor whose environment is read for its VS Code process type.
+func isElectronUtility(args []string) bool {
+	if len(args) > 64 {
+		args = args[:64]
+	}
+	for _, a := range args {
+		if a == "--type=utility" {
+			return true
+		}
+	}
+	return false
 }
 
 // managerFromEnv names the package manager that exported npm_lifecycle_event:
@@ -75,18 +114,30 @@ var runnerSubcommands = map[string]bool{"exec": true, "x": true, "dlx": true, "c
 // count when the environment marker is missing.
 var bunInstall = map[string]bool{"install": true, "i": true, "add": true, "a": true, "update": true, "pm": true}
 
-func lifecycleOf(a ancestor) string {
-	args := a.args
-	// Node programs (npm, yarn, pnpm) set process.title, which rewrites
-	// argv[0] into one space-separated string ("npm install foo") and the
-	// kernel name with it.
-	if len(args) > 0 && strings.Contains(args[0], " ") && len(args[0]) <= 4096 {
-		f := strings.Fields(args[0])
-		if len(f) > 64 {
-			f = f[:64]
-		}
-		args = append(f, args[1:]...)
+// expandTitle undoes a Node process.title rewrite for parsing. npm, yarn and
+// pnpm set process.title, and libuv writes the title over the whole argv
+// area, so /proc/<pid>/cmdline (and the kernel name) become one
+// space-separated string such as "npm exec @openai/codex --yolo".
+// Splitting it on white space is the best reading there is (an argument
+// that contained a space is lost either way). A first argument that is a
+// path with a space in it (a macOS app bundle, C:\Program Files) is left
+// alone.
+func expandTitle(args []string) []string {
+	if len(args) == 0 || len(args[0]) > 4096 || !strings.ContainsRune(args[0], ' ') {
+		return args
 	}
+	f := strings.Fields(args[0])
+	if len(f) == 0 || strings.ContainsAny(f[0], `/\`) {
+		return args
+	}
+	if len(f) > 64 {
+		f = f[:64]
+	}
+	return append(f, args[1:]...)
+}
+
+func lifecycleOf(a ancestor) string {
+	args := expandTitle(a.args)
 	name := a.name
 	if i := strings.IndexByte(name, ' '); i > 0 {
 		name = name[:i]
@@ -144,7 +195,7 @@ func lifecycleOf(a ancestor) string {
 			break
 		}
 	}
-	if isExtensionHost(a.name, args) {
+	if isExtensionHost(a, args) {
 		return LifecycleExtensionHost
 	}
 	if isURLHandler(name, exe, args) {
@@ -160,20 +211,30 @@ func pmVerdict(manager string, rest []string) string {
 	return manager
 }
 
-// isExtensionHost recognises the VS Code family extension host. The process
-// carries --type=extensionHost (older Electron layouts) or runs as the
-// node.mojom.NodeService utility process; on macOS the helper is named
-// "<App> Helper (Plugin)". UNVERIFIED: these spellings are from memory of
-// VS Code's process model, not from a primary source read for this package.
-func isExtensionHost(name string, args []string) bool {
-	if strings.HasSuffix(strings.ToLower(name), "helper (plugin)") {
+// isExtensionHost recognises the VS Code family extension host:
+//   - a utility process whose environment says "extensionHost" (see
+//     vscodeProcTypeEnv);
+//   - "--type=extensionHost" on the command line, which is how the remote
+//     (server-side) extension host runs (base/node/ps.ts normalises it);
+//   - on macOS, the "<App> Helper (Plugin)" executable. The extension host
+//     is the only VS Code utility process started with
+//     allowLoadingUnsignedLibraries (checked against the pty host, shared
+//     process, file watcher and agent host starters), and Electron runs
+//     such processes from the Plugin helper. UNVERIFIED: the Electron half
+//     (Plugin helper for allowLoadingUnsignedLibraries) is from Electron's
+//     utilityProcess documentation as remembered, not re-read.
+func isExtensionHost(a ancestor, args []string) bool {
+	if a.utilityType == vscodeExtHost {
+		return true
+	}
+	if strings.HasSuffix(strings.ToLower(a.name), "helper (plugin)") {
 		return true
 	}
 	if len(args) > 64 {
 		args = args[:64]
 	}
-	for _, a := range args {
-		if a == "--type=extensionHost" || strings.HasPrefix(a, "--utility-sub-type=node.mojom.NodeService") {
+	for _, x := range args {
+		if x == "--type=extensionHost" {
 			return true
 		}
 	}

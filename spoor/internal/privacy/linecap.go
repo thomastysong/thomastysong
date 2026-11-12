@@ -27,8 +27,12 @@ const (
 var protectedSlots = map[string]bool{
 	"id": true, "kind": true, "type": true, "source": true, "fidelity": true, "integrity": true,
 	"writer": true, "dedupe": true, "privacy": true, "truncated": true,
-	"labels.lossy": true, "labels.key_id": true, "labels.context_for": true, "labels.context": true, "labels.len_bucketed": true,
 	"detection.rule_id": true, "detection.severity": true, "detection.class": true,
+	"labels.lossy": true, "labels.key_id": true, "labels.len_bucketed": true,
+	"labels." + LabelContextFor:     true,
+	"labels." + LabelContextKind:    true,
+	"labels." + LabelContextType:    true,
+	"labels." + LabelContextEventID: true,
 }
 
 // jsonLen is the encoded size of s as encoding/json writes it (HTML
@@ -104,7 +108,7 @@ func (r *run) fitLine() {
 	for pass := 0; pass < maxFitPasses; pass++ {
 		b, err := json.Marshal(r.out)
 		if err != nil {
-			r.out = r.p.skeleton(r.out, r.s, r.out.Privacy, "privacy_error")
+			r.toSkeleton("privacy_error")
 			return
 		}
 		over := len(b) - budget
@@ -119,7 +123,21 @@ func (r *run) fitLine() {
 	if b, err := json.Marshal(r.out); err == nil && len(b) <= budget {
 		return
 	}
-	r.out = r.p.skeleton(r.out, r.s, r.out.Privacy, "line_cap")
+	r.toSkeleton("line_cap")
+}
+
+// toSkeleton replaces the record with its content-free skeleton, keeping
+// the labels this package stamps (a context record must still say which
+// finding it belongs to).
+func (r *run) toSkeleton(reason string) {
+	sk := r.p.skeleton(r.out, r.s, r.out.Privacy, reason)
+	if sk == nil {
+		return
+	}
+	for k, v := range r.stamp {
+		sk.Labels[k] = v
+	}
+	r.out = sk
 }
 
 type sized struct {

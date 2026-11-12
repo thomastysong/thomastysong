@@ -61,6 +61,8 @@ type Content struct {
 	ATC map[string]map[string]any
 	// DBPaths are the state database paths the ATC blocks point at.
 	DBPaths map[string]string
+	// BinPaths are the spoor binary paths the "installed" label looks for.
+	BinPaths map[string]string
 	// Profiles: stock, fleetd, builtin, in that order.
 	Profiles []Profile
 	// OptIn holds the opt-in exec-events reports (one per OS).
@@ -69,6 +71,8 @@ type Content struct {
 	CatalogVersion string
 	// AlertWindow and GuardWindow are the heartbeat windows used.
 	AlertWindow, GuardWindow time.Duration
+	// MinBundleVersion is what the "rules bundle is current" policy requires.
+	MinBundleVersion uint64
 }
 
 // Profile names.
@@ -77,6 +81,16 @@ const (
 	ProfileFleetd  = "fleetd"
 	ProfileBuiltin = "builtin"
 )
+
+// Profile returns the named profile.
+func (c *Content) Profile(name string) (Profile, bool) {
+	for _, p := range c.Profiles {
+		if p.Name == name {
+			return p, true
+		}
+	}
+	return Profile{}, false
+}
 
 // Build computes the content without rendering it.
 func Build(o Options) (c *Content, err error) {
@@ -92,10 +106,12 @@ func Build(o Options) (c *Content, err error) {
 	v := vocabularyOf(r.cat)
 	c = &Content{
 		ATC:            map[string]map[string]any{},
-		DBPaths:        r.dbPaths,
-		CatalogVersion: v.catalogVersion,
-		AlertWindow:    r.alert,
-		GuardWindow:    r.guard,
+		DBPaths:          r.dbPaths,
+		BinPaths:         r.binPaths,
+		CatalogVersion:   v.catalogVersion,
+		AlertWindow:      r.alert,
+		GuardWindow:      r.guard,
+		MinBundleVersion: r.minBundleVersion,
 	}
 	for _, p := range Platforms {
 		c.ATC[p] = state.ATCConfig(r.dbPaths[p], p)

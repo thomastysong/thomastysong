@@ -49,8 +49,11 @@ func openDirAt(dirfd int, name string) (int, error) {
 		if err == unix.EINTR {
 			continue
 		}
-		if err == unix.ELOOP || err == unix.EMLINK {
-			return -1, fmt.Errorf("%s is a symbolic link", name)
+		// A symbolic link fails with ELOOP, or with ENOTDIR where the
+		// kernel checks O_DIRECTORY first (Linux does for a link to a
+		// directory); either way it is not content we may read.
+		if err == unix.ELOOP || err == unix.EMLINK || err == unix.ENOTDIR {
+			return -1, fmt.Errorf("%w: %s is a symbolic link or not a directory", ErrInsecureDir, name)
 		}
 		return fd, err
 	}

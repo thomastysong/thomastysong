@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // namedList is one named list from lists.yaml. Matching ignores case: lists hold
@@ -71,13 +73,10 @@ func (l *namedList) match(s string) bool {
 	return false
 }
 
-// parseLists loads lists.yaml.
-func parseLists(data []byte) (map[string]*namedList, error) {
-	if len(data) > maxListBytes {
-		return nil, fmt.Errorf("rules: lists.yaml is larger than %d bytes", maxListBytes)
-	}
+// listsFromNode compiles a parsed lists.yaml.
+func listsFromNode(root *yaml.Node) (map[string]*namedList, error) {
 	var raw rawLists
-	if err := decodeStrict(data, &raw); err != nil {
+	if err := decodeNode(root, &raw); err != nil {
 		return nil, fmt.Errorf("lists.yaml: %w", err)
 	}
 	out := make(map[string]*namedList, len(raw.Lists))

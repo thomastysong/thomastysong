@@ -107,8 +107,14 @@ func TestLoadDirRefusesInsecureContent(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			d := rulesDir(t)
 			c.mk(t, d)
-			if _, err := LoadDir(d); err == nil {
+			_, err := LoadDir(d)
+			if err == nil {
 				t.Fatal("loaded")
+			}
+			// Every refusal on trust grounds is matchable; the size cap is
+			// a content error.
+			if c.name != "oversized pack" && !errors.Is(err, ErrInsecureDir) {
+				t.Errorf("not ErrInsecureDir: %v", err)
 			}
 		})
 	}
@@ -117,8 +123,8 @@ func TestLoadDirRefusesInsecureContent(t *testing.T) {
 	writeFile(t, filepath.Join(d, "a.yaml"), dirPack, 0o644)
 	link := filepath.Join(t.TempDir(), "link")
 	os.Symlink(d, link)
-	if _, err := LoadDir(link); err == nil {
-		t.Error("symlinked rules directory accepted")
+	if _, err := LoadDir(link); err == nil || !errors.Is(err, ErrInsecureDir) {
+		t.Errorf("symlinked rules directory: %v", err)
 	}
 	if _, err := LoadDir(filepath.Join(t.TempDir(), "missing")); err == nil {
 		t.Error("missing directory accepted")

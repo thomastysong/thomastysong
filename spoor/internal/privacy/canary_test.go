@@ -143,6 +143,39 @@ func canaryCorpus() []canary {
 		return e
 	}})
 
+	// classify's RedactArgs corpus (internal/classify/redact_canary_test.go),
+	// pushed through every surface an argument vector can reach: a shell
+	// line, process arguments, a Codex-style argv tool input and an MCP
+	// launch line.
+	for i, argv := range classifyArgvCorpus {
+		argv := argv
+		id := fmt.Sprintf("classify-%02d", i+1)
+		cmd(id, shellJoin(argv))
+		proc(id, argv...)
+		input("argv/"+id, event.ToolShell, map[string]any{"command": toAny(argv)})
+		mcp("argv/"+id, &event.MCP{Transport: "stdio", Command: argv[0], Args: argv[1:]}, nil)
+	}
+
+	// Credentials in identifiers and paths (pattern pass).
+	cs = append(cs,
+		canary{name: "path/token-in-path", build: func() *event.Event {
+			e := activity(event.TypeToolPre)
+			e.Tool = &event.Tool{Name: "Read", Kind: event.ToolFileRead}
+			e.Target = &event.Target{Path: "/home/bob/dl/ghp_Canary" + rnd(66, 30) + ".txt"}
+			return e
+		}},
+		canary{name: "labels/key", build: func() *event.Event {
+			e := shellEvent("ls")
+			e.Labels = map[string]string{"ghp_Canary" + rnd(67, 30): "x"}
+			return e
+		}},
+		canary{name: "repo/branch", build: func() *event.Event {
+			e := shellEvent("git status")
+			e.Repo = &event.Repo{Root: "/home/bob/r", Remote: "git@github.com:acme/app.git", Branch: "token=CanaryB68"}
+			return e
+		}},
+	)
+
 	// Free-text fields on other records.
 	cs = append(cs,
 		canary{name: "outcome/error", build: func() *event.Event {
@@ -177,6 +210,50 @@ func canaryCorpus() []canary {
 		}},
 	)
 	return cs
+}
+
+// classifyArgvCorpus mirrors internal/classify's RedactArgs canary corpus.
+var classifyArgvCorpus = [][]string{
+	{"mysql", "-pCanaryPw1", "-u", "root", "db"},
+	{"curl", "-u", "alice:CanaryPw2!", "https://x.example"},
+	{"sshpass", "-p", "CanaryPw3", "ssh", "u@h"},
+	{"docker", "login", "-p", "CanaryPw4", "-u", "me", "reg.example"},
+	{"redis-cli", "-a", "CanaryPw5", "ping"},
+	{"7z", "x", "-pCanaryPw6", "a.7z"},
+	{"openssl", "enc", "-d", "-k", "CanaryPw7", "-in", "x"},
+	{"curl", "--proxy-user", "bob:CanaryPw8", "https://x.example"},
+	{"openssl", "pkcs12", "-passin", "pass:CanaryPw9", "-in", "a.p12"},
+	{"kubectl", "exec", "pod", "--", "mysql", "-pCanaryPw10"},
+	{"aws", "configure", "set", "aws_secret_access_key", "CanaryPw11"},
+	{"curl", "-H", "Authorization: Bearer CanaryTok12abcdefghijkl", "https://x.example"},
+	{"git", "clone", "https://bob:CanaryPw13@github.com/a/b"},
+	{"psql", "postgres://admin:CanaryPw14@db.example/prod"},
+	{"export", "API_TOKEN=CanaryPw15"},
+	{"curl", "-H", "X-Api-Key: CanaryKey16xyz", "https://x.example"},
+	{"curl", "-d", "password=CanaryPw17&user=a", "https://x.example/login"},
+	{"npm", "config", "set", "//registry.npmjs.org/:_authToken", "CanaryTok18"},
+	{"vault", "login", "-method=userpass", "username=a", "password=CanaryPw19"},
+	{"docker", "run", "--rm", "app", "--", "mysql", "-pCanaryPw20"},
+}
+
+// shellJoin quotes an argument vector as a POSIX command line.
+func shellJoin(argv []string) string {
+	out := make([]string, len(argv))
+	for i, a := range argv {
+		if strings.ContainsAny(a, " !&'\"$`;|<>()*?") {
+			a = "'" + strings.ReplaceAll(a, "'", `'\''`) + "'"
+		}
+		out[i] = a
+	}
+	return strings.Join(out, " ")
+}
+
+func toAny(l []string) []any {
+	out := make([]any, len(l))
+	for i, v := range l {
+		out[i] = v
+	}
+	return out
 }
 
 // b64utf16 encodes a script as PowerShell -EncodedCommand does.
@@ -301,6 +378,13 @@ func TestOverRedactionBenign(t *testing.T) {
 		{"args sha", withArgs("git", "checkout", "3f2a9c1e7b6d4a5f8e9c0b1a2d3e4f5a6b7c8d9e"), []string{"3f2a9c1e7b6d4a5f8e9c0b1a2d3e4f5a6b7c8d9e"}},
 		{"args port", withArgs("docker", "run", "-p", "8080:80", "nginx"), []string{"8080:80"}},
 		{"agent binary hash", agent, []string{sha}},
+		{"openssl in/out", shellEvent("openssl enc -d -in x.enc -out x"), []string{"-in x.enc -out x"}},
+		{"payload file", shellEvent("curl -d @payload.json http://localhost:4318/v1/logs"), []string{"@payload.json", "http://localhost:4318/v1/logs"}},
+		{"npx mcp", shellEvent("npx -y @modelcontextprotocol/server-filesystem /home/bob/projects"), []string{"@modelcontextprotocol/server-filesystem", "~/projects"}},
+		{"ssh host", shellEvent("ssh -i ~/.ssh/id_ed25519 deploy@10.0.0.5 uptime"), []string{"~/.ssh/id_ed25519", "deploy@10.0.0.5"}},
+		{"pip index", shellEvent("pip install --index-url https://pypi.org/simple requests==2.32.3"), []string{"https://pypi.org/simple", "requests==2.32.3"}},
+		{"uuid path", withPath("/srv/runs/0193f5a2-1c2b-7d3e-8f4a-5b6c7d8e9f00/log.txt"), []string{"0193f5a2-1c2b-7d3e-8f4a-5b6c7d8e9f00"}},
+		{"mcp inventory", mcpAsset(), []string{"@acme/mcp-server@1.4.2", "--stdio", "api.acme.dev", "GITHUB_TOKEN"}},
 	}
 	p := &Policy{Profile: ProfileStandard, Key: testKey}
 	lost, total := 0, 0
@@ -319,6 +403,15 @@ func TestOverRedactionBenign(t *testing.T) {
 		}
 	}
 	t.Logf("over-redaction: %d of %d benign values lost (%.1f%%)", lost, total, 100*float64(lost)/float64(total))
+}
+
+func mcpAsset() *event.Event {
+	e := event.New(event.KindInventory, event.TypeInventoryAsset, event.SourceScan)
+	e.Host = &event.Host{OS: "linux"}
+	e.Asset = &event.Asset{ID: "m", Kind: event.AssetMCPServer, Name: "acme", Owner: "bob", Path: "/home/bob/.cursor/mcp.json",
+		MCP: &event.MCP{Transport: "stdio", Command: "npx", Args: []string{"-y", "@acme/mcp-server@1.4.2", "--stdio"},
+			URLHost: "api.acme.dev", EnvKeys: []string{"GITHUB_TOKEN"}, Pinned: true}}
+	return e
 }
 
 // jsonEsc is how a plain string appears inside an encoded line.

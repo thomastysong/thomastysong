@@ -64,7 +64,6 @@ func (c *collector) all() []*event.Event {
 	return append([]*event.Event(nil), c.evs...)
 }
 
-
 func startMonitor(t *testing.T, o Options, tune func(*Monitor)) (*Monitor, *collector) {
 	t.Helper()
 	c := &collector{}

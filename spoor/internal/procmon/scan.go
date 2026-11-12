@@ -17,6 +17,7 @@ type rootCand struct {
 	prod     *prodInfo
 	ap       AgentProc
 	launcher bool
+	argsCut  bool // the command line was cut before redaction
 }
 
 // prepare reads one process for ingestion. It must be called without m.mu.
@@ -84,9 +85,9 @@ func (m *Monitor) buildCand(rec *platform.Proc, env map[string]string, ef envFac
 			pi.dialect = p.Hooks.Dialect
 		}
 	}
-	ops := operands(rec.Args)
+	ops := operands(expandTitle(rec.Args))
 	t := traitsByAgent[p.ID]
-	args, _ := capArgs(rec.Args)
+	args, cut := capArgs(rec.Args)
 	ap := AgentProc{
 		PID:             rec.PID,
 		PPID:            rec.PPID,
@@ -123,7 +124,7 @@ func (m *Monitor) buildCand(rec *platform.Proc, env map[string]string, ef envFac
 			}
 		}
 	}
-	return &rootCand{prod: pi, ap: ap, launcher: launcher}
+	return &rootCand{prod: pi, ap: ap, launcher: launcher, argsCut: cut}
 }
 
 // runnerNames are package runners: a root identified because one of them
@@ -192,7 +193,13 @@ func (m *Monitor) ancestry(ppid int) []ancestor {
 		if len(args) > 64 {
 			args = args[:64]
 		}
-		out = append(out, ancestor{pid: pid, name: r.Name, exe: r.Exe, args: args})
+		a := ancestor{pid: pid, name: r.Name, exe: r.Exe, args: args}
+		if isElectronUtility(args) {
+			if env, err := m.src.env(pid, utilityEnvKeep); err == nil {
+				a.utilityType = capString(env[vscodeProcTypeEnv], 64)
+			}
+		}
+		out = append(out, a)
 		if pid == 1 {
 			break
 		}

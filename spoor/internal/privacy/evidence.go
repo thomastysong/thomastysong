@@ -98,6 +98,9 @@ var featureFields = map[string]evMode{
 	"mcp.arg_hosts": evName, "mcp.arg_host_classes": evName, "mcp.arg_secret_kinds": evName,
 	"session.flags": evName, "session.written_exec_path": evPath,
 	"flow.secret_kinds": evName, "host.tags": evName,
+	// Closed vocabularies (features.Registry lists them with Vocab).
+	"shell.dialect": evName, "shell.inline_langs": evName, "shell.install_managers": evName,
+	"output.untrusted_source": evName, "write.autorun_kinds": evName, "session.secret_flow_kinds": evName,
 }
 
 // allowedEvidence returns the redaction mode for a field name, and whether
@@ -295,6 +298,15 @@ func (r *run) evidenceValue(src *event.Event, f string, mode evMode) (string, bo
 	}
 	name := "detection.evidence." + f
 	cap := r.s.evidCap
+	if l, isList := v.([]any); isList {
+		// Decoded JSON or a feature computed as []any: only a list of
+		// strings is evidence; anything nested is withheld.
+		strs, ok := stringList(l)
+		if !ok {
+			return Withheld, true
+		}
+		v = strs
+	}
 	switch t := v.(type) {
 	case string:
 		if t == "" {
@@ -307,7 +319,9 @@ func (r *run) evidenceValue(src *event.Event, f string, mode evMode) (string, bo
 		}
 		var items []string
 		if mode == evArgs {
-			items = r.argsStr(t, name, cap, maxArgs)
+			if items = r.argsEvidence(t, f, mcpCommand(src), name, cap); items == nil {
+				return Withheld, true
+			}
 		} else {
 			items = r.list(t, name, func(s string) string { return r.evidenceString(s, name, mode, cap) })
 		}
@@ -335,6 +349,29 @@ func (r *run) evidenceValue(src *event.Event, f string, mode evMode) (string, bo
 	return Withheld, true
 }
 
+// argsEvidence redacts an argument vector for evidence. Flag-aware
+// redaction needs the program word (mysql -p, redis-cli -a): process.args
+// carries it, an MCP server's args do not, so the server's command is put
+// in front for redaction and taken off again. Without a known command an
+// MCP argument list is withheld (nil).
+func (r *run) argsEvidence(args []string, field, prog, name string, cap int) []string {
+	if field != "asset.mcp.args" {
+		return r.argsStr(args, name, cap, maxArgs)
+	}
+	if strings.TrimSpace(prog) == "" {
+		return nil
+	}
+	full := r.argsStr(append([]string{prog}, args...), name, cap, maxArgs+1)
+	return full[1:]
+}
+
+func mcpCommand(e *event.Event) string {
+	if e == nil || e.Asset == nil || e.Asset.MCP == nil {
+		return ""
+	}
+	return e.Asset.MCP.Command
+}
+
 func (r *run) evidenceString(s, name string, mode evMode, cap int) string {
 	switch mode {
 	case evCommand:
@@ -346,7 +383,9 @@ func (r *run) evidenceString(s, name string, mode evMode, cap int) string {
 	case evContent:
 		return r.textStr(s, name, cap, true)
 	case evArgs:
-		return r.argsStr([]string{s}, name, cap, 1)[0]
+		// An argument vector flattened into one string reads as a
+		// command line.
+		return r.commandStr(s, name, cap)
 	}
 	return r.textStr(s, name, cap, false)
 }
@@ -791,7 +830,10 @@ func (r *run) sanitizeEvidence(in map[string]string) map[string]string {
 			if json.Unmarshal([]byte(v), &items) == nil {
 				var red []string
 				if mode == evArgs {
-					red = r.argsStr(items, name, r.s.evidCap, maxArgs)
+					if red = r.argsEvidence(items, k, mcpCommand(r.src), name, r.s.evidCap); red == nil {
+						out[k] = Withheld
+						continue
+					}
 				} else {
 					red = r.list(items, name, func(s string) string { return r.evidenceString(s, name, mode, r.s.evidCap) })
 				}
@@ -810,6 +852,12 @@ func (r *run) sanitizeEvidence(in map[string]string) map[string]string {
 				out[k] = strconv.Itoa(r.length(n))
 				continue
 			}
+		}
+		if mode == evArgs && k == "asset.mcp.args" {
+			// Not a list, and its program is not part of it: there is no
+			// structure to redact by.
+			out[k] = Withheld
+			continue
 		}
 		out[k] = r.evidenceString(v, name, mode, r.s.evidCap)
 	}

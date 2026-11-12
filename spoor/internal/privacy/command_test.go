@@ -1,6 +1,7 @@
 package privacy
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -205,5 +206,42 @@ func TestAlignSecrets(t *testing.T) {
 	got = alignSecrets(old, red)
 	if len(got) != 2 || got[0].value != "SECRET1" || got[1].value != "SECRET2" {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+// TestRedactCommandManySecretsBounded: a line with thousands of distinct
+// credentials (an agent can write one) must not cost seconds per event
+// (it took 5.5 s before the search budget), must not leak, and a line
+// with a realistic number of secrets must keep its full structure.
+func TestRedactCommandManySecretsBounded(t *testing.T) {
+	gen := func(format string, size int) string {
+		var b strings.Builder
+		for i := 0; b.Len() < size; i++ {
+			fmt.Fprintf(&b, format, i, i)
+		}
+		return b.String()
+	}
+	cases := map[string]string{
+		"mysql":  gen("mysql -pManyPw%06d db%d; ", 250<<10),
+		"export": gen("export A_TOKEN_%d=ManyPw%08d; ", 250<<10),
+		"bearer": gen("curl -H 'Authorization: Bearer ManyPw%010dabcdefghij' https://h%d.x ", 250<<10),
+	}
+	for name, in := range cases {
+		start := time.Now()
+		out, _ := redactCommand(in, "")
+		if d := time.Since(start); d > 5*time.Second {
+			t.Errorf("%s: took %v", name, d)
+		}
+		if strings.Contains(out, "ManyPw") {
+			t.Errorf("%s: leaked", name)
+		}
+		if len(out) > maxSkeleton+256 {
+			t.Errorf("%s: skeleton is %d bytes", name, len(out))
+		}
+	}
+	moderate := gen("curl -H 'Authorization: Bearer ManyPw%010dabcdefghij' https://h%d.x ; ", 4<<10)
+	out, _ := redactCommand(moderate, "")
+	if strings.Contains(out, "ManyPw") || strings.Contains(out, kindUnresolved) || !strings.Contains(out, "https://h3.x") {
+		t.Errorf("moderate line lost structure or leaked:\n%.400s", out)
 	}
 }

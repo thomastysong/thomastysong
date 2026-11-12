@@ -285,3 +285,42 @@ func TestComputedFeaturesAreRegistered(t *testing.T) {
 		t.Errorf("corpus exercised only %d features", len(seen))
 	}
 }
+
+// The names the spec lists for the field view are a contract with rule
+// packs: a rename in internal/event must fail here, not silently disable
+// every rule that uses the old name.
+func TestSpecFieldNamesPinned(t *testing.T) {
+	names := []string{
+		"type", "source", "kind", "integrity", "tool.kind", "tool.name", "tool.mcp_server", "tool.mcp_tool",
+		"target.command", "target.path", "target.paths", "target.url", "target.host", "target.hosts",
+		"session.permission_mode", "session.cwd", "session.subagent_id", "agent.id", "user.id",
+		"process.name", "process.flags", "process.ancestors", "process.env_markers", "process.args",
+		"asset.kind", "asset.scope", "asset.risk_flags", "asset.mcp.pinned", "asset.mcp.runner",
+		"asset.mcp.package", "asset.telemetry.hooks", "check.id", "check.status", "check.subject",
+		"host.os", "host.tags", "container.image", "repo.remote", "labels.x", "asset.detail.x",
+		// Features (spec vocabulary).
+		"shell.parse_ok", "shell.commands", "shell.argv", "shell.cmds", "shell.urls", "shell.hosts",
+		"shell.host_classes", "shell.reads", "shell.writes", "shell.deletes", "shell.read_classes",
+		"shell.write_classes", "shell.delete_classes", "shell.interpreters", "shell.downloads",
+		"shell.pipe_to_interpreter", "shell.download_and_execute", "shell.eval", "shell.sudo",
+		"shell.background", "shell.dynamic", "shell.obfuscation", "shell.opaque", "shell.executes_paths",
+		"shell.destructive", "shell.persistence", "shell.defense_evasion", "shell.cred_access",
+		"shell.exfil", "shell.net_tools", "shell.recon", "shell.privilege", "shell.git_ops",
+		"shell.installs", "shell.install_entries", "shell.install_exec", "shell.install_sources",
+		"shell.env_assign", "shell.decoded", "shell.has_secret", "shell.secret_kinds",
+		"path.classes", "path.sensitive_read", "path.sensitive_write", "path.outside_cwd", "path.ext",
+		"path.normalization_evasion", "net.host", "net.host_classes", "net.scheme", "net.is_ip",
+		"net.url_has_secret", "net.query_len", "prompt.secret_kinds", "prompt.hidden_unicode",
+		"prompt.markers", "write.secret_kinds", "write.hidden_unicode", "write.markers", "write.autorun",
+		"write.exec_keys", "output.markers", "output.hidden_unicode", "output.secret_kinds",
+		"output.untrusted", "mcp.server", "mcp.tool", "mcp.arg_paths", "mcp.arg_path_classes",
+		"mcp.arg_hosts", "mcp.arg_host_classes", "mcp.arg_secret_kinds", "content.truncated_scan",
+		"content.analyzer_error", "session.flags", "session.tool_calls", "session.age_s",
+		"session.runs_written_file", "session.written_exec_path",
+	}
+	for _, n := range names {
+		if _, ok := Lookup(n); !ok {
+			t.Errorf("%s is not in the registry", n)
+		}
+	}
+}

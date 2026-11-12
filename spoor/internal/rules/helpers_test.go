@@ -3,6 +3,7 @@ package rules
 import (
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -78,13 +79,15 @@ func detIDs(dets []*event.Event) []string {
 	return out
 }
 
-var evSeq int
+// evSeq numbers test events; atomic because TestConcurrentEval builds
+// events from several goroutines.
+var evSeq atomic.Int64
 
 // ev builds an activity event in session sid of user 1000 / agent a.
 func ev(typ string, mods ...func(*event.Event)) *event.Event {
-	evSeq++
+	n := evSeq.Add(1)
 	e := &event.Event{
-		V: 1, ID: fmt.Sprintf("ev-%d", evSeq), Kind: event.KindActivity, Type: typ, Source: event.SourceHook,
+		V: 1, ID: fmt.Sprintf("ev-%d", n), Kind: event.KindActivity, Type: typ, Source: event.SourceHook,
 		Host:    &event.Host{ID: "host-1", OS: "linux"},
 		User:    &event.User{ID: "1000", Name: "u"},
 		Agent:   &event.Agent{ID: "claude-code"},

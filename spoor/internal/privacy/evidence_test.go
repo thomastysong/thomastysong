@@ -99,3 +99,58 @@ func TestEvidenceCapAndPseudonym(t *testing.T) {
 		t.Errorf("evidence has %d fields", len(got))
 	}
 }
+
+func TestEvidenceMCPArgsNeedTheirProgram(t *testing.T) {
+	inv := event.New(event.KindInventory, event.TypeInventoryAsset, event.SourceScan)
+	inv.Asset = &event.Asset{ID: "m", Kind: event.AssetMCPServer, Name: "db",
+		MCP: &event.MCP{Transport: "stdio", Command: "/usr/bin/mysql", Args: []string{"-pMcpPw111", "-h", "db.internal"}}}
+	ev := (&Policy{}).Evidence(inv, []string{"asset.mcp.args"})
+	if strings.Contains(ev["asset.mcp.args"], "McpPw111") || !strings.Contains(ev["asset.mcp.args"], "db.internal") {
+		t.Errorf("mcp args evidence = %q", ev["asset.mcp.args"])
+	}
+	if strings.Contains(ev["asset.mcp.args"], "/usr/bin/mysql") {
+		t.Errorf("the program is not part of the args: %q", ev["asset.mcp.args"])
+	}
+
+	// Evidence arriving on a detection record: redacted against the
+	// record's own asset, withheld when the program is unknown.
+	det := event.New(event.KindDetection, event.TypeDetectionFinding, event.SourceSensor)
+	det.Detection = &event.Detection{RuleID: "R", Title: "t", Severity: "low",
+		Evidence: map[string]string{"asset.mcp.args": `["-pMcpPw222","db"]`, "process.args": "mysql -pMcpPw333 db"}}
+	out, _, _ := (&Policy{}).Emit(det)
+	if out.Detection.Evidence["asset.mcp.args"] != Withheld {
+		t.Errorf("mcp args without a program must be withheld: %q", out.Detection.Evidence["asset.mcp.args"])
+	}
+	if pa := out.Detection.Evidence["process.args"]; strings.Contains(pa, "McpPw333") || !strings.Contains(pa, "mysql -p") {
+		t.Errorf("flattened process args = %q", pa)
+	}
+	det.Asset = inv.Asset
+	out, _, _ = (&Policy{}).Emit(det)
+	if a := out.Detection.Evidence["asset.mcp.args"]; strings.Contains(a, "McpPw222") || a == Withheld {
+		t.Errorf("mcp args with the record's program = %q", a)
+	}
+}
+
+func TestEvidenceFeatureListsAndVocab(t *testing.T) {
+	e := shellEvent("ls")
+	e.Feat = map[string]any{
+		"shell.hosts":             []any{"a.example", "b.example"},
+		"shell.reads":             []any{"/home/bob/.ssh/id_rsa", map[string]any{"x": "y"}},
+		"shell.dialect":           "posix",
+		"output.untrusted_source": "web_fetch",
+		"shell.cmds":              []map[string]any{{"name": "mysql", "args": []string{"-pFeatPw1"}}},
+	}
+	ev := (&Policy{}).Evidence(e, []string{"shell.hosts", "shell.reads", "shell.dialect", "output.untrusted_source", "shell.cmds"})
+	if ev["shell.hosts"] != `["a.example","b.example"]` {
+		t.Errorf("[]any list = %q", ev["shell.hosts"])
+	}
+	if ev["shell.reads"] != Withheld || ev["shell.cmds"] != Withheld {
+		t.Errorf("nested values must be withheld: %v", ev)
+	}
+	if ev["shell.dialect"] != "posix" || ev["output.untrusted_source"] != "web_fetch" {
+		t.Errorf("closed vocabularies: %v", ev)
+	}
+	if strings.Contains(jsonOf(ev), "FeatPw1") {
+		t.Error("leak")
+	}
+}

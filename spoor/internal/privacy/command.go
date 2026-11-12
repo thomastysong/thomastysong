@@ -1,6 +1,7 @@
 package privacy
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/thomastysong/spoor/internal/classify"
@@ -56,6 +57,17 @@ const (
 	minSearch = 4
 	// maxNaiveScan bounds the syntax-blind pass.
 	maxNaiveScan = 64 << 10
+	// maxSecretScan bounds the substring searches for recovered secrets:
+	// (number of secrets) x (bytes of text) per pass. Every secret is
+	// searched for over the whole text several times (plain, reversed,
+	// encoded), so an agent-written line with thousands of distinct
+	// credentials would otherwise cost seconds per event (measured: 5.5 s
+	// for 12,800 secrets in 256 KiB). Beyond the budget the command is
+	// reduced to its skeleton instead.
+	maxSecretScan = 32 << 20
+	// maxSkeleton bounds the fail-closed rendering, so the final check
+	// that no secret survives in it stays cheap as well.
+	maxSkeleton = 4 << 10
 
 	kindEncoded    = "encoded_secret"
 	kindUnresolved = "unresolved_secret"
@@ -113,12 +125,19 @@ func redactCommand(cmd string, hint shellx.Dialect) (out string, precapped bool)
 	r := newCmdRedactor(src, f.Dialect)
 	r.topLevel()
 	r.nested(f)
-	r.applyPairs()
-	r.substituteSecrets()
-	out = r.render()
-	out = r.stringLevel(out)
-	if r.unresolved() {
+	if !r.fail {
+		r.applyPairs()
+		r.substituteSecrets()
+	}
+	if r.fail {
+		// Already fail-closed: the searches below would only cost time.
 		out = r.skeleton()
+	} else {
+		out = r.render()
+		out = r.stringLevel(out)
+		if r.unresolved() {
+			out = r.skeleton()
+		}
 	}
 	out = redactText(out)
 	if precapped {
@@ -360,6 +379,10 @@ func (r *cmdRedactor) applyPairs() {
 // wherever it still occurs inside a token, whatever surrounds it.
 func (r *cmdRedactor) substituteSecrets() {
 	r.secrets = dedupSecrets(r.secrets)
+	if len(r.secrets) > 0 && len(r.secrets) > maxSecretScan/max(len(r.src), 1) {
+		r.fail = true
+		return
+	}
 	for _, s := range r.secrets {
 		if len(s.value) < minSearch {
 			continue
@@ -387,11 +410,7 @@ func dedupSecrets(in []secret) []secret {
 	}
 	// Longer secrets first, so a secret that contains a shorter one is
 	// replaced whole.
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && len(out[j].value) > len(out[j-1].value); j-- {
-			out[j], out[j-1] = out[j-1], out[j]
-		}
-	}
+	sort.SliceStable(out, func(i, j int) bool { return len(out[i].value) > len(out[j].value) })
 	return out
 }
 
@@ -517,30 +536,73 @@ func (r *cmdRedactor) unresolved() bool {
 }
 
 // skeleton is the fail-closed rendering: for each top-level command the
-// program word and its flag names, nothing positional.
+// program word and its flag names, nothing positional. It may run before
+// the nested redactions were applied (a budget was exceeded), so a word a
+// nested view redacted is replaced by its redacted form here, and the
+// result is checked against every secret recovered by any view.
 func (r *cmdRedactor) skeleton() string {
-	var parts []string
+	nestedRed := make(map[string]string, len(r.pairs))
+	for _, p := range r.pairs {
+		nestedRed[p.oldVal] = p.newVal
+	}
+	word := func(v string) string {
+		if red, ok := nestedRed[v]; ok {
+			return red
+		}
+		return v
+	}
+	var b strings.Builder
+	full := false
+	put := func(sep, w string, tok int) {
+		if full {
+			return
+		}
+		if b.Len()+len(sep)+len(w) > maxSkeleton {
+			b.WriteString(" ")
+			b.WriteString(truncMarker(len(r.src) - r.toks[tok].start))
+			full = true
+			return
+		}
+		b.WriteString(sep)
+		b.WriteString(w)
+	}
 	for _, s := range r.segs {
-		if len(s.words) == 0 {
+		if len(s.words) == 0 || full {
 			continue
 		}
-		words := []string{r.vals[s.words[0]]}
+		prog := word(r.vals[s.words[0]])
+		if strings.ContainsAny(prog, " \t\r\n'\"`") {
+			// A quoted or multi-word "program" is text, not a name.
+			prog = markerOpen + kindCommand + "]"
+		}
+		sep := ""
+		if b.Len() > 0 {
+			sep = " ; "
+		}
+		put(sep, prog, s.words[0])
 		for _, w := range s.words[1:] {
-			v := r.vals[w]
+			v := word(r.vals[w])
 			if len(v) < 2 || (v[0] != '-' && !(v[0] == '/' && r.d != shellx.Posix)) {
 				continue
 			}
 			if i := strings.IndexAny(v, "=:"); i > 1 {
 				v = v[:i]
 			}
-			words = append(words, v)
+			put(" ", v, w)
 		}
-		parts = append(parts, strings.Join(words, " "))
 	}
-	out := strings.Join(parts, " ; ") + " " + markerOpen + kindUnresolved + "]"
+	out := b.String() + " " + markerOpen + kindUnresolved + "]"
+	leaked := func(v string) bool { return len(v) >= minSearch && strings.Contains(out, v) }
 	for _, sec := range r.secrets {
-		if len(sec.value) >= minSearch && strings.Contains(out, sec.value) {
+		if leaked(sec.value) {
 			return markerOpen + kindCommand + "]"
+		}
+	}
+	for _, p := range r.pairs {
+		for _, sec := range p.secrets {
+			if leaked(sec.value) {
+				return markerOpen + kindCommand + "]"
+			}
 		}
 	}
 	return out

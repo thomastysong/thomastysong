@@ -123,17 +123,10 @@ func BenchmarkParse300Rules(b *testing.B) {
 }
 
 func embeddedFiles(tb testing.TB) map[string][]byte {
-	files := map[string][]byte{}
-	entries, err := embeddedFS.ReadDir("packs")
+	files, err := readEmbedded()
 	if err != nil {
 		tb.Fatal(err)
 	}
-	for _, e := range entries {
-		b, _ := embeddedFS.ReadFile("packs/" + e.Name())
-		files["packs/"+e.Name()] = b
-	}
-	b, _ := embeddedFS.ReadFile("lists.yaml")
-	files["lists.yaml"] = b
 	return files
 }
 
@@ -167,8 +160,32 @@ func TestPerformanceBudgets(t *testing.T) {
 		NewEngine(s.GuardSubset(), Options{})
 	}
 	per = time.Since(start) / 20
-	t.Logf("hook start-up (embedded parse + guard subset + engine): %v (budget 15ms)", per)
+	t.Logf("hook start-up from YAML (embedded parse + guard subset + engine): %v (budget 15ms)", per)
 	if per > 150*time.Millisecond {
 		t.Errorf("hook start-up %v is over 10x the 15ms budget", per)
+	}
+	// The same with 300 rules served from the pre-parsed cache, which is
+	// what LoadEmbedded does once the real packs land.
+	big := map[string][]byte{"packs/bench.yaml": []byte("pack: bench\nversion: \"1\"\nrules:\n" + benchRules(300))}
+	c, err := EncodeCache(big)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start = time.Now()
+	for i := 0; i < 5; i++ {
+		srcs, err := decodeCache(c, sourceDigest(big))
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := loadSources(srcs, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		NewEngine(s.GuardSubset(), Options{})
+	}
+	per = time.Since(start) / 5
+	t.Logf("hook start-up from cache, 300 rules: %v (budget 15ms)", per)
+	if per > 150*time.Millisecond {
+		t.Errorf("cached hook start-up %v is over 10x the 15ms budget", per)
 	}
 }

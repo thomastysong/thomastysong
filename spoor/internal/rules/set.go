@@ -61,15 +61,8 @@ type Info struct {
 	Tests       int
 }
 
-// parsePack compiles one pack file into s.
-func (s *Set) parsePack(name string, data []byte, embedded bool) error {
-	if len(data) > MaxPackBytes {
-		return fmt.Errorf("rules: %s: pack is larger than %d bytes", name, MaxPackBytes)
-	}
-	root, err := parseStrict(data)
-	if err != nil {
-		return fmt.Errorf("rules: %s: %w", name, err)
-	}
+// packFromNode compiles one parsed pack file into s.
+func (s *Set) packFromNode(name string, root *yaml.Node, embedded bool) error {
 	var p rawPack
 	if err := decodeNode(root, &p); err != nil {
 		return fmt.Errorf("rules: %s: %w", name, err)
@@ -133,47 +126,136 @@ func Load(files map[string][]byte) (*Set, error) {
 
 func load(files map[string][]byte, embedded bool) (*Set, error) {
 	s := newSet()
-	names := make([]string, 0, len(files))
-	for n := range files {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	for _, n := range names {
-		base := path.Base(strings.ReplaceAll(n, `\`, "/"))
-		data := files[n]
-		switch base {
-		case "lists.yaml":
-			ls, err := parseLists(data)
-			if err != nil {
-				return nil, err
-			}
-			for k, v := range ls {
-				s.lists[k] = v
-			}
-		case "suppressions.yaml":
-			sups, err := parseSuppressions(data)
-			if err != nil {
-				return nil, err
-			}
-			s.suppressions = append(s.suppressions, sups...)
-		default:
-			if !strings.HasSuffix(base, ".yaml") {
-				continue
-			}
-			if err := s.parsePack(n, data, embedded); err != nil {
-				return nil, err
-			}
+	for _, n := range sortedFileNames(files) {
+		src, ok, err := parseSource(n, files[n])
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		if err := s.addSource(src, embedded); err != nil {
+			return nil, err
 		}
 	}
 	return s, nil
 }
 
-func parseSuppressions(data []byte) ([]Suppression, error) {
-	if len(data) > maxSuppBytes {
-		return nil, fmt.Errorf("rules: suppressions.yaml is larger than %d bytes", maxSuppBytes)
+// loadSources compiles already parsed files, in the order given (the
+// order load would have used). The embedded node cache feeds it.
+func loadSources(srcs []sourceFile, embedded bool) (*Set, error) {
+	s := newSet()
+	for _, src := range srcs {
+		if err := s.addSource(src, embedded); err != nil {
+			return nil, err
+		}
 	}
+	return s, nil
+}
+
+// sourceFile is one content file after YAML parsing and the structural
+// checks of parseStrict.
+type sourceFile struct {
+	name string
+	size int // bytes of the YAML source, for the per-file caps
+	root *yaml.Node
+}
+
+// fileRole says what a content file is from its base name: "lists",
+// "suppressions", "pack", or "" for a file that is not content.
+func fileRole(name string) string {
+	base := path.Base(strings.ReplaceAll(name, `\`, "/"))
+	switch {
+	case base == "lists.yaml":
+		return "lists"
+	case base == "suppressions.yaml":
+		return "suppressions"
+	case strings.HasSuffix(base, ".yaml"):
+		return "pack"
+	}
+	return ""
+}
+
+func sortedFileNames(files map[string][]byte) []string {
+	names := make([]string, 0, len(files))
+	for n := range files {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// checkSize applies the per-file byte cap of a content file.
+func checkSize(name string, size int) error {
+	switch fileRole(name) {
+	case "lists":
+		if size > maxListBytes {
+			return fmt.Errorf("rules: lists.yaml is larger than %d bytes", maxListBytes)
+		}
+	case "suppressions":
+		if size > maxSuppBytes {
+			return fmt.Errorf("rules: suppressions.yaml is larger than %d bytes", maxSuppBytes)
+		}
+	case "pack":
+		if size > MaxPackBytes {
+			return fmt.Errorf("rules: %s: pack is larger than %d bytes", name, MaxPackBytes)
+		}
+	}
+	return nil
+}
+
+// parseSource parses one content file; ok is false for a file that is not
+// content (it is ignored).
+func parseSource(name string, data []byte) (src sourceFile, ok bool, err error) {
+	role := fileRole(name)
+	if role == "" {
+		return sourceFile{}, false, nil
+	}
+	if err := checkSize(name, len(data)); err != nil {
+		return sourceFile{}, false, err
+	}
+	root, err := parseStrict(data)
+	if err != nil {
+		switch role {
+		case "lists":
+			return sourceFile{}, false, fmt.Errorf("lists.yaml: %w", err)
+		case "suppressions":
+			return sourceFile{}, false, fmt.Errorf("rules: suppressions.yaml: %w", err)
+		}
+		return sourceFile{}, false, fmt.Errorf("rules: %s: %w", name, err)
+	}
+	return sourceFile{name: name, size: len(data), root: root}, true, nil
+}
+
+// addSource compiles one parsed file into s.
+func (s *Set) addSource(src sourceFile, embedded bool) error {
+	if err := checkSize(src.name, src.size); err != nil {
+		return err
+	}
+	switch fileRole(src.name) {
+	case "lists":
+		ls, err := listsFromNode(src.root)
+		if err != nil {
+			return err
+		}
+		for k, v := range ls {
+			s.lists[k] = v
+		}
+	case "suppressions":
+		sups, err := suppressionsFromNode(src.root)
+		if err != nil {
+			return err
+		}
+		s.suppressions = append(s.suppressions, sups...)
+	case "pack":
+		return s.packFromNode(src.name, src.root, embedded)
+	}
+	return nil
+}
+
+func suppressionsFromNode(root *yaml.Node) ([]Suppression, error) {
 	var raw rawSuppressions
-	if err := decodeStrict(data, &raw); err != nil {
+	if err := decodeNode(root, &raw); err != nil {
 		return nil, fmt.Errorf("rules: suppressions.yaml: %w", err)
 	}
 	if len(raw.Suppressions) > maxSuppItems {

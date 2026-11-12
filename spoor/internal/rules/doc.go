@@ -24,6 +24,16 @@
 // suppressions.yaml holds operator exceptions ({suppressions: [{rule,
 // match, expires, reason, tags}]}).
 //
+// The embedded packs are also shipped pre-parsed in packs/embedded.cache,
+// because a guard-mode hook is a fresh process per tool call and YAML
+// scanning was two thirds of its start-up (18 ms for 300 rules against a
+// 15 ms budget; 6 ms from the cache). The cache is regenerated with
+// `go generate ./internal/rules` after any change to packs/ or lists.yaml;
+// it records a SHA-256 of the YAML it was made from, LoadEmbedded uses it
+// only on a match and parses the YAML otherwise, and the package tests fail
+// while it is stale. It is embedded rather than written to a user cache
+// directory, which the guarded agent itself could write.
+//
 // # Predicates
 //
 // when, match and allow are predicate mappings. Several keys in one

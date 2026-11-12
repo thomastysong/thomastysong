@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/thomastysong/spoor/internal/catalog"
 )
@@ -52,12 +53,27 @@ func DefaultDBPaths() map[string]string {
 	}
 }
 
+// DefaultBinPaths returns where the spoor binary is installed on each
+// operating system: the paths the service definitions in packaging/ start
+// and the install scripts in deploy/fleet/scripts write.
+func DefaultBinPaths() map[string]string {
+	return map[string]string{
+		PlatformLinux:   "/usr/bin/spoor",
+		PlatformDarwin:  "/usr/local/bin/spoor",
+		PlatformWindows: `C:\Program Files\spoor\spoor.exe`,
+	}
+}
+
 // Options selects what Generate produces. The zero value gives the content
 // committed under deploy/fleet/lib.
 type Options struct {
 	// DBPaths maps a platform (PlatformLinux ...) to the state database path
 	// on hosts of that OS. Missing entries take DefaultDBPaths.
 	DBPaths map[string]string
+	// BinPaths maps a platform to the spoor binary path; with DBPaths it
+	// decides membership of the "spoor installed" label. Missing entries
+	// take DefaultBinPaths.
+	BinPaths map[string]string
 	// AlertWindow is the heartbeat age accepted by the "sensor is reporting"
 	// policy and the "sensor unhealthy" label. Default DefaultAlertWindow.
 	AlertWindow time.Duration
@@ -74,6 +90,7 @@ type Options struct {
 // resolved is Options with defaults applied and checked.
 type resolved struct {
 	dbPaths          map[string]string
+	binPaths         map[string]string
 	alert, guard     time.Duration
 	minBundleVersion uint64
 	cat              *catalog.Catalog
@@ -86,6 +103,7 @@ const maxWindow = 30 * 24 * time.Hour
 func (o Options) resolve() (*resolved, error) {
 	r := &resolved{
 		dbPaths:          DefaultDBPaths(),
+		binPaths:         DefaultBinPaths(),
 		alert:            o.AlertWindow,
 		guard:            o.GuardWindow,
 		minBundleVersion: o.MinBundleVersion,
@@ -115,20 +133,11 @@ func (o Options) resolve() (*resolved, error) {
 	if r.minBundleVersion > 1<<62 {
 		return nil, fmt.Errorf("fleetgen: minimum bundle version %d too large", r.minBundleVersion)
 	}
-	keys := make([]string, 0, len(o.DBPaths))
-	for k := range o.DBPaths {
-		keys = append(keys, k)
+	if err := overridePaths("state database", r.dbPaths, o.DBPaths); err != nil {
+		return nil, err
 	}
-	sort.Strings(keys)
-	for _, p := range keys {
-		path := o.DBPaths[p]
-		if !isPlatform(p) {
-			return nil, fmt.Errorf("fleetgen: unknown platform %q in DBPaths (want linux, darwin or windows)", p)
-		}
-		if err := checkDBPath(p, path); err != nil {
-			return nil, err
-		}
-		r.dbPaths[p] = path
+	if err := overridePaths("binary", r.binPaths, o.BinPaths); err != nil {
+		return nil, err
 	}
 	if r.cat == nil {
 		c, err := catalog.Load()
@@ -140,6 +149,27 @@ func (o Options) resolve() (*resolved, error) {
 	return r, nil
 }
 
+// overridePaths validates and copies caller-supplied paths over defaults,
+// in a fixed order so the first error reported does not depend on map
+// iteration.
+func overridePaths(what string, dst, src map[string]string) error {
+	keys := make([]string, 0, len(src))
+	for k := range src {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, p := range keys {
+		if !isPlatform(p) {
+			return fmt.Errorf("fleetgen: unknown platform %q for the %s path (want linux, darwin or windows)", p, what)
+		}
+		if err := checkHostPath(what, p, src[p]); err != nil {
+			return err
+		}
+		dst[p] = src[p]
+	}
+	return nil
+}
+
 func isPlatform(p string) bool {
 	for _, q := range Platforms {
 		if p == q {
@@ -149,37 +179,41 @@ func isPlatform(p string) bool {
 	return false
 }
 
-// checkDBPath accepts an absolute path for the target OS. The path ends up
-// in YAML, in an SQL string literal and in osquery's ATC loader, so control
-// characters are refused outright, and so is %, which ATC would treat as a
-// wildcard while the "installed" label compares the path exactly.
-func checkDBPath(platform, path string) error {
+// checkHostPath accepts an absolute path for the target OS. The path ends
+// up in YAML, in an SQL string literal and in osquery's ATC loader, so
+// control and invisible formatting characters and invalid UTF-8 are refused
+// outright, and so is %, which ATC and osquery's file table treat as a
+// wildcard while the "installed" label compares paths exactly.
+func checkHostPath(what, platform, path string) error {
 	if path == "" {
-		return fmt.Errorf("fleetgen: empty state database path for %s", platform)
+		return fmt.Errorf("fleetgen: empty %s path for %s", what, platform)
 	}
 	if len(path) > 1024 {
-		return fmt.Errorf("fleetgen: state database path for %s is longer than 1024 bytes", platform)
+		return fmt.Errorf("fleetgen: %s path for %s is longer than 1024 bytes", what, platform)
+	}
+	if !utf8.ValidString(path) {
+		return fmt.Errorf("fleetgen: %s path for %s is not valid UTF-8", what, platform)
 	}
 	for _, r := range path {
-		if unicode.IsControl(r) || r == '\u2028' || r == '\u2029' || r == '\ufeff' {
-			return fmt.Errorf("fleetgen: state database path for %s contains a control character", platform)
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == '\u2028' || r == '\u2029' {
+			return fmt.Errorf("fleetgen: %s path for %s contains a control or formatting character", what, platform)
 		}
 	}
 	if strings.ContainsRune(path, '%') {
-		return fmt.Errorf("fleetgen: state database path for %s contains %%, which ATC treats as a wildcard", platform)
+		return fmt.Errorf("fleetgen: %s path for %s contains %%, which osquery treats as a wildcard", what, platform)
 	}
 	if platform == PlatformWindows {
 		if !windowsAbs(path) {
-			return fmt.Errorf("fleetgen: state database path %q is not an absolute Windows path", path)
+			return fmt.Errorf("fleetgen: %s path %q is not an absolute Windows path", what, path)
 		}
 		return nil
 	}
-	if !strings.HasPrefix(path, "/") {
-		return fmt.Errorf("fleetgen: state database path %q is not absolute", path)
+	if !strings.HasPrefix(path, "/") || strings.ContainsRune(path, '\\') {
+		return fmt.Errorf("fleetgen: %s path %q is not an absolute POSIX path", what, path)
 	}
 	for _, el := range strings.Split(path, "/") {
-		if el == ".." {
-			return fmt.Errorf("fleetgen: state database path %q contains ..", path)
+		if el == ".." || el == "." {
+			return fmt.Errorf("fleetgen: %s path %q is not clean", what, path)
 		}
 	}
 	return nil
@@ -194,7 +228,7 @@ func windowsAbs(p string) bool {
 		return false
 	}
 	for _, el := range strings.FieldsFunc(p, func(r rune) bool { return r == '\\' || r == '/' }) {
-		if el == ".." {
+		if el == ".." || el == "." {
 			return false
 		}
 	}

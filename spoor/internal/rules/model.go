@@ -7,6 +7,7 @@ import (
 	"io"
 	"reflect"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 )
@@ -113,20 +114,12 @@ type rawSuppression struct {
 // errYAML wraps every structural YAML rejection.
 var errYAML = errors.New("rules: invalid YAML")
 
-// decodeStrict parses exactly one YAML document into out. It refuses
-// anchors, aliases and merge keys (an alias bomb costs nothing to write and
-// a rule that silently inherits fields from another is unreviewable),
-// custom tags, duplicate keys, documents deeper or larger than the caps, and
-// any mapping key the target struct does not declare.
-func decodeStrict(data []byte, out any) error {
-	root, err := parseStrict(data)
-	if err != nil {
-		return err
-	}
-	return decodeNode(root, out)
-}
-
-// parseStrict parses and checks one document and returns its root node.
+// parseStrict parses exactly one YAML document, checks it and returns its
+// root node. It refuses anchors, aliases and merge keys (an alias bomb
+// costs nothing to write and a rule that silently inherits fields from
+// another is unreviewable), custom tags, duplicate keys and documents
+// deeper or larger than the caps; decodeNode then refuses any mapping key
+// the target struct does not declare.
 func parseStrict(data []byte) (*yaml.Node, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	var doc yaml.Node
@@ -275,7 +268,21 @@ func checkKnown(n *yaml.Node, t reflect.Type, path string) error {
 	return nil
 }
 
+// fieldCache memoizes yamlFields per struct type: checkKnown runs once per
+// mapping node, and recomputing the field map there was an eighth of the
+// cost of loading a pack.
+var fieldCache sync.Map // reflect.Type -> map[string]reflect.StructField
+
 func yamlFields(t reflect.Type) map[string]reflect.StructField {
+	if m, ok := fieldCache.Load(t); ok {
+		return m.(map[string]reflect.StructField)
+	}
+	m := buildYAMLFields(t)
+	fieldCache.Store(t, m)
+	return m
+}
+
+func buildYAMLFields(t reflect.Type) map[string]reflect.StructField {
 	out := make(map[string]reflect.StructField, t.NumField())
 	for i := 0; i < t.NumField(); i++ {
 		f := t.Field(i)

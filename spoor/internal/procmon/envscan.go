@@ -110,8 +110,12 @@ func buildIndex(c *catalog.Catalog) *catIndex {
 
 func (ix *catIndex) prod(id string) *prodInfo { return ix.prods[id] }
 
-// envAlwaysKept are read for LifecycleParent.
-var envAlwaysKept = []string{"npm_lifecycle_event", "npm_config_user_agent", "npm_execpath"}
+// envAlwaysKept are read for LifecycleParent and never emitted.
+var envAlwaysKept = []string{"npm_lifecycle_event", "npm_config_user_agent", "npm_execpath", vscodeProcTypeEnv}
+
+// utilityEnvKeep is the one variable read from an Electron utility process
+// above an agent (see vscodeProcTypeEnv).
+var utilityEnvKeep = map[string]bool{vscodeProcTypeEnv: true}
 
 const (
 	maxMarkers      = 16

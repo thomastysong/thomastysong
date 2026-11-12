@@ -11,21 +11,64 @@ import (
 // policy (structurally redacted command, no prompt text, no tool input or
 // output) and written to the detection stream next to it, so a case is
 // self-contained in every profile.
+//
+// A context record is routed by its kind, like every record, so it is
+// re-kinded: Kind "detection", Type TypeContext, and labels that say what
+// it was (context_kind, context_type), which event it shows
+// (context_event_id) and which finding it belongs to (context_for). It
+// gets its own deterministic id: the same activity record can be shipped
+// on the activity stream (standard profile) and be context for several
+// findings, and consumers dedupe at-least-once deliveries on the id. Seq
+// and Writer are cleared because they are per stream and set by the
+// writer.
+
+// TypeContext is the Type of a detection-context record.
+const TypeContext = "detection.context"
 
 // MaxContext bounds how many preceding events one detection carries.
 const MaxContext = 50
 
-// Context returns up to n of the last events in prev (oldest first),
-// redacted with the standard field policy whatever the profile, and
-// labelled "context=true". Context has no detection id to stamp; callers
-// that have one use ContextFor, which sets labels.context_for. Excluded
-// events, nil entries, detections and health records are skipped.
+// Labels set on context records.
+const (
+	LabelContextFor     = "context_for"
+	LabelContextKind    = "context_kind"
+	LabelContextType    = "context_type"
+	LabelContextEventID = "context_event_id"
+)
+
+// Context returns up to n preceding session events (oldest first),
+// redacted with the standard field policy whatever the profile, as
+// detection-stream records labelled labels.context_for=<detection id>.
+//
+// The detection is found in prev itself: the newest detection record in
+// prev is the finding, the events before it are its context, and when the
+// finding names a session only events of that session qualify. Without a
+// detection in prev every event qualifies and context_for is not set;
+// callers that hold the detection id separately use ContextFor. Nil
+// entries, excluded events and records that ship in every profile anyway
+// (detections, inventory, posture, health, summaries) are skipped.
 func (p *Policy) Context(prev []*event.Event, n int) []*event.Event {
-	return p.ContextFor("", prev, n)
+	for i := len(prev) - 1; i >= 0; i-- {
+		d := prev[i]
+		if d == nil || d.Kind != event.KindDetection {
+			continue
+		}
+		sess := ""
+		if d.Session != nil {
+			sess = d.Session.ID
+		}
+		return p.context(d.ID, sess, prev[:i], n)
+	}
+	return p.context("", "", prev, n)
 }
 
-// ContextFor is Context with labels.context_for set to detectionID.
-func (p *Policy) ContextFor(detectionID string, prev []*event.Event, n int) (out []*event.Event) {
+// ContextFor is Context with the detection id given explicitly: every
+// qualifying event in prev is a candidate, whatever its session.
+func (p *Policy) ContextFor(detectionID string, prev []*event.Event, n int) []*event.Event {
+	return p.context(detectionID, "", prev, n)
+}
+
+func (p *Policy) context(detectionID, session string, prev []*event.Event, n int) (out []*event.Event) {
 	if n <= 0 || len(prev) == 0 {
 		return nil
 	}
@@ -37,7 +80,10 @@ func (p *Policy) ContextFor(detectionID string, prev []*event.Event, n int) (out
 	var picked []*event.Event
 	for i := len(prev) - 1; i >= 0 && len(picked) < n; i-- {
 		e := prev[i]
-		if e == nil || e.Kind == event.KindDetection || e.Kind == event.KindHealth {
+		if e == nil || shipped(ProfileMinimal, e.Kind) {
+			continue
+		}
+		if session != "" && (e.Session == nil || e.Session.ID != session) {
 			continue
 		}
 		if p.Excluded(e) {
@@ -55,14 +101,38 @@ func (p *Policy) ContextFor(detectionID string, prev []*event.Event, n int) (out
 }
 
 func (p *Policy) contextOne(e *event.Event, s settings, detID string) (out *event.Event) {
+	// Ids and types are the sensor's own, but they are copied into labels
+	// after the safety pass, so they get the pattern pass here.
+	clip := func(v string) string {
+		return capBytes(rewriteMarkers(redactText(cleanUTF8(capBytes(v, 256))), nil), 128)
+	}
+	stamp := map[string]string{
+		LabelContextKind:    clip(string(e.Kind)),
+		LabelContextType:    clip(e.Type),
+		LabelContextEventID: clip(e.ID),
+	}
+	if detID != "" {
+		stamp[LabelContextFor] = detID
+	}
+	// Re-kind a shallow copy before rendering, so the line cap measures
+	// the record as it is written. Rendering clones before it changes
+	// anything, so the copy sharing pointers with e is harmless.
+	c := *e
+	c.Kind = event.KindDetection
+	c.Type = TypeContext
+	c.ID = event.StableID(e.TS.Time, "spoor/context", detID, e.ID, e.Dedupe, e.Type)
+	c.Seq = 0
+	c.Writer = ""
+	c.Emitted = event.Time{}
 	defer func() {
 		if recover() != nil {
-			out = p.skeleton(e, s, string(ProfileStandard), "privacy_error")
+			out = p.skeleton(&c, s, string(ProfileStandard), "privacy_error")
+			if out != nil {
+				for k, v := range stamp {
+					out.Labels[k] = v
+				}
+			}
 		}
 	}()
-	stamp := map[string]string{"context": "true"}
-	if detID != "" {
-		stamp = map[string]string{"context_for": detID}
-	}
-	return p.renderStamped(e, s, levelStandard, string(ProfileStandard), stamp)
+	return p.renderStamped(&c, s, levelStandard, string(ProfileStandard), stamp)
 }

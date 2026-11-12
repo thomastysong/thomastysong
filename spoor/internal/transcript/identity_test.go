@@ -113,38 +113,59 @@ func TestEventIDLineDigestPerProcess(t *testing.T) {
 	if c := oneID(t, codex, codexPath, event.TypePromptSubmit, codexHeader(), line); c == a {
 		t.Error("line-digest id is the same under another process key")
 	}
-	// Tool events are identified by their call id, so they keep their id
-	// across processes even in a format without record ids.
-	withLineKey(t, 0x44)
+	// Tool events of a format without record ids too.
 	x := oneID(t, codex, codexPath, event.TypeToolPre, codexHeader(), codexMain[6])
-	withLineKey(t, 0x45)
 	if y := oneID(t, codex, codexPath, event.TypeToolPre, codexHeader(), codexMain[6]); x != y {
-		t.Errorf("tool call id changed across processes: %s vs %s", x, y)
+		t.Errorf("tool call id not stable within the process: %s vs %s", x, y)
+	}
+	withLineKey(t, 0x44)
+	if y := oneID(t, codex, codexPath, event.TypeToolPre, codexHeader(), codexMain[6]); x == y {
+		t.Error("line-digest tool id is the same under another process key")
 	}
 }
 
-// The identity of a tool event is its call: the same call recorded in two
-// records (different uuids) has one id per type; pre and post differ.
-func TestToolEventIDFollowsCall(t *testing.T) {
+// A tool event is identified by its record, type and call id: the same
+// call in two records (the same tool id reused in another file, say) does
+// not share an id; pre and post differ; calls of one record differ.
+func TestToolEventIDs(t *testing.T) {
 	claude, _ := ForFormat(FormatClaude)
 	call := func(uuid string) string {
 		return fmt.Sprintf(`{"type":"assistant","uuid":%q,"sessionId":"s-1","timestamp":"2026-11-01T10:00:01.000Z","message":{"id":"m1","model":"claude-opus-5","content":[{"type":"tool_use","id":"toolu_77","name":"Bash","input":{"command":"ls"}}]}}`, uuid)
 	}
 	result := `{"type":"user","uuid":"r-1","sessionId":"s-1","timestamp":"2026-11-01T10:00:02.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_77","content":"a b"}]}}`
 	a := oneID(t, claude, claudeMainPath, event.TypeToolPre, call("a-1"))
-	b := oneID(t, claude, claudeMainPath, event.TypeToolPre, call("a-2"))
-	if a != b {
-		t.Errorf("same call, two records: %s vs %s", a, b)
+	if again := oneID(t, claude, claudeMainPath, event.TypeToolPre, call("a-1")); again != a {
+		t.Errorf("same record read twice: %s vs %s", a, again)
+	}
+	if b := oneID(t, claude, claudeMainPath, event.TypeToolPre, call("a-2")); a == b {
+		t.Errorf("one tool id in two records shares event id %s", a)
 	}
 	post := oneID(t, claude, claudeMainPath, event.TypeToolPost, call("a-1"), result)
 	if post == a {
 		t.Error("tool.pre and tool.post share an id")
 	}
-	// Two calls in one record each get their own id.
 	two := `{"type":"assistant","uuid":"a-3","sessionId":"s-1","timestamp":"2026-11-01T10:00:01.000Z","message":{"id":"m1","content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"ls"}},{"type":"tool_use","id":"toolu_2","name":"Bash","input":{"command":"pwd"}}]}}`
 	evs, _ := parseLines(t, claude, claudeMainPath, two)
 	if len(evs) != 2 || evs[0].ID == evs[1].ID {
 		t.Errorf("two calls in one record: %d events, ids %v", len(evs), briefs(evs))
+	}
+	// Gemini: a call first recorded executing and completed by a $patch
+	// keeps one tool.pre and gets one tool.post, identified by the message.
+	gemini, _ := ForFormat(FormatGemini)
+	gevs, _ := parseLines(t, gemini, geminiPath, geminiMain...)
+	ids := map[string]bool{}
+	for _, e := range gevs {
+		if ids[e.ID] {
+			t.Errorf("gemini: repeated id %s (%s)", e.ID, brief(e))
+		}
+		ids[e.ID] = true
+	}
+	withLineKey(t, 0x66)
+	gevs2, _ := parseLines(t, gemini, geminiPath, geminiMain...)
+	for i := range gevs {
+		if gevs[i].ID != gevs2[i].ID {
+			t.Errorf("gemini %s: id changed across processes", brief(gevs[i]))
+		}
 	}
 }
 
@@ -256,7 +277,7 @@ func TestEventIDDictionaryAttack(t *testing.T) {
 				}
 				lh := sha256.Sum256(line)
 				unkeyed := "l:" + hex.EncodeToString(lh[:16])
-				if eventID(e.TS.Time, c.p.AgentID(), sess, unkeyed, e.Type, 0) == e.ID {
+				if eventID(e.TS.Time, c.p.AgentID(), sess, unkeyed, e.Type, "", 0) == e.ID {
 					t.Fatalf("prompt recovered with an unkeyed line digest")
 				}
 			}
@@ -264,7 +285,7 @@ func TestEventIDDictionaryAttack(t *testing.T) {
 				// Control: with the process key the same recomputation
 				// finds it, so the negative above is meaningful.
 				rec := "l:" + lineDigest(c.p.AgentID(), []byte(c.line(real)))
-				if eventID(e.TS.Time, c.p.AgentID(), sess, rec, e.Type, 0) != e.ID {
+				if eventID(e.TS.Time, c.p.AgentID(), sess, rec, e.Type, "", 0) != e.ID {
 					t.Fatal("control: keyed recomputation does not give the id; the attack model is wrong")
 				}
 			}

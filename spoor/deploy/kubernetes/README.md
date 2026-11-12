@@ -1,12 +1,15 @@
 # spoor on Kubernetes and in containers
 
 Two ways to watch AI coding agents that run in containers, and a list of
-places where neither works. What is stated here was run with Docker 29 on a
+places where neither works. What is stated here was run with Docker 29.9 on a
 Linux 6.18 node (runc, overlayfs, cgroup v1, no AppArmor or SELinux); the
 captured results are in `VERIFIED.md` next to this file in the source tree
 (`test/e2e/container_test.go`). Nothing here has run under a kubelet: the
-manifests are checked for the properties below by `packaging/packaging_test.go`
-and their pod spec is reproduced with `docker run` flags by the e2e test.
+manifests validate against the Kubernetes 1.31 API schemas (kubeconform
+-strict), are checked for the properties below by
+`packaging/packaging_test.go`, and their pod spec is reproduced with
+`docker run` flags by the e2e test. `appArmorProfile` needs Kubernetes 1.30
+or later.
 
 ```
 kubectl apply -k .            # namespace.yaml, configmap.yaml, daemonset.yaml

@@ -24,7 +24,7 @@ export CGO_ENABLED := 0
 .PHONY: help build test vet fmt-check lint rules bench e2e e2e-container cross package image image-binary release-snapshot clean
 
 help: ## list the targets
-	@awk -F':.*## ' '/^[a-z][a-z-]*:.*## /{printf "  %-17s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk -F':.*## ' '/^[a-z][a-z0-9-]*:.*## /{printf "  %-17s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 build: ## build dist/spoor for this machine
 	$(BUILD) -o $(DIST)/spoor ./cmd/spoor
@@ -36,7 +36,7 @@ vet: ## go vet on every package
 	$(GO) vet ./...
 
 fmt-check: ## fail when a Go file is not gofmt-formatted
-	@out=$$(gofmt -l $$(git ls-files '*.go' 2>/dev/null || find . -name '*.go' -not -path './vendor/*')); \
+	@out=$$(find . -name '*.go' -not -path './vendor/*' -not -path './dist/*' -exec gofmt -l {} +); \
 	if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 
 lint: fmt-check vet rules ## gofmt, go vet, staticcheck when installed, rule lint and tests

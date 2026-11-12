@@ -192,7 +192,7 @@ func (c *lineCtx) geminiMessage(m *geminiMessage) {
 	ts := parseTime(m.Timestamp)
 	// The message id is the identity of its events (eventIDs): the same
 	// message re-listed by a $set checkpoint or a rewritten document keeps
-	// its ids. Its tool calls are identified by their call ids.
+	// its ids, and its calls are told apart by their call ids.
 	c.record("m:", m.ID)
 	switch m.Type {
 	case "user":
@@ -266,6 +266,8 @@ func (c *lineCtx) geminiPatch(p *geminiPatch) {
 		all = all[:maxGeminiMessages]
 	}
 	for _, u := range all {
+		// Results belong to the patched message (eventIDs).
+		c.record("m:", u.ID)
 		for _, tp := range u.ToolCalls {
 			id := clip(tp.ID, maxIDLen)
 			if id == "" || tp.Result == nil {

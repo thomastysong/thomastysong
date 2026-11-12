@@ -76,18 +76,18 @@
 // Event ids are UUIDv7-shaped: the record timestamp, then a digest of what
 // identifies the event, never of its content (the id is serialized, and a
 // digest of a line that holds a prompt would let a reader confirm guesses
-// about it). The identity is the agent's tool-call id for tool events, else
-// the log's own record id (Claude Code uuid, Copilot event id, Gemini
-// message id), else an HMAC of the line under a key drawn once per process
-// (Codex prompts, turn ends and settings records, which carry no id). The
-// first two are the same whenever and wherever a log is read. Line-HMAC ids
-// are stable only within one process: re-reading a file after a crash, a
-// replacement, a move or a Codex archive pass in the same daemon run yields
-// the same ids, a restarted daemon derives new ones. The engine derives the
-// identity of tool and prompt activity (Dedupe) from tool-call ids and keyed
-// prompt digests, not from these ids; only a Codex record without either
-// that a restarted daemon reads again (an uncommitted line after a crash)
-// gets a Dedupe of its own.
+// about it). A record is identified by the log's own record id (Claude Code
+// uuid, Copilot event id, Gemini message id), which is the same whenever
+// and wherever a log is read, or, in a format without one (Codex) and for
+// records that carry none, by an HMAC of the line under a key drawn once
+// per process. Those ids are stable only within one process: re-reading a
+// file after a crash, a replacement, a move or a Codex archive pass in the
+// same daemon run yields the same ids, a restarted daemon derives new ones.
+// An event is the record, its type and its tool-call id. The engine derives
+// the identity of tool and prompt activity (Dedupe) from tool-call ids and
+// keyed prompt digests, not from these ids; only a record with neither (a
+// Codex turn end or settings change, say) that a restarted daemon reads
+// again (an uncommitted line after a crash) gets a new Dedupe.
 //
 // # Unsupported
 //

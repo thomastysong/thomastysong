@@ -86,6 +86,39 @@ func TestScanHostRoot(t *testing.T) {
 	ta.mustRun(t, exitUsage, "scan", "--json", "--ndjson")
 }
 
+// TestScanStateRecordsBundleVersion: `scan --state` loads the installed
+// signed bundle, so its heartbeat must say which version, as the daemon's
+// does. A scan-only host (tier 2, no daemon) otherwise failed the Fleet
+// policy "rules bundle is current" with a current bundle installed: the
+// heartbeat of a fresh state database had bundle_version "".
+func TestScanStateRecordsBundleVersion(t *testing.T) {
+	root := fakeHostRoot(t)
+	dir := t.TempDir()
+	cfg, data := testConfig(t, "")
+	ta := newTestApp(t)
+	key := filepath.Join(dir, "signing")
+	ta.mustRun(t, exitOK, "bundle", "keygen", "--out", key)
+	src := filepath.Join(dir, "src")
+	writeTestFile(t, filepath.Join(src, "rules", "zz.yaml"), testPack, 0o644)
+	arch := filepath.Join(dir, "bundle.tar.gz")
+	ta.mustRun(t, exitOK, "bundle", "create", "--src", src, "--version", "7", "--key", key+".key", "--out", arch)
+	ta.mustRun(t, exitOK, "bundle", "pull", "--config", cfg, "--file", arch, "--pub", key+".pub")
+
+	ta.mustRun(t, exitOK, "scan", "--config", cfg, "--host-root", root, "--projects=false", "--state")
+	st, err := state.OpenReadOnly(filepath.Join(data, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	rows, err := st.Query("health", nil)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("health rows %v %v", rows, err)
+	}
+	if rows[0]["mode"] != "scan" || rows[0]["bundle_version"] != "7" {
+		t.Fatalf("scan heartbeat: mode %q, bundle_version %q, want scan and 7", rows[0]["mode"], rows[0]["bundle_version"])
+	}
+}
+
 func TestScanComplete(t *testing.T) {
 	if !scanComplete(discovery.Ledger{Roots: 3, Files: 9}) {
 		t.Fatal("clean ledger not complete")

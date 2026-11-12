@@ -312,26 +312,25 @@ func (c *lineCtx) newEvent(typ string, ts time.Time) *event.Event {
 // time, then a digest of what identifies the event, never of its content.
 // Event.ID is serialized, so it must not be a guessing oracle: the line
 // holds prompts and tool output, and every other input of a digest of it
-// is in the shipped record. The identity is, in order of preference:
+// is in the shipped record. The record is identified by:
 //
-//   - the agent's tool-call id, for tool.pre and tool.post (the same call
-//     has the same id whichever record of the log carries it);
-//   - the record's own id in the log (Claude Code "uuid", Copilot event
-//     "id", Gemini message id, Gemini session start);
-//   - for a record with neither (Codex prompts, turn ends, settings), an
-//     HMAC of the line under a key drawn once per process (lineKey).
+//   - its own id in the log when the format has one (Claude Code "uuid",
+//     Copilot event "id", Gemini message id; a Gemini session start by its
+//     session id): random values the agent generates, so those ids are the
+//     same whenever and wherever the log is read;
+//   - otherwise (Codex records, Claude Code bookkeeping records) an HMAC of
+//     the line under a key drawn once per process (lineKey). Those ids are
+//     stable only within one process: re-reading a file after a crash, a
+//     replacement or an archive pass in the same daemon run yields the same
+//     ids, a later run yields new ones.
 //
-// The first two are random values the agent generates, so those ids are the
-// same whenever and wherever the log is read. Ids from the line HMAC are
-// stable only within one process: re-reading a file after a crash, a
-// replacement or an archive pass in the same daemon run yields the same
-// ids, a later run yields new ones. The engine derives the identity of
-// tool and prompt activity (Dedupe) from tool-call ids and keyed prompt
-// digests, not from these ids.
+// The engine derives the identity of tool and prompt activity (Dedupe) from
+// tool-call ids and keyed prompt digests, not from these ids.
 //
-// Events of one line that share an identity and a type are numbered in
-// order, so a record that yields several (a turn's settings changes, a
-// Gemini document) still gives each its own id.
+// An event is then identified by its record, its type and its tool-call id,
+// and events of one line that share all three are numbered in order, so a
+// record that yields several (two calls, a turn's settings changes, a
+// Gemini document) gives each its own id.
 func (c *lineCtx) eventIDs() {
 	if len(c.out) == 0 {
 		return
@@ -344,9 +343,6 @@ func (c *lineCtx) eventIDs() {
 		rec, use := seed.rec, ""
 		if e.Tool != nil {
 			use = e.Tool.UseID
-		}
-		if use != "" && (e.Type == event.TypeToolPre || e.Type == event.TypeToolPost) {
-			rec = "t:" + use
 		}
 		if rec == "" {
 			if lineRec == "" {
@@ -361,7 +357,7 @@ func (c *lineCtx) eventIDs() {
 		k := slot{rec, e.Type, use}
 		n := nth[k]
 		nth[k] = n + 1
-		e.ID = eventID(seed.t, c.agent, sess, rec, e.Type, n)
+		e.ID = eventID(seed.t, c.agent, sess, rec, e.Type, use, n)
 	}
 }
 
@@ -384,12 +380,13 @@ func lineDigest(agent string, line []byte) string {
 }
 
 // eventID derives the UUIDv7-shaped id of one event. Its inputs are ids
-// the agent generated (or a keyed line digest), the agent, session and
-// type, and the event's number among its line's events of that identity.
-func eventID(t time.Time, agent, session, rec, typ string, n uint32) string {
+// the agent generated (record and tool-call ids) or a keyed line digest,
+// the agent, session and type, and the event's number among its line's
+// events of that identity.
+func eventID(t time.Time, agent, session, rec, typ, use string, n uint32) string {
 	h := sha256.New()
 	h.Write([]byte("spoor/transcript/v2\x00"))
-	for _, s := range [...]string{agent, session, rec, typ} {
+	for _, s := range [...]string{agent, session, rec, typ, use} {
 		var l [4]byte
 		binary.BigEndian.PutUint32(l[:], uint32(len(s)))
 		h.Write(l[:])

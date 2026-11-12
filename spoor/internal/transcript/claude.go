@@ -81,6 +81,9 @@ type claudeRecord struct {
 		Decision   string `json:"decision"`
 		Source     string `json:"source"`
 		ReasonType string `json:"reasonType"`
+		// "hook:PreToolUse" for a call a PreToolUse hook sent to "ask"
+		// (2.1.322, headless -p; see claudeHookRejected).
+		ReasonCode string `json:"reasonCode"`
 	} `json:"permissionDecision"`
 	// 2.1.322 capture: a prompt delivered while the agent was busy is an
 	// attachment of type "queued_command", not a user record.
@@ -385,6 +388,9 @@ func (c *lineCtx) claudeResult(rec claudeRecord, ts time.Time, b map[string]any)
 			}
 		case "reject":
 			oc.Decision = "deny"
+			if claudeHookRejected(oc, pd.Source, pd.ReasonType, pd.ReasonCode, text) {
+				oc.DecisionSource, oc.Error = "hook", "hook_denied"
+			}
 		}
 		if oc.Decision != "" && oc.DecisionSource == "" {
 			oc.DecisionSource = claudeDecisionSource(pd.Source, pd.ReasonType)
@@ -394,6 +400,22 @@ func (c *lineCtx) claudeResult(rec claudeRecord, ts time.Time, b map[string]any)
 	if pd := rec.PermissionDecision; pd != nil {
 		c.label(e, "permission_reason", safeToken(pd.ReasonType))
 	}
+}
+
+// claudeHookRejected reports whether a call recorded as "user-rejected" was
+// in fact refused by a hook. Captured from Claude Code 2.1.322 in headless
+// mode (-p, no permission prompt tool): a PreToolUse hook that answers
+// "ask" has nobody to ask, the call is refused, and the record says
+// toolDenialKind "user-rejected" with permissionDecision {"decision":
+// "reject","source":"config","reasonCode":"hook:PreToolUse"} and the hook's
+// reason as the result text. A person declining a prompt gets Claude Code's
+// own "The user doesn't want to ..." text and stays a user decision.
+func claudeHookRejected(oc *event.Outcome, source, reasonType, reasonCode, text string) bool {
+	if oc.Error != "user_rejected" {
+		return false
+	}
+	why := strings.ToLower(head(source, 32) + " " + head(reasonType, 32) + " " + head(reasonCode, 64))
+	return strings.Contains(why, "hook") && !strings.HasPrefix(firstLine(text, 256), "The user doesn't want to")
 }
 
 // claudeDecisionSource maps permissionDecision to the event vocabulary

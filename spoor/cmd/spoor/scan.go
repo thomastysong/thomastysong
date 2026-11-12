@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -119,7 +120,7 @@ type scanResult struct {
 // which applies the inventory rules, the privacy policy and, with --state,
 // the state database.
 func (a *app) scan(ctx context.Context, cfg *config.Config, o scanOptions) (*scanResult, error) {
-	set, _, err := loadRules(cfg, ruleSource{})
+	set, info, err := loadRules(cfg, ruleSource{})
 	if err != nil {
 		return nil, err
 	}
@@ -195,10 +196,17 @@ func (a *app) scan(ctx context.Context, cfg *config.Config, o scanOptions) (*sca
 	if cfg.HostID != "" {
 		hostIDSource = "config"
 	}
+	// The heartbeat names the installed bundle the scan ran with, as the
+	// daemon's does: on a scan-only host it is the only heartbeat, and the
+	// Fleet policy "rules bundle is current" reads it.
+	bundleVer := ""
+	if info.BundleVersion > 0 {
+		bundleVer = strconv.FormatUint(info.BundleVersion, 10)
+	}
 	p, err := engine.New(engine.Options{
 		Config: cfg, Catalog: cat, Rules: set, Outbox: outbox, Local: capture, State: st,
 		Host: host, Mode: engine.ModeScan, Now: a.now, SensorVersion: versionString(),
-		HostIDSource: hostIDSource,
+		HostIDSource: hostIDSource, BundleVersion: bundleVer,
 	})
 	if err != nil {
 		return nil, err

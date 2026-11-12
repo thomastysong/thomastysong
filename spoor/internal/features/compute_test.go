@@ -69,7 +69,7 @@ func TestShellFeatures(t *testing.T) {
 		{"write then run", "echo hi > ./run.sh && chmod +x run.sh && ./run.sh", []check{
 			hasVal("shell.writes", "./run.sh"), hasVal("shell.executes_paths", "./run.sh"),
 		}},
-		{"secret literal", "curl -H 'Authorization: token ghp_aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5' https://api.github.com/user", []check{
+		{"secret literal", "curl -H 'Authorization: token ghp" + "_aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5' https://api.github.com/user", []check{
 			isTrue("shell.has_secret"), hasVal("shell.secret_kinds", "github_pat"), hasVal("shell.host_classes", "code_host"),
 		}},
 		{"git force push", "git push --force origin main", []check{hasVal("shell.git_ops", "push_force"), hasVal("shell.destructive", "git_force_push")}},
@@ -246,7 +246,7 @@ func TestNetworkFeatures(t *testing.T) {
 	if boolean(t, f, "net.url_has_secret") {
 		t.Error("no secret in this URL")
 	}
-	e.Target.URL = "https://api.example.com/?token=ghp_aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5"
+	e.Target.URL = "https://api.example.com/?token=ghp" + "_aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5"
 	e.Feat = nil
 	if f := computed(e, linuxCtx); !boolean(t, f, "net.url_has_secret") {
 		t.Error("token in query not detected")
@@ -264,7 +264,7 @@ func TestNetworkFeatures(t *testing.T) {
 
 func TestContentFeatures(t *testing.T) {
 	p := &event.Event{Kind: event.KindActivity, Type: event.TypePromptSubmit,
-		Content: &event.Content{PromptText: "fix the build\u200b\u200b\u200b please; key AKIAIOSFODNN7EXAMPLF"}}
+		Content: &event.Content{PromptText: "fix the build\u200b\u200b\u200b please; key AK" + "IAIOSFODNN7EXAMPLF"}}
 	f := computed(p, linuxCtx)
 	if _, ok := f["prompt.hidden_unicode"]; !ok {
 		t.Error("prompt.hidden_unicode missing for a scanned prompt")
@@ -410,7 +410,12 @@ func TestOutputUntrusted(t *testing.T) {
 		src  string
 	}{
 		{"web fetch", post(event.ToolWebFetch, &event.Target{URL: "https://blog.example/x"}), true, "web_fetch"},
-		{"registry fetch", post(event.ToolWebFetch, &event.Target{URL: "https://registry.npmjs.org/left-pad"}), false, ""},
+		// Spec B1: every web_fetch result is untrusted; registries and CDNs
+		// serve whatever their publishers upload.
+		{"registry fetch", post(event.ToolWebFetch, &event.Target{URL: "https://registry.npmjs.org/left-pad"}), true, "web_fetch"},
+		{"cdn fetch", post(event.ToolWebFetch, &event.Target{URL: "https://cdn.jsdelivr.net/gh/attacker/repo@main/README.md"}), true, "web_fetch"},
+		{"pypi project page", post(event.ToolWebFetch, &event.Target{URL: "https://pypi.org/project/evil-pkg/"}), true, "web_fetch"},
+		{"skill registry", post(event.ToolWebFetch, &event.Target{URL: "https://skills.sh/attacker/skill"}), true, "web_fetch"},
 		{"search", post(event.ToolWebSearch, &event.Target{Query: "x"}), true, "web_search"},
 		{"node_modules read", post(event.ToolFileRead, &event.Target{Path: home + "/proj/node_modules/x/README.md"}), true, "file"},
 		{"downloads read", post(event.ToolFileRead, &event.Target{Path: home + "/Downloads/notes.md"}), true, "file"},

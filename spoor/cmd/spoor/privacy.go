@@ -303,7 +303,7 @@ func (a *app) privacyTail(args []string) int {
 		a.warn("privacy tail", "%s", p)
 	}
 	if t.denied > 0 && t.read == 0 {
-		return a.fail("privacy tail", fmt.Errorf("this account cannot read the records spoor keeps (%s): they are readable by root%s only; run `sudo spoor privacy tail --user %s`, or ask the administrator", strings.Join(t.deniedDirs, ", "), groupClause(cfg), name))
+		return a.fail("privacy tail", fmt.Errorf("this account cannot read the records spoor keeps (%s): they are readable by root only%s; run `sudo spoor privacy tail --user %s`, or ask the administrator", strings.Join(t.deniedDirs, ", "), groupClause(cfg), firstNonEmpty(name, uid, "<your name>")))
 	}
 	if len(recs) > *n {
 		recs = recs[len(recs)-*n:]

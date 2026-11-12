@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -98,5 +99,77 @@ func TestQuotedStringsJSONC(t *testing.T) {
 	bins, err := installedBinaries(p)
 	if err != nil || len(bins) != 1 || bins[0] != "/a b/spoor" {
 		t.Fatalf("%q %v", bins, err)
+	}
+}
+
+// A string in a hook file that a monitored user controls must not crash
+// the administrator's `spoor doctor`: only blanks before " hook --agent "
+// name no program.
+func TestBinaryFromCommandHostileNoPanic(t *testing.T) {
+	for _, s := range []string{"  hook --agent x", "\t hook --agent x", " \u00a0 hook --agent claude-code", "\x00 hook --agent x", `'' hook --agent x`, `"" hook --agent x`, ` hook --agent  hook --agent x`} {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("binaryFromCommand(%q) panicked: %v", s, r)
+				}
+			}()
+			_ = binaryFromCommand(s)
+		}()
+	}
+}
+
+// The same through the file reader doctor uses on every hook file that
+// holds spoor entries (any account's settings.json when doctor runs as
+// root), and strings outside the hook-command positions are not hooks.
+func TestInstalledBinariesHostileSettings(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "settings.json")
+	writeTestFile(t, p, `{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"/usr/bin/spoor","args":["hook","--agent","claude-code"]},{"type":"command","command":"  hook --agent x"}]}]},`+
+		`"note":"  hook --agent x","statusLine":{"type":"command","command":"/tmp/not-a-hook hook --agent x"},`+
+		`"mcpServers":{"m":{"command":"/tmp/mcp hook --agent x"}}}`, 0o600)
+	bins, err := installedBinaries(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bins) != 1 || bins[0] != "/usr/bin/spoor" {
+		t.Fatalf("binaries %q, want only the hook entry's /usr/bin/spoor", bins)
+	}
+}
+
+// End to end: a monitored user with spoor user hooks adds one string to
+// their own settings.json; `spoor doctor` (run by the administrator)
+// reports instead of dying with a runtime panic, and does not take the
+// status line for a hook binary.
+func TestDoctorSurvivesHostileUserSettings(t *testing.T) {
+	home := t.TempDir()
+	ta := newTestApp(t)
+	bin := filepath.Join(t.TempDir(), "spoor")
+	writeTestFile(t, bin, "#!/bin/sh\nexit 0\n", 0o755)
+	ta.mustRun(t, exitOK, "hooks", "install", "--scope", "user", "--home", home, "--agents", "claude-code", "--binary", bin)
+	settings := filepath.Join(home, ".claude", "settings.json")
+	b, err := os.ReadFile(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	m["statusLine"] = map[string]any{"type": "command", "command": "  hook --agent x"}
+	m["otherLine"] = map[string]any{"type": "command", "command": "/nonexistent/x hook --agent x"}
+	b, _ = json.Marshal(m)
+	writeTestFile(t, settings, string(b), 0o600)
+	cfg, _ := testConfig(t, "")
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("spoor doctor panicked on a user-controlled settings.json: %v", r)
+			}
+		}()
+		ta.run("doctor", "--config", cfg, "--home", home, "--json")
+	}()
+	var r doctorReport
+	decodeJSON(t, ta.out.String(), &r)
+	if c := checkOf(&r, "hooks"); strings.Contains(c.Detail, "binary_missing") {
+		t.Fatalf("a string outside the hook entries was taken for a hook binary: %+v", c)
 	}
 }

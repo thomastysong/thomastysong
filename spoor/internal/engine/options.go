@@ -120,6 +120,16 @@ type Options struct {
 	// HomeOf returns the home directory of an account (uid or name may be
 	// empty). Default: the platform account list, cached (additive).
 	HomeOf func(uid, name string) string
+	// IdentityKey keys every identifier derived from content (the prompt
+	// digest that pairs a hook prompt with its transcript twin, the digest
+	// that names a record which came without an id), so Dedupe and ID
+	// never let a reader test a guess about a prompt or a redacted secret.
+	// The daemon passes the key it keeps at IdentityKeyPath
+	// (LoadOrCreateIdentityKey), so identities hold across restarts. Empty
+	// (scan, detect, hook modes, tests): a random key drawn once per
+	// process, so identities hold for this run only. At least
+	// MinIdentityKeyLen bytes when set (additive).
+	IdentityKey []byte
 }
 
 // PolicyFromConfig builds the privacy policy the configuration describes:

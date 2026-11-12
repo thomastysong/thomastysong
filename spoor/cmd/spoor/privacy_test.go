@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -152,5 +153,219 @@ func TestEndpointHost(t *testing.T) {
 		if got := endpointHost(in); got != want && !(strings.HasPrefix(in, "unix") && got != "") {
 			t.Errorf("endpointHost(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// -n below zero and a non-positive --interval are usage errors, not a
+// slice-bounds panic or a NewTicker panic.
+func TestPrivacyTailRejectsBadFlags(t *testing.T) {
+	cfg, _ := testConfig(t, "")
+	ta := newTestApp(t)
+	for _, args := range [][]string{{"-n", "-1"}, {"--follow", "--interval", "0s"}, {"--interval", "-1s"}} {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("privacy tail %v panicked: %v", args, r)
+				}
+			}()
+			if got := ta.run(append([]string{"privacy", "tail", "--config", cfg}, args...)...); got != exitUsage {
+				t.Fatalf("privacy tail %v: exit %d, want %d", args, got, exitUsage)
+			}
+		}()
+	}
+	// -n 0 shows nothing before following, without an error.
+	ta.mustRun(t, exitOK, "privacy", "tail", "--config", cfg, "-n", "0")
+}
+
+// An account that can read neither the outbox nor the local ring is told
+// so and the command fails, instead of printing nothing as if nothing had
+// been recorded (the poll itself is unit-tested here; test/e2e runs the
+// binary as nobody against the daemon's layout).
+func TestPrivacyTailDeniedDirs(t *testing.T) {
+	cfg, _ := testConfig(t, "output:\n  group: shippers\n")
+	c, _, err := loadConfig(cfgFlags{path: cfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tl := newTailer(c)
+	if tl.dirs[0].access != `readable by root and the members of "shippers"` || tl.dirs[1].access != "readable by root only" {
+		t.Fatalf("access texts: %+v", tl.dirs)
+	}
+	if !permsChecked || os.Geteuid() == 0 {
+		return
+	}
+	for _, d := range []string{c.OutboxDir(), c.LocalDir()} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		os.Chmod(d, 0)
+		defer os.Chmod(d, 0o700)
+	}
+	ta := newTestApp(t)
+	if code := ta.run("privacy", "tail", "--config", cfg); code != exitError || !strings.Contains(ta.errb.String(), "cannot read the records") {
+		t.Fatalf("exit %d\n%s", code, ta.errb.String())
+	}
+}
+
+// With pseudonymize_users the state database holds the pseudonym (the
+// pipeline stores the redacted record): purge erases by the pseudonyms of
+// the name and the id as well as by the plain values.
+func TestPurgePseudonymizedStateRows(t *testing.T) {
+	dir := t.TempDir()
+	key := filepath.Join(dir, "tenant.key")
+	writeTestFile(t, key, strings.Repeat("k", 48)+"\n", 0o600)
+	cfg, data := testConfig(t, "privacy:\n  hmac_key_file: "+key+"\n  key_id: k1\n  pseudonymize_users: true\n")
+	ta := newTestApp(t)
+	ta.mustRun(t, exitOK, "scan", "--config", cfg, "--host-root", fakeHostRoot(t), "--projects=false", "--state")
+
+	countRows := func() int {
+		ro, err := state.OpenReadOnly(filepath.Join(data, "state.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ro.Close()
+		n := 0
+		for _, tbl := range []string{"agents", "mcp_servers", "posture"} {
+			rows, err := ro.Query(tbl, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, r := range rows {
+				if strings.HasPrefix(r["owner"], "u_") {
+					n++
+				}
+			}
+		}
+		return n
+	}
+	before := countRows()
+	if before == 0 {
+		t.Fatal("scan wrote no pseudonymized owned rows")
+	}
+	var res purgeResult
+	decodeJSON(t, ta.mustRun(t, exitOK, "privacy", "purge", "--config", cfg, "--user", "dev", "--json"), &res)
+	if after := countRows(); after != 0 || res.StateRows < before {
+		t.Fatalf("purge --user dev left %d of %d pseudonymized state row(s) (state_rows=%d, notes=%v)", after, before, res.StateRows, res.Notes)
+	}
+	for _, n := range res.Notes {
+		if strings.Contains(n, "tenant key") {
+			t.Fatalf("the key was readable, yet: %q", n)
+		}
+	}
+
+	// An unreadable key is said plainly.
+	cfg2, _ := testConfig(t, "privacy:\n  hmac_key_file: "+filepath.Join(dir, "missing.key")+"\n  key_id: k1\n  pseudonymize_users: true\n")
+	decodeJSON(t, ta.mustRun(t, exitOK, "privacy", "purge", "--config", cfg2, "--user", "dev", "--json"), &res)
+	if len(res.Notes) == 0 || !strings.Contains(strings.Join(res.Notes, " "), "tenant key could not be used") {
+		t.Fatalf("notes: %v", res.Notes)
+	}
+}
+
+// The hook spool <data>/spool/<uid>/ holds the account's activity WITH
+// local content until the daemon has read it and retention has passed:
+// purge overwrites the account's lines in place (same size, same file, so
+// the daemon's byte offsets stay valid) and leaves other accounts' lines.
+func TestPurgeErasesSpoolContent(t *testing.T) {
+	cfg, data := testConfig(t, "")
+	t0 := time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)
+	alice := spoolLine(t, shellEvent(t, "sp1", "s-alice", "alice", "cat ~/.netrc", t0), map[string]any{"command": "cat ~/.netrc", "secret_prompt": "alice private prompt text"})
+	bob := spoolLine(t, shellEvent(t, "sp2", "s-bob", "bob", "ls", t0), map[string]any{"command": "ls", "note": "bob keeps this"})
+	sp := filepath.Join(data, "spool", "1001", "activity-20261110.ndjson")
+	content := string(alice) + "\n" + string(bob) + "\n"
+	writeTestFile(t, sp, content, 0o600)
+	before, _ := os.Stat(sp)
+	ta := newTestApp(t)
+
+	var dry purgeResult
+	decodeJSON(t, ta.mustRun(t, exitOK, "privacy", "purge", "--config", cfg, "--user", "alice", "--dry-run", "--json"), &dry)
+	if dry.SpoolLines != 1 {
+		t.Fatalf("dry run: %+v", dry)
+	}
+	if b, _ := os.ReadFile(sp); string(b) != content {
+		t.Fatal("the dry run changed the spool")
+	}
+	var res purgeResult
+	decodeJSON(t, ta.mustRun(t, exitOK, "privacy", "purge", "--config", cfg, "--user", "alice", "--json"), &res)
+	b, _ := os.ReadFile(sp)
+	if strings.Contains(string(b), "alice private prompt text") || res.SpoolLines != 1 || res.SpoolFiles != 1 {
+		t.Fatalf("purge --user alice left alice's spooled content (%+v):\n%s", res, b)
+	}
+	if !strings.Contains(string(b), "bob keeps this") || len(b) != len(content) {
+		t.Fatalf("another account's line or the file length changed:\n%q", b)
+	}
+	if after, _ := os.Stat(sp); !os.SameFile(before, after) {
+		t.Fatal("the spool file was replaced: the daemon's reader would read it again from the start")
+	}
+
+	// --uid names the account's own spool directory: every line there is
+	// the account's, whatever the lines claim, and its guard-mode session
+	// state goes too.
+	own := filepath.Join(data, "spool", "1002", "activity-20261110.ndjson")
+	writeTestFile(t, own, string(bob)+"\n", 0o600)
+	writeTestFile(t, filepath.Join(data, "spool", "1002", "state", "abc"), "{}", 0o600)
+	decodeJSON(t, ta.mustRun(t, exitOK, "privacy", "purge", "--config", cfg, "--user", "carol", "--uid", "1002", "--json"), &res)
+	if b, _ := os.ReadFile(own); strings.TrimSpace(string(b)) != "" || res.SpoolState != 1 {
+		t.Fatalf("own spool after purge (%+v):\n%q", res, b)
+	}
+	if _, err := os.Stat(filepath.Join(data, "spool", "1002", "state", "abc")); err == nil {
+		t.Fatal("guard state survived")
+	}
+	if b, _ := os.ReadFile(sp); !strings.Contains(string(b), "bob keeps this") {
+		t.Fatal("purging carol's directory touched another directory's lines")
+	}
+}
+
+// Spool directories are writable by the accounts they belong to: links
+// planted there must not lead an administrator's purge to write or delete
+// anything outside them.
+func TestPurgeSpoolRefusesLinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symbolic links need privileges on Windows")
+	}
+	cfg, data := testConfig(t, "")
+	t0 := time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)
+	line := string(spoolLine(t, shellEvent(t, "sp1", "s-a", "alice", "ls", t0), map[string]any{"command": "ls"})) + "\n"
+
+	// Victims outside the spool, in the shape purge looks for.
+	outside := t.TempDir()
+	victim := filepath.Join(outside, "victim.ndjson")
+	writeTestFile(t, victim, line, 0o644)
+	victimState := filepath.Join(outside, "state", "precious")
+	writeTestFile(t, victimState, "keep", 0o644)
+
+	dir := filepath.Join(data, "spool", "1001")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(os.Symlink(victim, filepath.Join(dir, "activity-a.ndjson")))
+	must(os.Link(victim, filepath.Join(dir, "activity-b.ndjson")))
+	must(os.Symlink(filepath.Join(outside, "state"), filepath.Join(dir, "state")))
+	// A FIFO must not block the purge.
+	if err := syscallMkfifo(filepath.Join(dir, "activity-c.ndjson")); err != nil {
+		t.Log("no FIFO:", err)
+	}
+
+	ta := newTestApp(t)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ta.mustRun(t, exitOK, "privacy", "purge", "--config", cfg, "--user", "alice", "--uid", "1001", "--json")
+	}()
+	select {
+	case <-done:
+	case <-time.After(20 * time.Second):
+		t.Fatal("purge blocked (FIFO?)")
+	}
+	if b, _ := os.ReadFile(victim); string(b) != line {
+		t.Fatalf("purge wrote through a link into %s:\n%q", victim, b)
+	}
+	if _, err := os.Stat(victimState); err != nil {
+		t.Fatalf("purge deleted through a planted state link: %v", err)
 	}
 }

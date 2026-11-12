@@ -155,7 +155,7 @@ func (c *correlator) markPrimary(key string, src event.Source, now time.Time) {
 
 // decide applies the rules above to ev; pmu is held.
 func (c *correlator) decide(p *Pipeline, ev *event.Event, s *session, now time.Time, how attribution) corrAction {
-	if s == nil || naturalKey(ev) == "" {
+	if s == nil || !hasNaturalKey(ev) {
 		if ev.Source == event.SourceOTel && s != nil && (toolRecord(ev) || ev.Type == event.TypePromptSubmit) &&
 			(s.surfaces[event.SourceHook] || s.surfaces[event.SourceTranscript]) {
 			p.ctr.uncorrelatable++

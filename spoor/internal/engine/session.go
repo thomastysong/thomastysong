@@ -345,7 +345,7 @@ func (s *session) addDetection(d *event.Detection) {
 // its surface when it has the same record id (a replay), the same prompt
 // id, or, with no prompt id on either, a time within promptRepeatWindow.
 func (p *Pipeline) promptDedupe(ev *event.Event, s *session) {
-	nat := naturalKey(ev)
+	nat := p.naturalKey(ev)
 	if nat == "" {
 		return
 	}

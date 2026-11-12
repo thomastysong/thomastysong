@@ -111,3 +111,79 @@ func TestSeenAssets(t *testing.T) {
 		t.Fatalf("seen %s", got)
 	}
 }
+
+// `scan --outbox` must not prune by the sink's blind retention when a
+// consumer is configured: with output.fluent_bit.tail_db set, only the
+// daemon prunes, by what Fluent Bit has read. With no consumer at all it
+// applies retention as the daemon does.
+func TestScanOutboxKeepsUnshippedSegments(t *testing.T) {
+	now := time.Now().UTC()
+	seed := func(t *testing.T, outbox string) (old string) {
+		old = filepath.Join(outbox, "detection-"+now.AddDate(0, 0, -10).Format("20060102")+"-00-0000.ndjson")
+		newer := filepath.Join(outbox, "detection-"+now.AddDate(0, 0, -9).Format("20060102")+"-00-0000.ndjson")
+		writeTestFile(t, old, nativeLine(t, "alice", "1001", "unshipped finding", 0), 0o640)
+		writeTestFile(t, newer, nativeLine(t, "alice", "1001", "unshipped finding 2", 1), 0o640)
+		return old
+	}
+	for _, tc := range []struct {
+		name, extra string
+		kept        bool
+	}{
+		{"tail_db", "output:\n  fluent_bit:\n    tail_db: " + filepath.Join(t.TempDir(), "flb", "spoor-findings.db") + "\n", true},
+		{"otlp shipper", "output:\n  otlp:\n    endpoint: http://127.0.0.1:1/v1/logs\n", true},
+		{"no consumer", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, data := testConfig(t, tc.extra)
+			old := seed(t, filepath.Join(data, "outbox"))
+			ta := newTestApp(t)
+			var res scanResult
+			decodeJSON(t, ta.mustRun(t, exitOK, "scan", "--config", cfg, "--host-root", fakeHostRoot(t), "--projects=false", "--outbox", "--json"), &res)
+			_, err := os.Stat(old)
+			if kept := err == nil; kept != tc.kept {
+				t.Fatalf("segment 10 days old kept=%v, want %v (notes %v)", kept, tc.kept, res.Notes)
+			}
+			if tc.kept && len(res.Notes) == 0 {
+				t.Fatal("no note that pruning is left to the daemon")
+			}
+		})
+	}
+}
+
+// Tier 2 (scheduled `scan --outbox`, no daemon): the outbox is created as
+// the daemon creates it, 2750 owned by output.group, so a shipper in that
+// group can read what scan writes, and the data directory is traversable.
+func TestScanOutboxUsesOutputGroup(t *testing.T) {
+	if !permsChecked || os.Geteuid() != 0 {
+		t.Skip("needs root on POSIX")
+	}
+	acc, err := lookupAccessor("daemon")
+	if err != nil {
+		t.Skip(err)
+	}
+	cfg, data := testConfig(t, "output:\n  group: daemon\n")
+	// Only the modes spoor creates matter: open up the test's own dirs.
+	for _, d := range []string{filepath.Dir(data), filepath.Dir(filepath.Dir(data))} {
+		if err := os.Chmod(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ta := newTestApp(t)
+	ta.mustRun(t, exitOK, "scan", "--config", cfg, "--host-root", fakeHostRoot(t), "--projects=false", "--outbox")
+	ents, _ := os.ReadDir(filepath.Join(data, "outbox"))
+	var names []string
+	for _, e := range ents {
+		names = append(names, e.Name())
+	}
+	if len(names) == 0 {
+		t.Fatal("scan wrote no segment")
+	}
+	// "daemon" (uid 1, primary group daemon) stands in for the shipper
+	// account that is a member of output.group.
+	if ok, why := acc.canRead(filepath.Join(data, "outbox"), names); !ok {
+		t.Fatalf("a member of output.group cannot read what scan --outbox wrote: %s", why)
+	}
+	if fi, err := os.Stat(data); err != nil || fi.Mode().Perm() != 0o711 {
+		t.Fatalf("data directory mode %v", fi.Mode())
+	}
+}

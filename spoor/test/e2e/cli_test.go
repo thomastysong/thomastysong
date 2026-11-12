@@ -146,6 +146,72 @@ func (e *cliEnv) mustSpoor(want int, args ...string) string {
 	return out
 }
 
+// tailAsNobody runs `spoor privacy tail` as the nobody account against the
+// layout the daemon made.
+func (e *cliEnv) tailAsNobody() {
+	t := e.t
+	t.Helper()
+	uid, gid := lookupNobody(t)
+	// Only the modes spoor creates are under test: open up the test's own
+	// directories so that nobody can reach the binary and the
+	// configuration.
+	for p := filepath.Dir(e.bin); ; p = filepath.Dir(p) {
+		if err := os.Chmod(p, 0o711|statMode(t, p)&0o755); err != nil {
+			t.Fatal(err)
+		}
+		if p == filepath.Dir(e.tmp) || p == filepath.Dir(p) {
+			break
+		}
+	}
+	if err := os.Chmod(filepath.Dir(e.cfg), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(e.bin, "privacy", "tail", "--config", e.cfg)
+	cmd.Env = e.env
+	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uid, Gid: gid}}
+	var o, eb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &o, &eb
+	err := cmd.Run()
+	code := 0
+	if ee, ok := err.(*exec.ExitError); ok {
+		code = ee.ExitCode()
+	} else if err != nil {
+		t.Fatalf("privacy tail as nobody: %v", err)
+	}
+	if code != 1 || !strings.Contains(eb.String(), "cannot read the records") || !strings.Contains(eb.String(), "readable by root only") {
+		t.Fatalf("privacy tail as nobody: exit %d, want 1 with an access message\nstdout:\n%s\nstderr:\n%s", code, cliClip(o.String(), 1000), cliClip(eb.String(), 1000))
+	}
+}
+
+func lookupNobody(t *testing.T) (uint32, uint32) {
+	t.Helper()
+	b, err := os.ReadFile("/etc/passwd")
+	if err != nil {
+		t.Skip(err)
+	}
+	for _, l := range strings.Split(string(b), "\n") {
+		f := strings.Split(l, ":")
+		if len(f) > 3 && f[0] == "nobody" {
+			u, err1 := strconv.ParseUint(f[2], 10, 32)
+			g, err2 := strconv.ParseUint(f[3], 10, 32)
+			if err1 == nil && err2 == nil {
+				return uint32(u), uint32(g)
+			}
+		}
+	}
+	t.Skip("no nobody account")
+	return 0, 0
+}
+
+func statMode(t *testing.T, p string) os.FileMode {
+	t.Helper()
+	fi, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fi.Mode().Perm()
+}
+
 func cliClip(s string, n int) string {
 	if len(s) > n {
 		return s[:n] + "..."
@@ -475,6 +541,14 @@ func TestCLIEndToEnd(t *testing.T) {
 	}
 	if doc.Daemon == nil {
 		t.Errorf("doctor has no daemon snapshot")
+	}
+
+	// 8b. privacy tail for an ordinary account: the daemon keeps the local
+	// ring root-only and the outbox for root and output.group, so the
+	// account is told it cannot read them (exit 1) instead of being shown
+	// an empty list as if nothing had been recorded.
+	if os.Geteuid() == 0 {
+		e.tailAsNobody()
 	}
 
 	// 9. Central re-evaluation of the local ring finds the same thing.

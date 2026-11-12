@@ -229,6 +229,14 @@ func (a *app) checkPackage(ctx context.Context, ch pkgCheck) pkgCheck {
 		return ch
 	}
 	req.Header.Set("Accept", "application/json")
+	if ch.Registry == "npm" {
+		// The abbreviated ("corgi") document has name, dist-tags and each
+		// version's deprecation without readmes and maintainers: a few
+		// hundred KiB where the full packument of an agent CLI with many
+		// platform builds is 9-27 MB (codex, opencode, amp, measured
+		// 2026-11-12).
+		req.Header.Set("Accept", "application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8")
+	}
 	req.Header.Set("User-Agent", "spoor-catalog-verify")
 	resp, err := a.client.Do(req)
 	if err != nil {
@@ -244,35 +252,31 @@ func (a *app) checkPackage(ctx context.Context, ch pkgCheck) pkgCheck {
 		ch.Status, ch.Detail = "error", resp.Status
 		return ch
 	}
+	ch.Status = "ok"
+	switch ch.Registry {
+	case "npm":
+		// A registry that ignores the Accept header sends the full
+		// packument: it is decoded as a stream, keeping only the fields
+		// read here, up to maxRegistryReply.
+		doc, err := decodeNPM(io.LimitReader(resp.Body, maxRegistryReply+1))
+		if err != nil {
+			ch.Status, ch.Detail = "error", "unreadable registry reply: "+clip(err.Error(), 100)
+			return ch
+		}
+		if doc.name != "" && doc.name != name {
+			ch.Status, ch.Detail = "renamed", "registry name "+clip(doc.name, 80)
+		}
+		if msg, ok := doc.deprecated[doc.distTags["latest"]]; ok {
+			ch.Status, ch.Detail = "deprecated", clip(msg, 160)
+		}
+		return ch
+	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
 		ch.Status, ch.Detail = "error", err.Error()
 		return ch
 	}
-	ch.Status = "ok"
 	switch ch.Registry {
-	case "npm":
-		var doc struct {
-			Name     string            `json:"name"`
-			DistTags map[string]string `json:"dist-tags"`
-			Versions map[string]struct {
-				Deprecated json.RawMessage `json:"deprecated"`
-			} `json:"versions"`
-		}
-		if json.Unmarshal(body, &doc) != nil {
-			ch.Status, ch.Detail = "error", "unreadable registry reply"
-			return ch
-		}
-		if doc.Name != "" && doc.Name != name {
-			ch.Status, ch.Detail = "renamed", "registry name "+clip(doc.Name, 80)
-		}
-		if v, ok := doc.Versions[doc.DistTags["latest"]]; ok && len(v.Deprecated) > 0 && string(v.Deprecated) != "false" && string(v.Deprecated) != `""` {
-			var msg string
-			if json.Unmarshal(v.Deprecated, &msg) != nil {
-				msg = "deprecated"
-			}
-			ch.Status, ch.Detail = "deprecated", clip(msg, 160)
-		}
 	case "pypi":
 		var doc struct {
 			Info struct {
@@ -288,6 +292,153 @@ func (a *app) checkPackage(ctx context.Context, ch pkgCheck) pkgCheck {
 		}
 	}
 	return ch
+}
+
+// maxRegistryReply bounds what is read of one npm reply. The largest
+// packuments of catalog packages measured 27 MB (2026-11-12). A variable
+// so tests can lower it.
+var maxRegistryReply int64 = 96 << 20
+
+// npmDoc is what catalog verify needs from an npm packument.
+type npmDoc struct {
+	name       string
+	distTags   map[string]string
+	deprecated map[string]string // version -> message, deprecated versions only
+}
+
+// decodeNPM reads a packument (full or abbreviated) token by token, keeping
+// name, dist-tags and the deprecation of each version; everything else
+// (readmes, maintainers, per-version manifests) is skipped as it streams by.
+func decodeNPM(r io.Reader) (*npmDoc, error) {
+	cr := &countingReader{r: r}
+	doc, err := decodeNPMStream(json.NewDecoder(cr))
+	if cr.n > maxRegistryReply {
+		// The limit cut the reply short: say so rather than "unexpected EOF".
+		return nil, fmt.Errorf("larger than %d MiB", maxRegistryReply>>20)
+	}
+	return doc, err
+}
+
+func decodeNPMStream(dec *json.Decoder) (*npmDoc, error) {
+	doc := &npmDoc{distTags: map[string]string{}, deprecated: map[string]string{}}
+	if err := expectDelim(dec, '{'); err != nil {
+		return nil, err
+	}
+	for dec.More() {
+		key, err := objectKey(dec)
+		if err != nil {
+			return nil, err
+		}
+		switch key {
+		case "name":
+			if err := dec.Decode(&doc.name); err != nil {
+				return nil, err
+			}
+		case "dist-tags":
+			if err := dec.Decode(&doc.distTags); err != nil {
+				return nil, err
+			}
+		case "versions":
+			if err := expectDelim(dec, '{'); err != nil {
+				return nil, err
+			}
+			for dec.More() {
+				ver, err := objectKey(dec)
+				if err != nil {
+					return nil, err
+				}
+				var v struct {
+					Deprecated json.RawMessage `json:"deprecated"`
+				}
+				if err := dec.Decode(&v); err != nil {
+					return nil, err
+				}
+				if msg, ok := deprecation(v.Deprecated); ok && len(doc.deprecated) < 100000 {
+					doc.deprecated[ver] = msg
+				}
+			}
+			if _, err := dec.Token(); err != nil {
+				return nil, err
+			}
+		default:
+			if err := skipValue(dec); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return doc, nil
+}
+
+// deprecation reads npm's "deprecated" field: a message string, or true;
+// false, null and "" mean not deprecated.
+func deprecation(raw json.RawMessage) (string, bool) {
+	switch string(raw) {
+	case "", "null", "false", `""`:
+		return "", false
+	}
+	var msg string
+	if json.Unmarshal(raw, &msg) != nil {
+		msg = "deprecated"
+	}
+	return msg, true
+}
+
+func expectDelim(dec *json.Decoder, want json.Delim) error {
+	t, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	if d, ok := t.(json.Delim); !ok || d != want {
+		return fmt.Errorf("expected %q", string(want))
+	}
+	return nil
+}
+
+func objectKey(dec *json.Decoder) (string, error) {
+	t, err := dec.Token()
+	if err != nil {
+		return "", err
+	}
+	k, ok := t.(string)
+	if !ok {
+		return "", errors.New("expected an object key")
+	}
+	return k, nil
+}
+
+// skipValue consumes one JSON value without keeping it. Nesting is bounded
+// by counting, not recursion.
+func skipValue(dec *json.Decoder) error {
+	depth := 0
+	for {
+		t, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		if d, ok := t.(json.Delim); ok {
+			switch d {
+			case '{', '[':
+				depth++
+			case '}', ']':
+				depth--
+			}
+		}
+		if depth == 0 {
+			return nil
+		}
+	}
+}
+
+// countingReader counts the bytes read through it.
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
 }
 
 // pep503 normalizes a Python project name (PEP 503): runs of -, _ and .

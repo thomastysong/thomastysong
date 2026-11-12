@@ -1,10 +1,7 @@
 package engine
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"sort"
-	"strconv"
 	"time"
 
 	"github.com/thomastysong/spoor/internal/event"
@@ -183,18 +180,22 @@ func (p *Pipeline) normalize(ev *event.Event, now time.Time) {
 
 	host, user, agent, sess := idParts(ev)
 	if ev.Kind == event.KindActivity {
-		if nat := naturalKey(ev); nat != "" {
+		if nat := p.naturalKey(ev); nat != "" {
 			// Every surface gets the same Dedupe for the same action. It is
 			// recomputed even when the source set one, because the host was
 			// just forced and a hook running unprivileged may have used a
 			// different host id. The user id is part of it so one account
-			// can never collapse another's record downstream.
+			// can never collapse another's record downstream. A key derived
+			// from content (the prompt text) is an HMAC under the identity
+			// key, because every other part is in the shipped record.
 			ev.Dedupe = event.DedupeKey(host, user, agent, sess, nat, ev.Type)
 		}
 	}
 	if ev.Dedupe == "" {
 		if ev.ID == "" {
-			ev.ID = event.StableID(ev.TS.Time, "spoor/engine", string(ev.Source), ev.Type, contentKey(ev))
+			// A source id is kept as it is (it is the source's join key);
+			// one derived here from content is keyed (contentKey).
+			ev.ID = event.StableID(ev.TS.Time, "spoor/engine", string(ev.Source), ev.Type, p.contentKey(ev))
 		}
 		ev.Dedupe = event.DedupeKey(host, user, agent, sess, "id:"+ev.ID, ev.Type)
 	}
@@ -217,75 +218,6 @@ func idParts(ev *event.Event) (host, user, agent, sess string) {
 		sess = ev.Session.ID
 	}
 	return
-}
-
-// naturalKey is the surface-independent identity of an activity record:
-// the agent's tool-call id, the prompt text, or the session for start and
-// end. "" when there is none.
-func naturalKey(ev *event.Event) string {
-	switch ev.Type {
-	case event.TypeToolPre, event.TypeToolPost:
-		if ev.Tool != nil && ev.Tool.UseID != "" {
-			return "tool:" + ev.Tool.UseID
-		}
-	case event.TypePromptSubmit:
-		if ev.Content != nil && ev.Content.PromptText != "" {
-			sum := sha256.Sum256([]byte(ev.Content.PromptText))
-			return "prompt:" + hex.EncodeToString(sum[:16])
-		}
-	case event.TypeSessionStart, event.TypeSessionEnd:
-		if ev.Session != nil && ev.Session.ID != "" {
-			return "session"
-		}
-	}
-	return ""
-}
-
-// contentKey is a deterministic digest of what a record describes, for
-// records that came without an id.
-func contentKey(ev *event.Event) string {
-	h := sha256.New()
-	w := func(s string) {
-		h.Write([]byte(s))
-		h.Write([]byte{0})
-	}
-	host, user, agent, sess := idParts(ev)
-	w(host)
-	w(user)
-	w(agent)
-	w(sess)
-	if t := ev.Tool; t != nil {
-		w(t.Name)
-		w(t.UseID)
-		w(t.InputSHA256)
-	}
-	if t := ev.Target; t != nil {
-		w(t.Command)
-		w(t.Path)
-		w(t.URL)
-	}
-	if pr := ev.Process; pr != nil {
-		w(strconv.Itoa(pr.PID))
-		w(pr.Exe)
-		w(pr.StartTime.String())
-	}
-	if a := ev.Asset; a != nil {
-		w(a.ID)
-		w(a.SHA256)
-	}
-	if c := ev.Check; c != nil {
-		w(c.ID)
-		w(c.AssetID)
-		w(c.Status)
-	}
-	if d := ev.Detection; d != nil {
-		w(d.RuleID)
-		w(d.DedupKey)
-	}
-	if c := ev.Content; c != nil {
-		w(c.PromptText)
-	}
-	return hex.EncodeToString(h.Sum(nil)[:16])
 }
 
 // activity handles one activity record.

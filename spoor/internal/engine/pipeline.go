@@ -40,6 +40,7 @@ type Pipeline struct {
 	async     bool
 	ruleOpts  rules.Options
 	salt      []byte // per-process key for local-only dedup keys
+	idKey     []byte // identity key: Options.IdentityKey or the per-process key (identity.go)
 
 	// ingest side (no processing lock)
 	qmu      sync.Mutex
@@ -156,9 +157,14 @@ func New(o Options) (*Pipeline, error) {
 	if err != nil {
 		return nil, err
 	}
+	idKey, err := identityKey(o.IdentityKey)
+	if err != nil {
+		return nil, err
+	}
+	o.IdentityKey = nil // the pipeline's copy is idKey; Options is kept for reference only
 
 	p := &Pipeline{
-		o: o, cfg: cfg, mode: o.Mode, integrity: o.Integrity,
+		o: o, cfg: cfg, mode: o.Mode, integrity: o.Integrity, idKey: idKey,
 		forceHost:   o.Host.ID != "" || o.Host.Name != "",
 		started:     o.Now(),
 		minRank:     event.ClassRank(minClass),

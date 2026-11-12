@@ -364,7 +364,8 @@ func ctrLoadDaemonSet(t *testing.T) daemonSetSpec {
 		}
 	}
 	for _, m := range docs("configmap.yaml") {
-		spec.config = ctrStr(m, "data.spoor.yaml")
+		data, _ := m["data"].(map[string]any)
+		spec.config, _ = data["spoor.yaml"].(string)
 	}
 	if !spec.hostPID || spec.runAsUser == 0 || spec.config == "" || len(spec.capsAdd) == 0 {
 		t.Fatalf("deploy/kubernetes did not parse as expected: %+v", spec)
@@ -578,7 +579,7 @@ func TestContainerNodeSensor(t *testing.T) {
 
 	t.Run("finds the in-container agent and attributes it", func(t *testing.T) {
 		var start, child map[string]any
-		ctrWait(t, 60*time.Second, "agent.process.start and the marker child for the workspace container", func() bool {
+		find := func() bool {
 			for _, r := range ctrRecords(ctrStdout(sensor)) {
 				if ctrStr(r, "container.id") != wsID {
 					continue
@@ -593,7 +594,18 @@ func TestContainerNodeSensor(t *testing.T) {
 				}
 			}
 			return start != nil && child != nil
-		})
+		}
+		for deadline := time.Now().Add(60 * time.Second); !find(); time.Sleep(500 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				var seen []string
+				for _, r := range ctrRecords(ctrStdout(sensor)) {
+					seen = append(seen, fmt.Sprintf("%s pid=%v container=%s session=%s", ctrStr(r, "type"), ctrGet(r, "process.pid"), ctrStr(r, "container.id"), ctrStr(r, "session.id")))
+				}
+				ps, _ := ctrDocker(time.Minute, nil, "exec", ws, "ps", "-eo", "pid,uid,comm,args")
+				t.Fatalf("no agent.process.start and marker child for container %s within 60 s; workspace processes:\n%s\nsensor records:\n%s\nsensor log:\n%s",
+					wsID, ps, strings.Join(seen, "\n"), ctrClip(ctrMust(t, "logs", sensor), 3000))
+			}
+		}
 		t.Logf("EVIDENCE agent.process.start: agent=%s pid=%v user.id=%s exe=%s flags=%v container=%v",
 			ctrStr(start, "agent.id"), ctrGet(start, "process.pid"), ctrStr(start, "user.id"), ctrStr(start, "process.exe"),
 			ctrGet(start, "process.flags"), ctrGet(start, "container"))

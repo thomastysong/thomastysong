@@ -21,9 +21,10 @@
 //     pipeline's own integrity. Emitted and Sources are cleared (only the
 //     pipeline sets them; detect mode keeps Sources); an unknown Tool.Kind
 //     becomes "other". Dedupe is derived for every surface from (host, user
-//     id, agent, session, tool-call id or prompt digest and occurrence,
-//     type), replacing what a source set, so hook and transcript records of
-//     one call share it and two accounts never do; ID is derived when absent.
+//     id, agent, session, tool-call id or keyed prompt digest and
+//     occurrence, type), replacing what a source set, so hook and transcript
+//     records of one call share it and two accounts never do; ID is derived
+//     when absent, from a keyed digest of the record (see Identity keys).
 //  3. One activity record per action, hook primary (correlate.go). A
 //     transcript or OTel tool or prompt record waits HoldFor (10 s) for its
 //     hook twin; unmatched, it is processed itself. The same prompt text
@@ -89,6 +90,38 @@
 //     status labels Fleet reads always survive: coverage rows are taken
 //     account by account up to the budget and the rest are counted
 //     (coverage.rows_omitted); the state database gets every row.
+//
+// # Identity keys
+//
+// Everything that goes into Dedupe and ID except content (host, account,
+// agent, session, type, time) is visible in the shipped record, so an
+// unkeyed digest of content would let any reader of the logs confirm a
+// guess about a prompt, or about a secret the privacy stage redacted from a
+// command (identity is derived before redaction), by recomputing it. Every
+// identifier derived from content is therefore an HMAC-SHA256 under the
+// pipeline's identity key (identity.go): the prompt digest that pairs a
+// hook prompt with its transcript twin, and the digest of the record
+// (command, path, URL, query, tool input hash, prompt, process, asset,
+// check) behind the ID of a record that came without one. Tool-call ids
+// and session ids are random values the agent generates, not content; they
+// stay the natural keys of tool and session records, as they are, because
+// they are also what joins spoor records to the agent's own telemetry. An
+// ID the source set is kept (hookcmd keys its own payload digest;
+// transcript ids come from the log's record ids).
+//
+// Options.IdentityKey is the key. The daemon keeps one at IdentityKeyPath:
+// <data_dir>/checkpoints/identity.key, IdentityKeyLen (32) random bytes
+// written hex-encoded on one line, mode 0600 in the 0700 checkpoint
+// directory, created once by LoadOrCreateIdentityKey and read back on every
+// start, so identities, and the Dedupe values downstream deduplicates on,
+// hold across restarts. A file that cannot be trusted (a symlink, not a
+// regular file, readable by group or others, not hex) is an error: the
+// daemon should then run with an empty key and report it. With an empty
+// key (scan, detect and hook modes, tests) the pipeline uses a random key
+// drawn once per process: identities are deterministic within the run,
+// which is what deduplication, the hook/transcript pairing and the HoldFor
+// wait need, and differ between runs. Losing or replacing the key changes
+// identities from then on; it never merges records that were distinct.
 //
 // # Satisfied by wiring, not implemented here
 //

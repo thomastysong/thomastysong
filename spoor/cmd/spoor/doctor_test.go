@@ -221,3 +221,124 @@ func TestFluentBitConfigUnsafe(t *testing.T) {
 		t.Fatal("include loop not refused")
 	}
 }
+
+// The "disabled" file next to --config stops only the hooks that read that
+// configuration (internal/hookcmd); the daemon honours the system file
+// alone. Doctor must not claim the collectors idle when the daemon's own
+// snapshot says the switch is not engaged.
+func TestDoctorKillSwitchScope(t *testing.T) {
+	cfg, _ := testConfig(t, "")
+	writeTestFile(t, filepath.Join(filepath.Dir(cfg), "disabled"), "", 0o644)
+	ta := newTestApp(t)
+	ta.run("doctor", "--config", cfg, "--json")
+	var raw struct {
+		KillSwitch killSwitchView `json:"kill_switch"`
+		Checks     []check        `json:"checks"`
+		Daemon     struct {
+			KillSwitch struct {
+				Engaged bool `json:"engaged"`
+			} `json:"kill_switch"`
+		} `json:"daemon"`
+	}
+	decodeJSON(t, ta.out.String(), &raw)
+	var ks check
+	for _, c := range raw.Checks {
+		if c.ID == "kill_switch" {
+			ks = c
+		}
+	}
+	if raw.Daemon.KillSwitch.Engaged {
+		t.Skip("the system kill switch is engaged on this machine")
+	}
+	if !raw.KillSwitch.On || raw.KillSwitch.Scope != "hooks" || ks.Status != "warn" {
+		t.Fatalf("hook-only kill switch: %+v %+v", raw.KillSwitch, ks)
+	}
+	if strings.Contains(ks.Summary, "collectors idle") || !strings.Contains(ks.Summary, "daemon keeps collecting") {
+		t.Fatalf("doctor says %q but the daemon does not honour %s", ks.Summary, cfg)
+	}
+}
+
+// layoutWith creates the data layout with the given modes ("" is the data
+// directory itself) and an empty state.db.
+func layoutWith(t *testing.T, data string, modes map[string]os.FileMode, dbMode os.FileMode) {
+	t.Helper()
+	for name, mode := range modes {
+		p := filepath.Join(data, name)
+		if err := os.MkdirAll(p, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(p, mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeTestFile(t, filepath.Join(data, "state.db"), "", dbMode)
+	if err := os.Chmod(filepath.Join(data, "state.db"), dbMode); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// doctor judges the layout by the daemon's own table: record directories
+// readable by every account, and world-writable directories (sticky or
+// not), fail; the daemon's exact layout passes.
+func TestDoctorDirsAgainstDaemonModes(t *testing.T) {
+	if !permsChecked {
+		t.Skip("POSIX modes")
+	}
+	good := map[string]os.FileMode{"": 0o711, "outbox": 0o750 | os.ModeSetgid, "local": 0o700, "spool": 0o711, "bundle": 0o755, "checkpoints": 0o700}
+	for _, tc := range []struct {
+		name   string
+		change map[string]os.FileMode
+		db     os.FileMode
+		want   string
+		detail string
+	}{
+		{"daemon layout", nil, 0o600, "ok", ""},
+		{"world-readable records", map[string]os.FileMode{"outbox": 0o755, "local": 0o755, "checkpoints": 0o755, "bundle": 0o755}, 0o644, "fail", "open to every account"},
+		{"sticky world-writable data and spool", map[string]os.FileMode{"": 0o777 | os.ModeSticky, "spool": 0o777 | os.ModeSticky}, 0o600, "fail", "writable by every account"},
+		{"group-writable outbox", map[string]os.FileMode{"outbox": 0o770 | os.ModeSetgid}, 0o600, "fail", "writable by its group"},
+		{"outbox without setgid", map[string]os.FileMode{"outbox": 0o750}, 0o600, "warn", "want 2750"},
+		{"data 0755", map[string]os.FileMode{"": 0o755}, 0o600, "ok", ""},
+		{"data not traversable", map[string]os.FileMode{"": 0o700}, 0o600, "warn", "not traversable"},
+		{"state.db group-readable", nil, 0o640, "warn", "state.db"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, data := testConfig(t, "")
+			modes := map[string]os.FileMode{}
+			for k, v := range good {
+				modes[k] = v
+			}
+			for k, v := range tc.change {
+				modes[k] = v
+			}
+			layoutWith(t, data, modes, tc.db)
+			ta := newTestApp(t)
+			ta.run("doctor", "--config", cfg, "--json")
+			var r doctorReport
+			decodeJSON(t, ta.out.String(), &r)
+			c := checkOf(&r, "dirs")
+			if c.Status != tc.want || !strings.Contains(c.Detail, tc.detail) {
+				t.Fatalf("dirs check %q (%s)\n%s\nwant %q containing %q", c.Status, c.Summary, c.Detail, tc.want, tc.detail)
+			}
+		})
+	}
+}
+
+// A segment of the local ring readable by every account fails even inside
+// a correctly protected directory.
+func TestDoctorDirsExposedFiles(t *testing.T) {
+	if !permsChecked {
+		t.Skip("POSIX modes")
+	}
+	cfg, data := testConfig(t, "")
+	layoutWith(t, data, map[string]os.FileMode{"": 0o711, "outbox": 0o750 | os.ModeSetgid, "local": 0o700, "spool": 0o711, "bundle": 0o755, "checkpoints": 0o700}, 0o600)
+	seg := filepath.Join(data, "local", "activity-20261110-09-0000.ndjson")
+	writeTestFile(t, seg, nativeLine(t, "alice", "1001", "psql -U admin", 0), 0o644)
+	os.Chmod(seg, 0o644)
+	ta := newTestApp(t)
+	ta.run("doctor", "--config", cfg, "--json")
+	var r doctorReport
+	decodeJSON(t, ta.out.String(), &r)
+	if c := checkOf(&r, "dirs"); c.Status != "fail" || !strings.Contains(c.Detail, "activity-20261110-09-0000.ndjson") {
+		t.Fatalf("world-readable local segment: %+v", c)
+	}
+}

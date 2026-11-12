@@ -212,3 +212,49 @@ func TestSegmentOrder(t *testing.T) {
 		t.Fatalf("order: %s", got)
 	}
 }
+
+// Records evaluated by `spoor detect` come from other machines: their host
+// and user names must not reach the operator's terminal as escape
+// sequences.
+func TestDetectStripsControlCharacters(t *testing.T) {
+	cfg, _ := testConfig(t, "")
+	e := &event.Event{
+		V: event.SchemaVersion, ID: "esc1", TS: event.At(time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)), Kind: event.KindActivity, Type: event.TypeToolPre,
+		Source: event.SourceHook, Integrity: event.IntegrityUser,
+		Host:    &event.Host{ID: "11111111-2222-3333-4444-555555555555", Name: "ws\x1b]0;owned\x07\x1b[2J\u009b31m", OS: "linux", Arch: "amd64"},
+		User:    &event.User{Name: "eve\x1b[8m\u202e", ID: "1000"},
+		Agent:   &event.Agent{ID: "claude-code\x1b[1m"},
+		Session: &event.Session{ID: "s-esc\x1b[0m", CWD: "/home/eve/proj"},
+		Tool:    &event.Tool{Name: "Bash", Kind: event.ToolShell, UseID: "toolu_esc"},
+		Target:  &event.Target{Command: curlPipe},
+	}
+	b, _ := json.Marshal(e)
+	ta := newTestApp(t)
+	ta.stdin = strings.NewReader(string(b) + "\n")
+	ta.run("detect", "--config", cfg, "--fail-on", "none", "-")
+	out := ta.out.String()
+	if !strings.Contains(out, "SPR-") {
+		t.Fatalf("no detection printed:\n%s", out)
+	}
+	for _, r := range out {
+		if termUnsafe(r) && r != '\n' {
+			t.Fatalf("detect wrote a terminal control character %U from an input record:\n%q", r, out)
+		}
+	}
+}
+
+func TestClipStripsTerminalControls(t *testing.T) {
+	for in, want := range map[string]string{
+		"a\x1b[2Jb":       "a [2Jb",
+		"c\u009b31md":     "c 31md",
+		"e\u202egnp.exe":  "e gnp.exe",
+		"f\u2066g\u2069h": "f g h",
+		"plain":           "plain",
+		"tab\there":       "tab here",
+		"bad\xffutf8":     "bad\ufffdutf8",
+	} {
+		if got := clip(in, 100); got != want {
+			t.Errorf("clip(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

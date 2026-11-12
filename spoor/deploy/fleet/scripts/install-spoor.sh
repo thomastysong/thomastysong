@@ -98,7 +98,8 @@ mkdir -p "$(dirname "$BIN")" "$CONFDIR"
 install -d -m 0755 -o 0 -g 0 "$EXTDIR"
 if [ $os = linux ]; then
 	install -d -m 0755 "$CONFDIR"
-	install -d -m 0750 -o 0 -g spoor "$DATA"
+	# 0711 as in the unit: hooks traverse it (spool, bundle).
+	install -d -m 0711 -o 0 -g spoor "$DATA"
 else
 	chmod 0755 "$CONFDIR"
 	install -d -m 0755 "$ROOT/Library/Logs/spoor"
@@ -164,9 +165,8 @@ MemoryMax=512M
 [Install]
 WantedBy=multi-user.target
 EOF
-	# StateDirectory= re-owns /var/lib/spoor (recursively) to the service's
-	# group at start: root without Group=. The state DB is 0600 and spools
-	# 0700, so the group reads only the 0640 outbox.
+	# StateDirectory= re-owns /var/lib/spoor to the service's group at start
+	# (root without Group=). DB 0600, spools 0700: the group reads the outbox.
 	printf '[Service]\nGroup=spoor\n' >"$tmp/group.conf"
 	changed=0
 	put "$tmp/unit" "$UNIT" 0644
@@ -214,9 +214,11 @@ EOF
 fi
 
 # Hooks: entries an earlier release wrote read "modified" until reinstalled.
-# Only already-hooked agents, each with the options it was installed with.
+# Only already-hooked agents, with their options; system: Codex's own tier.
 "$BIN" hooks install --only-installed --scope managed ${ROOT:+--root "$ROOT"} --binary "${BIN#"$ROOT"}" ||
 	echo "spoor install: warning: managed hooks not refreshed" >&2
+"$BIN" hooks install --only-installed --scope system ${ROOT:+--root "$ROOT"} --binary "${BIN#"$ROOT"}" ||
+	echo "spoor install: warning: system hooks not refreshed" >&2
 
 # osquery loads an extension only from a root-owned path that others cannot
 # write, named *.ext. A copy, not a link: osquery checks the file it opens.

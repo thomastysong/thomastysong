@@ -84,6 +84,79 @@ func (a *accessor) may(fi os.FileInfo, want os.FileMode) bool {
 	return perm&want == want
 }
 
+// execProblem reports why acc (nil: every account) cannot execute bin, or
+// "": the file needs execute permission for it, and every directory on
+// the way, along the path as written and along the path a symbolic link
+// leads to, needs search permission. ACLs are not read.
+func execProblem(bin string, acc *accessor) string {
+	real, err := filepath.EvalSymlinks(bin)
+	if err != nil {
+		return "not found"
+	}
+	who := "every account"
+	if acc != nil {
+		who = acc.name
+	}
+	can := func(fi os.FileInfo) bool {
+		if acc != nil {
+			return acc.may(fi, 1)
+		}
+		return fi.Mode().Perm()&0o001 != 0
+	}
+	fi, err := os.Stat(real)
+	if err != nil {
+		return "not found"
+	}
+	if !can(fi) {
+		return fmt.Sprintf("not executable by %s (%s)", who, modeOwner(fi))
+	}
+	for _, p := range []string{bin, real} {
+		for d := filepath.Dir(p); ; d = filepath.Dir(d) {
+			dfi, err := os.Stat(d)
+			if err != nil {
+				return "not found"
+			}
+			if !can(dfi) {
+				return fmt.Sprintf("in %s, which %s cannot search (%s)", d, who, modeOwner(dfi))
+			}
+			if d == filepath.Dir(d) {
+				break
+			}
+		}
+	}
+	return ""
+}
+
+func modeOwner(fi os.FileInfo) string {
+	if uid, gid, ok := fileOwner(fi); ok {
+		return fmt.Sprintf("mode %04o, owner uid %d, group gid %d", uint32(fi.Mode().Perm()), uid, gid)
+	}
+	return fmt.Sprintf("mode %04o", uint32(fi.Mode().Perm()))
+}
+
+// accessorForHome is the account a user-scope hook in home runs as: the
+// owner of the home directory, else the account called name; nil when
+// neither resolves (the caller then requires access for every account).
+func accessorForHome(name, home string) *accessor {
+	if fi, err := os.Stat(home); err == nil {
+		if uid, _, ok := fileOwner(fi); ok {
+			if u, err := user.LookupId(strconv.Itoa(uid)); err == nil {
+				if a, err := lookupAccessor(u.Username); err == nil {
+					return a
+				}
+			}
+		}
+	}
+	if name == "" {
+		return nil
+	}
+	a, err := lookupAccessor(name)
+	if err != nil {
+		return nil
+	}
+	return a
+}
+
 // canRead checks that the account can reach dir (search permission on
 // every ancestor), list it, and read the given files in it.
 func (a *accessor) canRead(dir string, files []string) (bool, string) {
@@ -180,4 +253,29 @@ func prepareOutbox(outbox, group string) []string {
 		return []string{fmt.Sprintf("cannot give the outbox to group %q: %v", group, err)}
 	}
 	return nil
+}
+
+// replaceKeepingACL is the Windows configuration-file replacement
+// (perm_windows.go); POSIX keeps the mode and owner across a rename.
+func replaceKeepingACL(path string, data []byte) error {
+	return errors.New("replaceKeepingACL: Windows only")
+}
+
+// hooksCannotRead says why hooks, which run as the developer, could not
+// read the configuration at path, or "": the file must be readable and
+// its directory searchable by every account (the directories above it are
+// the system's /etc or /Library, or a --root prefix).
+func hooksCannotRead(path string) string {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return err.Error()
+	}
+	if fi.Mode().Perm()&0o004 == 0 {
+		return fmt.Sprintf("other accounts cannot read it (%s), so no hook would apply guard mode; make it readable first: chmod o+r '%s'", modeOwner(fi), path)
+	}
+	dir := filepath.Dir(path)
+	if dfi, err := os.Stat(dir); err == nil && dfi.Mode().Perm()&0o001 == 0 {
+		return fmt.Sprintf("other accounts cannot search %s (%s), so no hook would read the file; make it searchable first: chmod o+x '%s'", dir, modeOwner(dfi), dir)
+	}
+	return ""
 }

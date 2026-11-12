@@ -221,6 +221,42 @@ func ProcEnv(pid int) (env map[string]string, err error) {
 	return parseEnviron(b, truncated), nil
 }
 
+// ProcImagePath returns the path of the executable the process runs, as
+// the kernel names it (the /proc/<pid>/exe link, never anything from the
+// process's own memory), inside the process's own mount namespace. It
+// fails when that name no longer leads to the image (the file was deleted
+// or replaced since the process started) and, when start is not zero, when
+// the pid now names a process with another start time.
+func ProcImagePath(pid int, start time.Time) (p string, err error) {
+	defer guard(&err)
+	if pid <= 0 {
+		return "", fmt.Errorf("platform: invalid pid %d", pid)
+	}
+	root, err := os.OpenRoot(filepath.Join(procRoot, strconv.Itoa(pid)))
+	if err != nil {
+		return "", fmt.Errorf("platform: %w", err)
+	}
+	defer root.Close()
+	exe, err := root.Readlink("exe")
+	if err != nil {
+		return "", fmt.Errorf("platform: pid %d: %w", pid, err)
+	}
+	if !start.IsZero() {
+		stat, err := readRootFile(root, "stat", 4096)
+		if err != nil {
+			return "", fmt.Errorf("platform: pid %d: %w", pid, err)
+		}
+		_, _, ticks, ok := parseLinuxStat(stat)
+		if !ok || !clock().startTime(ticks).Equal(start) {
+			return "", fmt.Errorf("platform: pid %d: %w", pid, os.ErrNotExist)
+		}
+	}
+	if !filepath.IsAbs(exe) || trimDeleted(exe) != exe {
+		return "", fmt.Errorf("platform: pid %d: the image no longer has its name: %w", pid, os.ErrNotExist)
+	}
+	return exe, nil
+}
+
 // ProcCWD returns the working directory of the process, as a path inside the
 // process's own mount namespace.
 func ProcCWD(pid int) (cwd string, err error) {

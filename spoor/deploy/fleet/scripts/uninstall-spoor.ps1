@@ -12,9 +12,12 @@ $Load = Join-Path $env:ProgramFiles 'osquery\extensions.load'
 # While the binary exists: no agent keeps calling it (fail-closed entries
 # would block tool calls), as packaging/windows/install-service.ps1 does.
 $Exe = Join-Path $Dir 'spoor.exe'
+# system: Codex's machine tier, written by hooks install --scope system.
 if (Test-Path $Exe) {
   & $Exe hooks uninstall --scope managed | Out-Null
   if ($LASTEXITCODE -ne 0) { Write-Warning 'managed hook entries not removed' }
+  & $Exe hooks uninstall --scope system | Out-Null
+  if ($LASTEXITCODE -ne 0) { Write-Warning 'system hook entries not removed' }
 }
 
 # sc.exe reports failure only through its exit code. No 2>&1: under

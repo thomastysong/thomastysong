@@ -65,8 +65,17 @@ func (s *procfsSource) list() ([]ident, map[int]*platform.Proc, error) {
 			if !ok {
 				continue
 			}
-			if id, ok := s.identOf(pid); ok {
+			id, err := s.statIdent(pid)
+			switch {
+			case err == nil:
 				ids = append(ids, id)
+			case errors.Is(err, fs.ErrPermission):
+				// /proc mounted hidepid=1 (noaccess): the pid is listed and
+				// everything under it refuses the monitor. It is a live
+				// process the monitor may not look at, kernel thread or
+				// not (nothing tells them apart from here), and it is
+				// counted as such (countReadability).
+				ids = append(ids, s.deniedIdent(pid))
 			}
 		}
 		if rerr != nil {
@@ -82,15 +91,37 @@ func (s *procfsSource) list() ([]ident, map[int]*platform.Proc, error) {
 // identOf reads /proc/<pid>/stat only. Zombies count as gone: the process
 // has exited and only waits for its parent to reap it.
 func (s *procfsSource) identOf(pid int) (ident, bool) {
+	id, err := s.statIdent(pid)
+	return id, err == nil
+}
+
+// errGone is statIdent's answer for a zombie or an unparsable stat line.
+var errGone = errors.New("procmon: process gone")
+
+// statIdent is identOf with the reason it failed: an error satisfying
+// errors.Is(err, fs.ErrPermission) when the process exists and refuses the
+// monitor.
+func (s *procfsSource) statIdent(pid int) (ident, error) {
 	b, err := readCapped(filepath.Join(s.pidDir(pid), "stat"), maxStatBytes)
 	if err != nil {
-		return ident{}, false
+		return ident{}, err
 	}
 	st, ok := parseStatFields(b)
 	if !ok || st.state == 'Z' || st.state == 'X' || st.state == 'x' {
-		return ident{}, false
+		return ident{}, errGone
 	}
-	return ident{pid: pid, ppid: st.ppid, key: st.start + 1, comm: st.comm, kthread: st.kthread}, true
+	return ident{pid: pid, ppid: st.ppid, key: st.start + 1, comm: st.comm, kthread: st.kthread}, nil
+}
+
+// deniedIdent is the identity of a process whose stat refused the monitor:
+// only the pid, and the owner the kernel still shows on /proc/<pid> under
+// hidepid=1 (the process's account, root for kernel threads).
+func (s *procfsSource) deniedIdent(pid int) ident {
+	id := ident{pid: pid, denied: true}
+	if fi, err := os.Stat(s.pidDir(pid)); err == nil {
+		id.uid, _ = platform.OwnerUID(fi)
+	}
+	return id
 }
 
 func (s *procfsSource) read(pid int) (platform.Proc, ident, bool) {
@@ -279,18 +310,29 @@ func (s *procfsSource) children(pid int) ([]int, bool) {
 	return kids, true
 }
 
-// exeID is the file identity (device and inode) of the image the process
-// runs. Stat follows the magic /proc/<pid>/exe link to the file the kernel
-// mapped, in whatever mount namespace the process lives, so a path that
-// names another file in this namespace cannot pass for it; a replaced or
-// deleted binary keeps its identity while it runs.
-func (s *procfsSource) exeID(pid int, _ string) string {
-	p := filepath.Join(s.pidDir(pid), "exe")
+// selfImage compares the file identity (device and inode) of the image the
+// process runs with spoor's. Stat follows the magic /proc/<pid>/exe link
+// to the file the kernel mapped, in whatever mount namespace the process
+// lives, so a path that names another file in this namespace cannot pass
+// for it; a replaced or deleted binary keeps its identity while it runs.
+// The process's start-time identity is read again afterwards, so a pid
+// that was recycled in between does not answer for the process id names.
+func (s *procfsSource) selfImage(id ident, _ *platform.Proc, self *selfSet) bool {
+	p := filepath.Join(s.pidDir(id.pid), "exe")
 	fi, err := os.Stat(p)
 	if err != nil || !fi.Mode().IsRegular() {
-		return ""
+		return false
 	}
-	return platform.FileID(fi, p)
+	fid := platform.FileID(fi, p)
+	if fid == "" || !self.ids[fid] {
+		return false
+	}
+	if id.key != 0 {
+		if after, ok := s.identOf(id.pid); !ok || after.key != id.key {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *procfsSource) cwd(pid int) string {

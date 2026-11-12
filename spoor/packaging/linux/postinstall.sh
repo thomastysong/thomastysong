@@ -23,7 +23,8 @@
 #     adds), refresh the copy osquery runs and restart osquery detached;
 #  5. systemd: reload; enable and start on first install, restart a running
 #     service on upgrade (a service the administrator disabled stays disabled);
-#  6. rewrite spoor's managed hook entries where they already exist
+#  6. rewrite spoor's hook entries (managed tier, and Codex's system tier
+#     that `hooks install --scope system` writes) where they already exist
 #     (entries an earlier release wrote report "modified" until install runs
 #     again) with `spoor hooks install --only-installed`, which keeps the
 #     options each file was installed with (--guard --fail-closed,
@@ -161,15 +162,22 @@ else
 	echo "spoor: systemd is not running; start the daemon with: $BIN run --config $CONF"
 fi
 
-# 6. Hooks. --only-installed selects the agents whose managed hook files
-# already hold spoor entries and recovers each file's options itself; it
-# prints one line per file ("managed hooks rewritten for X", "... left as
+# 6. Hooks. --only-installed selects the agents whose hook files at the
+# scope already hold spoor entries and recovers each file's options itself;
+# it prints one line per file ("managed hooks rewritten for X", "... left as
 # they are: ...") and exits 0 when there is nothing to do.
 if out=$("$BIN" hooks install --only-installed --scope managed 2>&1); then
 	[ -z "$out" ] || printf '%s\n' "$out" | sed 's/^/spoor: /'
 else
 	[ -z "$out" ] || printf '%s\n' "$out" | sed 's/^/spoor: /' >&2
 	warn "could not refresh the managed hooks; run: $BIN hooks install --only-installed --scope managed"
+fi
+# The same for Codex's system tier (hooks install --scope system).
+if out=$("$BIN" hooks install --only-installed --scope system 2>&1); then
+	[ -z "$out" ] || printf '%s\n' "$out" | sed 's/^/spoor: /'
+else
+	[ -z "$out" ] || printf '%s\n' "$out" | sed 's/^/spoor: /' >&2
+	warn "could not refresh the system hooks; run: $BIN hooks install --only-installed --scope system"
 fi
 
 if ! getent group spoor 2>/dev/null | cut -d: -f4 | grep -q .; then

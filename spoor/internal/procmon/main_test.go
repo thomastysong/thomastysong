@@ -19,8 +19,8 @@ import (
 const helperEnv = "SPOOR_PROCMON_TEST_HELPER"
 
 type readabilityReport struct {
-	Total, Unreadable uint64
-	Euid              int
+	Total, Unreadable, Hidden, Protected uint64
+	Euid                                 int
 }
 
 func TestMain(m *testing.M) {
@@ -32,7 +32,8 @@ func TestMain(m *testing.M) {
 		mon := New(Options{NoOsquery: true})
 		mon.fullScan(time.Now())
 		st := mon.Stats()
-		_ = json.NewEncoder(os.Stdout).Encode(readabilityReport{Total: st.ProcsTotal, Unreadable: st.ProcsUnreadable, Euid: os.Geteuid()})
+		_ = json.NewEncoder(os.Stdout).Encode(readabilityReport{Total: st.ProcsTotal, Unreadable: st.ProcsUnreadable,
+			Hidden: st.ProcsHidden, Protected: st.ProcsProtected, Euid: os.Geteuid()})
 		os.Exit(0)
 	}
 	os.Exit(m.Run())

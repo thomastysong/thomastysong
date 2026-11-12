@@ -100,6 +100,14 @@ type budget struct {
 
 func newBudget(stop func() bool) *budget { return &budget{stop: stop, work: maxEditWork} }
 
+// spent reports that the budget is gone, without charging a piece.
+func (b *budget) spent() bool {
+	if !b.stopped && b.stop != nil && b.stop() {
+		b.stopped = true
+	}
+	return b.stopped
+}
+
 // next reports whether another piece may be analysed.
 func (b *budget) next() bool {
 	if b.stopped {
@@ -171,11 +179,21 @@ func WrittenScripts(e *event.Event, ctx Context, o ScriptOptions) (out []Written
 	}()
 	ctx = scriptCtx(e, ctx)
 	b := newBudget(o.Stop)
+	// Compute scanned the event's written content for credentials
+	// (write.*); the scan is the most expensive part of a large file, so
+	// it is not run twice. A text derived from that content (one file of
+	// a patch, an edit applied to a held text whose credentials are
+	// redacted) has none when the content had none.
+	known := computedSecrets(e)
+	var none *knownSecrets
+	if known != nil && len(known.kinds) == 0 {
+		none = known
+	}
 	if kind == event.ToolFileEdit {
 		if patch := patchText(e); patch != "" {
 			if files := parsePatch(patch); len(files) > 0 {
 				for _, pf := range files {
-					out = append(out, patchScript(pf, ctx, o, b))
+					out = append(out, patchScript(pf, ctx, o, b, none))
 				}
 				return out
 			}
@@ -198,7 +216,7 @@ func WrittenScripts(e *event.Event, ctx Context, o ScriptOptions) (out []Written
 	if kind == event.ToolFileWrite || isCreate(in) {
 		ws := WrittenScript{Path: path, Replace: true}
 		if text := writtenContent(e); text != "" {
-			ws.Facts, ws.Text = analyzeScript(path, text, ctx, o.Keep, b)
+			ws.Facts, ws.Text = analyzeScript(path, text, ctx, o.Keep, b, known)
 			ws.Keep = keepText(text, ws.Facts)
 		}
 		return []WrittenScript{ws}
@@ -207,38 +225,58 @@ func WrittenScripts(e *event.Event, ctx Context, o ScriptOptions) (out []Written
 	if o.Prior != nil {
 		if prior, ok := o.Prior(path); ok {
 			if text, ok := applyEdits(prior, in); ok {
-				return []WrittenScript{inContext(path, text, ctx, o, b)}
+				return []WrittenScript{inContext(path, text, ctx, o, b, none)}
 			}
 		}
 	}
 	if text := writtenContent(e); text != "" {
-		ws.Facts, ws.Text = analyzeScript(path, text, ctx, o.Keep, b)
+		ws.Facts, ws.Text = analyzeScript(path, text, ctx, o.Keep, b, known)
 		ws.Facts.markFragment(o.Keep)
 	}
 	return []WrittenScript{ws}
+}
+
+// knownSecrets are credential kinds already found in the text a script
+// analysis gets.
+type knownSecrets struct{ kinds []string }
+
+// computedSecrets returns the write.secret_kinds Compute found in the
+// event's written content, or nil when Compute did not scan it.
+func computedSecrets(e *event.Event) *knownSecrets {
+	if e.Feat == nil {
+		return nil
+	}
+	if _, done := e.Feat[computedKey]; !done {
+		return nil
+	}
+	if _, scanned := e.Feat["write.hidden_unicode"]; !scanned {
+		return nil
+	}
+	k, _ := e.Feat["write.secret_kinds"].([]string)
+	return &knownSecrets{kinds: k}
 }
 
 // inContext analyses the whole text of a file after an edit applied to
 // the text the caller held. The held text has its credentials replaced by
 // redaction markers; the kinds those markers name are what the file still
 // carries, so they are counted as its secrets.
-func inContext(path, text string, ctx Context, o ScriptOptions, b *budget) WrittenScript {
+func inContext(path, text string, ctx Context, o ScriptOptions, b *budget, known *knownSecrets) WrittenScript {
 	ws := WrittenScript{Path: path, Replace: true, InContext: true}
-	ws.Facts, ws.Text = analyzeScript(path, text, ctx, o.Keep, b)
+	ws.Facts, ws.Text = analyzeScript(path, text, ctx, o.Keep, b, known)
 	ws.Keep = keepText(text, ws.Facts)
 	ws.Facts.addSecretKinds(markerKinds(text), o.Keep)
 	return ws
 }
 
 // patchScript is WrittenScripts for one file of a patch.
-func patchScript(pf patchFile, ctx Context, o ScriptOptions, b *budget) WrittenScript {
+func patchScript(pf patchFile, ctx Context, o ScriptOptions, b *budget, known *knownSecrets) WrittenScript {
 	ws := WrittenScript{Path: pf.path, Replace: pf.add, Remove: pf.remove, From: pf.from}
 	switch {
 	case pf.remove:
 		return ws
 	case pf.add:
 		if pf.text != "" {
-			ws.Facts, ws.Text = analyzeScript(pf.path, pf.text, ctx, o.Keep, b)
+			ws.Facts, ws.Text = analyzeScript(pf.path, pf.text, ctx, o.Keep, b, known)
 			ws.Keep = keepText(pf.text, ws.Facts)
 		}
 		return ws
@@ -250,14 +288,14 @@ func patchScript(pf patchFile, ctx Context, o ScriptOptions, b *budget) WrittenS
 		}
 		if prior, ok := o.Prior(src); ok {
 			if text, ok := applyHunks(prior, pf.hunks, b); ok {
-				in := inContext(pf.path, text, ctx, o, b)
+				in := inContext(pf.path, text, ctx, o, b, known)
 				in.From = pf.from
 				return in
 			}
 		}
 	}
 	if pf.text != "" {
-		ws.Facts, ws.Text = analyzeScript(pf.path, pf.text, ctx, o.Keep, b)
+		ws.Facts, ws.Text = analyzeScript(pf.path, pf.text, ctx, o.Keep, b, known)
 		ws.Facts.markFragment(o.Keep)
 	}
 	return ws
@@ -313,10 +351,17 @@ func scriptCtx(e *event.Event, ctx Context) Context {
 // so "bash x.py" is not a way around it. Facts is nil when the content is
 // not a script. o.Stop bounds the time spent (see ScriptOptions).
 func AnalyzeScript(name, content string, ctx Context, o ScriptOptions) (facts *ScriptFacts, text string) {
-	return analyzeScript(name, content, ctx, o.Keep, newBudget(o.Stop))
+	return analyzeScript(name, content, ctx, o.Keep, newBudget(o.Stop), nil)
 }
 
-func analyzeScript(name, content string, ctx Context, keep ScriptKeep, b *budget) (facts *ScriptFacts, text string) {
+// analyzeScript is AnalyzeScript within the budget b. The first piece of
+// text the budget pays for and, whenever anything was left out, the last
+// 8 KiB of the content are always analysed: a payload sits at the start of
+// a script or after the padding that pushed it out of view, so spending
+// the event's budget elsewhere (a large content scan) does not hide both
+// ends. The credential scan of the text is skipped once the budget is
+// spent (and recorded as incomplete), unless known has its result.
+func analyzeScript(name, content string, ctx Context, keep ScriptKeep, b *budget, known *knownSecrets) (facts *ScriptFacts, text string) {
 	defer func() {
 		if recover() != nil {
 			facts, text = nil, ""
@@ -346,11 +391,13 @@ func analyzeScript(name, content string, ctx Context, keep ScriptKeep, b *budget
 	for _, part := range parts {
 		fx = mergeFacts(fx, a.analyze(part))
 	}
-	// As for a command line: when the analyzer stopped early, the end of
-	// the text (where a payload appended after padding sits) is analysed
-	// on its own.
-	if fx != nil && fx.Truncated && len(content) > tailRescan {
+	// As for a command line: when the analyzer stopped early, or the
+	// budget did, the end of the text (where a payload appended after
+	// padding sits) is analysed on its own.
+	if (a.cut || fx != nil && fx.Truncated) && len(content) > tailRescan {
+		a.forced = true
 		fx = mergeFacts(fx, a.analyze(cutTail(content, tailRescan)))
+		a.forced = false
 	}
 	if fx == nil {
 		if a.cut {
@@ -367,6 +414,12 @@ func analyzeScript(name, content string, ctx Context, keep ScriptKeep, b *budget
 		c.f["content.truncated_scan"] = true
 		fx.Truncated = true
 	}
+	switch {
+	case known != nil:
+		c.secrets = &known.kinds
+	case b.spent():
+		c.secretsSkipped = true
+	}
 	c.shellFacts(fx, text, fx.Truncated || len(parts) > 1)
 	c.network()
 	c.finish()
@@ -376,10 +429,11 @@ func analyzeScript(name, content string, ctx Context, keep ScriptKeep, b *budget
 // scriptAnalysis is one AnalyzeScript call: the pieces it hands to shellx
 // are charged to the budget.
 type scriptAnalysis struct {
-	c    *computer
-	lang string
-	b    *budget
-	cut  bool // a piece was skipped for the budget
+	c      *computer
+	lang   string
+	b      *budget
+	cut    bool // a piece was skipped for the budget
+	forced bool // analyse whatever the budget says
 }
 
 // analyze returns the facts of one part of a script.
@@ -403,7 +457,7 @@ func (a *scriptAnalysis) analyze(part string) *shellx.Facts {
 
 // run analyses text in dialect d when the budget allows.
 func (a *scriptAnalysis) run(text string, d shellx.Dialect) *shellx.Facts {
-	if !a.b.next() {
+	if !a.forced && !a.b.next() {
 		a.cut = true
 		return nil
 	}

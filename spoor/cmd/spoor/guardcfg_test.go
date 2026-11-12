@@ -217,20 +217,53 @@ func TestHooksInstallGuardManaged(t *testing.T) {
 // A user-scope install registers the hooks but changes no machine
 // configuration: it says, on stderr, that guard mode is not on and exactly
 // what to change.
+// A user-scope --guard registers the hooks but cannot turn guard mode on
+// (that is the machine's configuration): it prints the change and exits 5,
+// so a script or CI job does not take the run for a guarded installation;
+// with guard mode already on it exits 0. --root places the configuration.
 func TestHooksInstallGuardUser(t *testing.T) {
+	root := t.TempDir()
 	home := t.TempDir()
 	ta := newTestApp(t)
-	code := ta.run("hooks", "install", "--scope", "user", "--home", home, "--binary", "/usr/bin/spoor", "--agents", "claude-code", "--guard")
-	if code != exitOK {
-		t.Fatalf("exit %d: %s", code, ta.errb.String())
+	args := []string{"hooks", "install", "--scope", "user", "--root", root, "--home", home, "--binary", "/usr/bin/spoor", "--agents", "claude-code", "--guard"}
+	settings := filepath.Join(root, home, ".claude", "settings.json")
+	cfg := hookConfigPath(root)
+	// --dry-run predicts the same outcome and writes nothing.
+	if code := ta.run(append(args, "--dry-run")...); code != exitGuardOff {
+		t.Fatalf("dry run: exit %d, want %d: %s", code, exitGuardOff, ta.errb.String())
 	}
-	cfg := hookConfigPath("")
-	if !strings.Contains(ta.out.String(), "guard: guard.mode is already advisory") &&
-		(!strings.Contains(ta.errb.String(), "guard mode is NOT on") || !strings.Contains(ta.errb.String(), cfg) || !strings.Contains(ta.errb.String(), "mode: advisory")) {
-		t.Fatalf("stdout:\n%s\nstderr:\n%s", ta.out.String(), ta.errb.String())
+	if _, err := os.Stat(settings); err == nil {
+		t.Fatal("dry run registered hooks")
 	}
-	if _, err := os.Stat(filepath.Join(home, ".claude", "settings.json")); err != nil {
+	code := ta.run(args...)
+	if code != exitGuardOff {
+		t.Fatalf("exit %d, want %d: %s", code, exitGuardOff, ta.errb.String())
+	}
+	if e := ta.errb.String(); !strings.Contains(e, "guard mode is NOT on (exit 5)") || !strings.Contains(e, cfg) || !strings.Contains(e, "mode: advisory") {
+		t.Fatalf("stdout:\n%s\nstderr:\n%s", ta.out.String(), e)
+	}
+	if _, err := os.Stat(settings); err != nil {
 		t.Fatal("hooks not registered")
+	}
+	if _, err := os.Stat(cfg); err == nil {
+		t.Fatal("a user-scope install wrote the machine's configuration")
+	}
+	var res planResult
+	if code := ta.run(append(args, "--json")...); code != exitGuardOff {
+		t.Fatalf("--json: exit %d", code)
+	}
+	decodeJSON(t, ta.out.String(), &res)
+	if res.Guard == nil || res.Guard.Action != guardManual {
+		t.Fatalf("--json guard: %+v", res.Guard)
+	}
+	// Guard mode already on: the guarded installation is what was asked.
+	writeTestFile(t, cfg, "guard:\n  mode: advisory\n", 0o644)
+	if code := ta.run(args...); code != exitOK || !strings.Contains(ta.out.String(), "guard: guard.mode is already advisory") {
+		t.Fatalf("guard on: exit %d\n%s%s", code, ta.out.String(), ta.errb.String())
+	}
+	// The exit code is documented.
+	if help := ta.mustRun(t, exitOK, "help"); !strings.Contains(help, "5  hooks install --guard") {
+		t.Errorf("spoor help does not list exit code 5:\n%s", help)
 	}
 	// The help says where guard mode lives.
 	help := ta.mustRun(t, exitOK, "hooks", "install", "--help")

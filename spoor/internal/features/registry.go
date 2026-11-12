@@ -191,7 +191,7 @@ var sessionDefs = []featDef{
 	{"session.first_event", TypeBool, nil, "this is the first event the engine has seen for the session"},
 	{"session.runs_written_file", TypeBool, nil, "the command executes a path an earlier event of the session wrote"},
 	{"session.written_exec_path", TypeString, nil, "the executed path that was written earlier"},
-	{"shell.inherited_kinds", TypeStrings, fixed(InheritedKinds), "the shell and network facts of this event include a script's: written_script (written by a file tool earlier in the session and executed here)"},
+	{"shell.inherited_kinds", TypeStrings, fixed(InheritedKinds), "the shell and network facts of this event include a script's: written_script (written by a file tool earlier in the session and executed here), edit_fragment (those facts include an edit analysed apart from the text around it, which may miss what the edit completes)"},
 	{"session.secret_flow", TypeBool, nil, "outbound data carries a value read earlier from a credential-class path"},
 	{"session.secret_flow_kinds", TypeStrings, nil, "kinds of the values in session.secret_flow"},
 	{"session.secret_flow_truncated", TypeBool, nil, "the outbound data was too large to scan whole for remembered values (padding); treat as opaque"},

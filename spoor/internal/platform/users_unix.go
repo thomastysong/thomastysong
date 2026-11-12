@@ -24,6 +24,13 @@ func IsPrivileged() bool { return os.Geteuid() == 0 || capPrivileged() }
 // but can only write files it owns.
 func IsAdmin() bool { return os.Geteuid() == 0 }
 
+// IsSystemAccount reports whether uid (Proc.UID) is the system account: 0.
+// A monitor that holds the read privilege can still be refused by root's
+// processes that a sandbox or security module protects (the build
+// environment's pid 1 refuses root); a refusal by any other account means
+// a privilege is missing.
+func IsSystemAccount(uid string) bool { return uid == "0" }
+
 // CurrentUser returns the account this process runs as. Home is the account
 // database's home directory when it exists, otherwise $HOME; it is empty when
 // neither is an existing directory.

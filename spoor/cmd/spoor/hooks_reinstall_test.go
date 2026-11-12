@@ -76,7 +76,11 @@ func TestHooksOnlyInstalledKeepsOptions(t *testing.T) {
 		t.Helper()
 		ta.mustRun(t, exitOK, append(append([]string{"hooks", "install"}, base...), extra...)...)
 	}
-	install("--agents", "claude-code", "--guard", "--fail-closed", "--timeout", "30")
+	// --guard at user scope registers the hooks and exits 5 unless the
+	// machine's configuration already has guard mode on.
+	if code := ta.run(append(append([]string{"hooks", "install"}, base...), "--agents", "claude-code", "--guard", "--fail-closed", "--timeout", "30")...); code != exitOK && code != exitGuardOff {
+		t.Fatalf("guarded user install: exit %d: %s", code, ta.errb.String())
+	}
 	install("--agents", "codex", "--timeout", "20")
 	install("--agents", "gemini-cli,cursor,copilot-cli")
 	var res planResult

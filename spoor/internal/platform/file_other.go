@@ -49,3 +49,6 @@ func OwnerUID(fi os.FileInfo) (string, bool) { return "", false }
 func PathOwner(path string) (string, bool) { return "", false }
 
 func hostIDFileTrusted(fi os.FileInfo, system bool) bool { return true }
+
+// TrustedPath has no portable implementation: nothing is trusted.
+func TrustedPath(p string) bool { return false }

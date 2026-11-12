@@ -127,3 +127,33 @@ func hostIDFileTrusted(fi os.FileInfo, system bool) bool {
 	}
 	return !system && int(st.Uid) == os.Geteuid()
 }
+
+// TrustedPath reports whether only root, or the account this process runs
+// as, can change what the absolute path names. The path must name a
+// regular file. That file, and every directory the kernel looks a name up
+// in to reach it (through every symbolic link), must be owned by uid 0 or
+// by the effective uid, and none of them may be writable by group or
+// others. A sticky world-writable directory such as /tmp does not pass.
+// Its owners-only rule covers renaming and removing names, not adding
+// them, and on macOS (no protected_hardlinks) anyone may add a hard link
+// there to a root-owned file. POSIX ACLs on Linux show in the group
+// permission bits and are covered. macOS extended ACLs are not examined
+// (UNVERIFIED on macOS: compiled, not executed in the build environment).
+func TrustedPath(p string) bool {
+	euid := os.Geteuid()
+	return walkTrusted(p, os.Lstat, os.Readlink, func(_ string, fi os.FileInfo) bool {
+		return safelyOwned(fi, euid)
+	})
+}
+
+// safelyOwned: owned by root or euid, and not writable by group or others.
+func safelyOwned(fi os.FileInfo, euid int) bool {
+	if fi.Mode().Perm()&0o022 != 0 {
+		return false
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok || st == nil {
+		return false
+	}
+	return st.Uid == 0 || int(st.Uid) == euid
+}

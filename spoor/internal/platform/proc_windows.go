@@ -197,6 +197,43 @@ func imagePath(h windows.Handle) string {
 	return ""
 }
 
+// ProcImagePath returns the path of the executable the process runs, as
+// the kernel recorded it when the process was created
+// (QueryFullProcessImageName), never the image path in the process's own
+// PEB, which the process can rewrite. When start is not zero, a pid that
+// now names a process with another creation time (Windows reuses pids
+// quickly) is an error; both come from one handle. UNVERIFIED: compiled,
+// not executed in the build environment.
+func ProcImagePath(pid int, start time.Time) (p string, err error) {
+	defer guard(&err)
+	if pid <= 0 {
+		return "", fmt.Errorf("platform: invalid pid %d", pid)
+	}
+	enableDebugPrivilege()
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err != nil {
+		if errors.Is(err, windows.ERROR_INVALID_PARAMETER) {
+			return "", fmt.Errorf("platform: pid %d: %w", pid, os.ErrNotExist)
+		}
+		return "", fmt.Errorf("platform: open pid %d: %w", pid, err)
+	}
+	defer windows.CloseHandle(h)
+	if !start.IsZero() {
+		var created, exited, kernel, user windows.Filetime
+		if err := windows.GetProcessTimes(h, &created, &exited, &kernel, &user); err != nil {
+			return "", fmt.Errorf("platform: pid %d: %w", pid, err)
+		}
+		if !time.Unix(0, created.Nanoseconds()).Equal(start) {
+			return "", fmt.Errorf("platform: pid %d: %w", pid, os.ErrNotExist)
+		}
+	}
+	path := imagePath(h)
+	if path == "" {
+		return "", fmt.Errorf("platform: pid %d: no image path", pid)
+	}
+	return path, nil
+}
+
 // sidNames memoizes SID-to-account lookups for one scan.
 type sidNames struct{ memo map[string]string }
 

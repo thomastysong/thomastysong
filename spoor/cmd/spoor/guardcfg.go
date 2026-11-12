@@ -116,6 +116,12 @@ func planGuardMode(path string, write bool) *guardEdit {
 	case fi.Size() > maxConfigFile:
 		return manual("it is larger than 1 MiB, which the hook does not read")
 	}
+	// Hooks run as the developer: guard mode in a file they cannot read
+	// is guard mode no hook applies (a Fleet install for Windows before
+	// this release gave Users no access to the data directory).
+	if why := hooksCannotRead(path); why != "" {
+		return manual(why)
+	}
 	data, err := readConfigFile(path)
 	if err != nil {
 		return manual(err.Error())
@@ -192,19 +198,11 @@ func replaceConfig(path string, data []byte) error {
 		return fmt.Errorf("%s: not a regular file", path)
 	}
 	if runtime.GOOS == "windows" {
-		// A file renamed over spoor.yaml carries the directory's inherited
-		// ACL, not the explicit Users read grant the installer gave the
-		// file (packaging/windows/install-service.ps1), and hooks would
-		// silently fall back to built-in defaults. Rewritten in place.
-		f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0)
-		if err != nil {
-			return err
-		}
-		if _, err := f.Write(data); err != nil {
-			f.Close()
-			return err
-		}
-		return f.Close()
+		// A plain file renamed over spoor.yaml would carry the directory's
+		// inherited ACL, not the explicit Users read grant the installer
+		// gave the file, and an in-place rewrite lets a hook read half a
+		// file: the new file gets the old one's DACL, then the rename.
+		return replaceKeepingACL(path, data)
 	}
 	// POSIX: a rename, so a hook never reads half a file.
 	if err := writeFileAtomic(path, data, fi.Mode().Perm()); err != nil {

@@ -215,7 +215,15 @@ func (c *computer) shellFacts(fx *shellx.Facts, text string, partial bool) {
 
 	c.installs(fx.Installs, partial || len(fx.Installs) >= shellxListCap)
 
-	kinds := secretKinds(text)
+	var kinds []string
+	switch {
+	case c.secrets != nil:
+		kinds = *c.secrets
+	case c.secretsSkipped:
+		c.markCut("shell.secret_kinds")
+	default:
+		kinds = secretKinds(text)
+	}
 	f["shell.has_secret"] = len(kinds) > 0
 	c.setDerived("shell.secret_kinds", kinds, partial)
 }

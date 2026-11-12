@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -305,9 +304,17 @@ func quotedStrings(b []byte) []string {
 	return out
 }
 
-// binaryProblem says why a hook binary cannot run on this machine, or "".
-// Paths written for another OS are not judged.
-func binaryProblem(bin string) string {
+// binaryProblem reports why bin cannot run spoor for every account, or
+// "". Managed and system hooks run as whichever account starts the agent,
+// and the guard `[ -x BIN ] || exit 0` runs as that account: a binary only
+// its owner or group may execute, or one in a directory others cannot
+// search, makes every other account's hook exit 0 without a record. Paths
+// written for another OS are not judged.
+func binaryProblem(bin string) string { return binaryProblemAs(bin, nil) }
+
+// binaryProblemAs is binaryProblem for a hook that only acc runs (a
+// user-scope hook); acc nil means every account.
+func binaryProblemAs(bin string, acc *accessor) string {
 	if !filepath.IsAbs(bin) {
 		return ""
 	}
@@ -317,8 +324,10 @@ func binaryProblem(bin string) string {
 		return "not found"
 	case !fi.Mode().IsRegular():
 		return "not a regular file"
-	case runtime.GOOS != "windows" && fi.Mode().Perm()&0o111 == 0:
+	case !permsChecked:
+		return ""
+	case fi.Mode().Perm()&0o111 == 0:
 		return "not executable"
 	}
-	return ""
+	return execProblem(bin, acc)
 }

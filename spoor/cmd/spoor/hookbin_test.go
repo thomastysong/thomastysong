@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/thomastysong/spoor/internal/catalog"
+	"github.com/thomastysong/spoor/internal/event"
 )
 
 func TestBinaryFromCommand(t *testing.T) {
@@ -171,5 +174,48 @@ func TestDoctorSurvivesHostileUserSettings(t *testing.T) {
 	decodeJSON(t, ta.out.String(), &r)
 	if c := checkOf(&r, "hooks"); strings.Contains(c.Detail, "binary_missing") {
 		t.Fatalf("a string outside the hook entries was taken for a hook binary: %+v", c)
+	}
+}
+
+// doctor audits every tier spoor writes: Codex's system tier
+// (`hooks install --scope system`, /etc/codex/hooks.json) too, so a
+// missing binary there is hooks.binary_missing; `hooks status` lists the
+// tier when its file exists, and leaves it out otherwise.
+func TestDoctorSeesCodexSystemTier(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("system hook files are root-owned")
+	}
+	prefix := t.TempDir()
+	ta := newTestApp(t)
+	cat, err := catalog.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	systemRows := func(states []hookState) []hookState {
+		var out []hookState
+		for _, s := range states {
+			if s.Scope == event.ScopeSystem {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	if st, _ := allHookStates(cat, nil, prefix); len(systemRows(st)) != 0 {
+		t.Fatalf("system tier listed without a file: %+v", systemRows(st))
+	}
+	ta.mustRun(t, exitOK, "hooks", "install", "--scope", "system", "--root", prefix, "--binary", "/nonexistent/spoor", "--agents", "codex")
+	states, _ := allHookStates(cat, nil, prefix)
+	sys := systemRows(states)
+	if len(sys) != 1 || sys[0].Agent != "codex" || sys[0].Hash == "" || sys[0].Path != filepath.Join(prefix, "etc", "codex", "hooks.json") {
+		t.Fatalf("system tier rows %+v", sys)
+	}
+	bins, err := installedBinaries(sys[0].Path)
+	if err != nil || len(bins) != 1 || binaryProblem(bins[0]) != "not found" {
+		t.Fatalf("system tier binaries %q (%v)", bins, err)
+	}
+	var st []hookState
+	decodeJSON(t, ta.mustRun(t, exitOK, "hooks", "status", "--root", prefix, "--home", t.TempDir(), "--json"), &st)
+	if s := systemRows(st); len(s) != 1 || s[0].Agent != "codex" || s[0].Hash == "" {
+		t.Fatalf("hooks status default rows for the system tier: %+v", s)
 	}
 }

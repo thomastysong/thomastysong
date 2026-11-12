@@ -1,6 +1,7 @@
 package procmon
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -77,6 +78,10 @@ func TestFixtureSelfHookNotReported(t *testing.T) {
 
 	m, _ := newFixtureMonitor(t, h)
 	m.o.SelfExes = []string{installed, "relative/ignored"}
+	// The fixture binaries live under the test's temporary directory,
+	// which only this test writes to (TestSelfExesUntrustedPath covers the
+	// path check itself).
+	m.trusted = func(string) bool { return true }
 	m.fullScan(m.now())
 	evs := drain(m)
 	execs := ofType(evs, event.TypeProcessExec)
@@ -123,11 +128,12 @@ func TestSelfIDsFollowUpgrade(t *testing.T) {
 	dir := t.TempDir()
 	installed := writeBinary(t, dir, "spoor")
 	m := New(Options{Catalog: loadCatalog(t), NoOsquery: true, SelfExes: []string{installed}})
+	m.trusted = func(string) bool { return true }
 	clk := &fakeClock{t: time.Unix(fixtureBoot, 0)}
 	m.now = clk.now
 	fi, _ := os.Stat(installed)
 	oldID := idOf(t, fi, installed)
-	if !m.selfIDs(m.now())[oldID] {
+	if !m.selfIDs(m.now()).ids[oldID] {
 		t.Fatal("the configured binary is not in the identity set")
 	}
 	next := installed + ".new"
@@ -140,11 +146,11 @@ func TestSelfIDsFollowUpgrade(t *testing.T) {
 	if newID == oldID {
 		t.Skip("file system reused the inode")
 	}
-	if m.selfIDs(m.now())[newID] {
+	if m.selfIDs(m.now()).ids[newID] {
 		t.Error("identity set refreshed before selfRefresh")
 	}
 	clk.add(selfRefresh)
-	if !m.selfIDs(m.now())[newID] {
+	if !m.selfIDs(m.now()).ids[newID] {
 		t.Error("the upgraded binary is not recognised after selfRefresh")
 	}
 }
@@ -221,8 +227,9 @@ func TestParseStatKernelThread(t *testing.T) {
 	}
 }
 
-// TestArgsDigestKeyed: the process.exec id's argument digest is an HMAC
-// under a per-process random key, never the plain SHA-256 a reader of the
+// TestArgsDigestKeyed: the process.exec id's argument digest is a
+// domain-separated HMAC under the monitor's key (Options.IDKey, or a
+// per-process random key), never the plain SHA-256 a reader of the
 // shipped record could recompute for guessed arguments.
 func TestArgsDigestKeyed(t *testing.T) {
 	k := argsKey()
@@ -242,21 +249,39 @@ func TestArgsDigestKeyed(t *testing.T) {
 	args := []string{"mysql", "-u", "root", "-p[REDACTED:password]", "prod"}
 	plain := sha256.New()
 	keyed := hmac.New(sha256.New, k)
+	keyed.Write([]byte(argsDomain))
+	keyed.Write([]byte{0})
 	for _, a := range args {
 		plain.Write([]byte(a))
 		plain.Write([]byte{0})
 		keyed.Write([]byte(a))
 		keyed.Write([]byte{0})
 	}
-	got := argsDigest(args)
+	got := argsDigest(k, args)
 	if got == hex.EncodeToString(plain.Sum(nil)[:8]) {
 		t.Error("digest is the unkeyed SHA-256: a guessing oracle for what privacy redacts")
 	}
 	if got != hex.EncodeToString(keyed.Sum(nil)[:8]) {
-		t.Error("digest is not the HMAC under argsKey")
+		t.Error("digest is not the domain-separated HMAC under the key")
 	}
-	if argsDigest(args) != got {
+	if argsDigest(k, args) != got {
 		t.Error("digest not stable within the process")
+	}
+	// The monitor's key: Options.IDKey copied, or the per-process key.
+	if m := New(Options{NoOsquery: true}); &m.idKey[0] != &k[0] {
+		t.Error("a monitor without IDKey does not use the per-process key")
+	}
+	if m := New(Options{NoOsquery: true, IDKey: []byte("short")}); &m.idKey[0] != &k[0] {
+		t.Error("a too-short IDKey was used")
+	}
+	stored := bytes.Repeat([]byte{7}, 32)
+	m := New(Options{NoOsquery: true, IDKey: stored})
+	stored[0] = 8
+	if !bytes.Equal(m.idKey, bytes.Repeat([]byte{7}, 32)) {
+		t.Error("IDKey not copied")
+	}
+	if argsDigest(m.idKey, args) == got {
+		t.Error("IDKey not used")
 	}
 }
 

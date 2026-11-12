@@ -215,10 +215,11 @@ func TestIsCanary(t *testing.T) {
 func TestArgsDigestIgnoresFingerprints(t *testing.T) {
 	a := []string{"curl", "-H", "Authorization: Bearer [REDACTED:bearer:11111111]", "[REDACTED:github_pat:2222aaaa]x"}
 	b := []string{"curl", "-H", "Authorization: Bearer [REDACTED:bearer:99999999]", "[REDACTED:github_pat:3333bbbb]x"}
-	if argsDigest(a) != argsDigest(b) {
+	k := argsKey()
+	if argsDigest(k, a) != argsDigest(k, b) {
 		t.Error("the event id depends on the secrets' fingerprints")
 	}
-	if argsDigest(a) == argsDigest([]string{"curl"}) {
+	if argsDigest(k, a) == argsDigest(k, []string{"curl"}) {
 		t.Error("digest ignores the arguments")
 	}
 	for in, want := range map[string]string{

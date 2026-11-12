@@ -194,9 +194,9 @@ func parsePatch(patch string) []patchFile {
 // hunk does not apply.
 func applyHunks(text string, hunks []patchHunk, b *budget) (string, bool) {
 	lines := strings.Split(text, "\n")
-	// A final newline leaves an empty last element; it stays last.
-	tail := len(lines) > 0 && lines[len(lines)-1] == ""
-	if tail {
+	// The final newline leaves an empty last element; the result ends
+	// with one again.
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
 	}
 	pos := 0
@@ -222,7 +222,7 @@ func applyHunks(text string, hunks []patchHunk, b *budget) (string, bool) {
 		pos = i + len(h.new)
 	}
 	out := strings.Join(lines, "\n")
-	if tail || len(lines) > 0 {
+	if len(lines) > 0 {
 		out += "\n"
 	}
 	return out, true
@@ -385,8 +385,9 @@ func redactArgs(name string, args []string) []string {
 	return red
 }
 
-// markerFailure is the kind classify writes when redaction itself failed.
-const markerFailure = "redaction_failure"
+// markerFailure is the marker kind classify writes when redaction itself
+// failed.
+const markerFailure = "error"
 
 // redactValue redacts one list value like a lone argument.
 func redactValue(v string) string {

@@ -2,6 +2,8 @@
 
 package platform
 
+import "time"
+
 // Processes is not implemented for this OS.
 func Processes() ([]Proc, error) { return nil, ErrUnsupported }
 
@@ -13,3 +15,6 @@ func ProcEnv(pid int) (map[string]string, error) { return nil, ErrUnsupported }
 
 // ProcCWD is not implemented for this OS.
 func ProcCWD(pid int) (string, error) { return "", ErrUnsupported }
+
+// ProcImagePath is not implemented for this OS.
+func ProcImagePath(pid int, start time.Time) (string, error) { return "", ErrUnsupported }

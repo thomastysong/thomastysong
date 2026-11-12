@@ -1,6 +1,7 @@
 package procmon
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -408,8 +409,19 @@ func (m *Monitor) execEvent(n *node, o *observed, owner *root, marker string, no
 	ev := m.newEvent(event.TypeProcessExec, ts, now)
 	// The id covers the emitted (redacted) arguments only, through a keyed
 	// digest (argsDigest): a digest of the raw command line would let a
-	// reader test guesses about the credentials redaction removed.
-	ev.ID = event.StableID(ev.TS.Time, event.TypeProcessExec, strconv.Itoa(n.pid), strconv.FormatUint(n.key, 10), n.exe, argsDigest(args))
+	// reader test guesses about the credentials redaction removed. Its
+	// time is the process's start, not the exec time the connector
+	// reports, so the connector's record of an exec and a rescan's record
+	// of the same process (after a restart, which reports every live
+	// process again) get one id; with the daemon's persisted key
+	// (Options.IDKey) that holds across restarts. A process that runs the
+	// same program with the same arguments twice under one pid gets one id
+	// for both.
+	idAt := n.start
+	if idAt.IsZero() {
+		idAt = ev.TS.Time
+	}
+	ev.ID = event.StableID(idAt, event.TypeProcessExec, strconv.Itoa(n.pid), strconv.FormatUint(n.key, 10), n.exe, argsDigest(m.idKey, args))
 	product := marker
 	attribution := "env_marker"
 	if owner != nil {
@@ -471,11 +483,9 @@ func (m *Monitor) execAncestors(n *node, owner *root) []string {
 	return out
 }
 
-// argsKey is this process's key for argsDigest: 32 random bytes drawn once.
-// It is not stored, so a process.exec id is stable within one run of the
-// sensor (the same exec seen by the connector and by a rescan gets one id)
-// and differs between runs; deduplication across a restart rests on pid,
-// start time and executable, which are in the record.
+// argsKey is the key for argsDigest of a monitor without Options.IDKey:
+// 32 random bytes drawn once per process and never stored. Ids are then
+// stable within one run of the sensor and differ between runs.
 var argsKey = sync.OnceValue(func() []byte {
 	k := make([]byte, 32)
 	// crypto/rand.Read does not fail on the supported systems (Go 1.24+
@@ -484,8 +494,26 @@ var argsKey = sync.OnceValue(func() []byte {
 	return k
 })
 
+// minIDKey is the shortest Options.IDKey used (the engine's
+// MinIdentityKeyLen); a shorter one is replaced by argsKey.
+const minIDKey = 16
+
+// argsKeyFor returns the argsDigest key for Options.IDKey: a copy of it,
+// or argsKey when it is missing or too short.
+func argsKeyFor(k []byte) []byte {
+	if len(k) < minIDKey {
+		return argsKey()
+	}
+	return bytes.Clone(k)
+}
+
+// argsDomain separates procmon's digests from every other digest under
+// the same key (the daemon's identity key also keys the engine's prompt
+// and content digests).
+const argsDomain = "spoor/procmon/args/v1"
+
 // argsDigest summarises emitted arguments for an event id with an HMAC
-// under argsKey. The arguments are procmon's own redaction of the command
+// under key. The arguments are procmon's own redaction of the command
 // line; the privacy stage may redact more before a record leaves (a
 // stricter profile, a pattern only it knows). An unkeyed digest of
 // procmon's form would then be a guessing oracle: anyone holding the
@@ -494,8 +522,10 @@ var argsKey = sync.OnceValue(func() []byte {
 // classify's markers are left out as well: they are unkeyed hashes of the
 // secrets, and two runs of one command with different secrets are the same
 // action as far as the id is concerned.
-func argsDigest(args []string) string {
-	h := hmac.New(sha256.New, argsKey())
+func argsDigest(key []byte, args []string) string {
+	h := hmac.New(sha256.New, key)
+	h.Write([]byte(argsDomain))
+	h.Write([]byte{0})
 	for _, a := range args {
 		h.Write([]byte(stripFingerprints(a)))
 		h.Write([]byte{0})

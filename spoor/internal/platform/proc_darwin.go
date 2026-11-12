@@ -140,6 +140,43 @@ func pidPath(pid int) (string, error) {
 	return cstring(buf), nil
 }
 
+// ProcImagePath returns the path of the executable the process runs, as
+// the kernel names it: proc_pidpath, the current name of the process's
+// text vnode. It never falls back to the exec path in kern.procargs2,
+// which lives in the process's own memory and says whatever the process
+// wrote there. The kernel only checks that the name still resolves, not
+// that it resolves to the running image: a file renamed over the original
+// takes its place in the answer, so callers compare the path itself with
+// paths they trust. When start is not zero, a pid that now names a process
+// with another start time is an error. UNVERIFIED: compiled, not executed
+// in the build environment.
+func ProcImagePath(pid int, start time.Time) (p string, err error) {
+	defer guard(&err)
+	if pid <= 0 {
+		return "", fmt.Errorf("platform: invalid pid %d", pid)
+	}
+	path, err := pidPath(pid)
+	if err != nil {
+		return "", fmt.Errorf("platform: proc_pidpath pid %d: %w", pid, err)
+	}
+	if path == "" || path[0] != '/' {
+		return "", fmt.Errorf("platform: proc_pidpath pid %d: no path", pid)
+	}
+	if !start.IsZero() {
+		// After the path, so that a pid recycled before or during the
+		// call is caught.
+		kp, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
+		if err != nil || kp == nil || int(kp.Proc.P_pid) != pid {
+			return "", fmt.Errorf("platform: pid %d: %w", pid, os.ErrNotExist)
+		}
+		st := kp.Proc.P_starttime
+		if !time.Unix(int64(st.Sec), int64(st.Usec)*int64(time.Microsecond)).Equal(start) {
+			return "", fmt.Errorf("platform: pid %d: %w", pid, os.ErrNotExist)
+		}
+	}
+	return path, nil
+}
+
 // ProcEnv returns the environment the process was started with. The kernel
 // answers for the caller's own processes, or for any process when the caller
 // is root, and omits the environment of restricted binaries: the result is

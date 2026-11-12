@@ -134,8 +134,17 @@ type Options struct {
 	// SelfExes are absolute paths of spoor binaries whose hook processes
 	// are spoor's own and never reported (self.go): the installed binary
 	// the agents' hooks name, when it is not the one this process runs.
-	// They are compared by file identity, never by path.
+	// A path is used only when platform.TrustedPath accepts it (only root
+	// can change what it names); on Linux the running image is then
+	// compared with it by file identity, elsewhere by the kernel's name of
+	// the image and file identity together.
 	SelfExes []string
+	// IDKey keys the argument digest in process.exec ids (argsDigest). The
+	// daemon passes its persisted identity key (engine.IdentityKeyPath),
+	// so the id of a process seen again after a restart is the id it had
+	// before and downstream deduplication collapses the two. Empty: a
+	// random key drawn once per process. The key is copied.
+	IDKey []byte
 }
 
 // Stats are counters since New, for the heartbeat.
@@ -179,6 +188,20 @@ type Stats struct {
 	// heartbeat.
 	ProcsTotal      uint64
 	ProcsUnreadable uint64
+	// ProcsHidden is how many processes the last full scan found listed
+	// but could not read even the status of: /proc mounted hidepid=1
+	// (noaccess) without the gid= exemption or CAP_SYS_PTRACE. They are
+	// counted in ProcsTotal and ProcsUnreadable, kernel threads included,
+	// because nothing tells those apart from user processes there.
+	ProcsHidden uint64
+	// ProcsProtected is how many of ProcsUnreadable refused a monitor that
+	// holds the read privilege and run as the system account (uid 0; on
+	// Windows LocalSystem, LOCAL SERVICE, NETWORK SERVICE, or an owner it
+	// cannot read): protected processes such as Windows protected
+	// processes or a sandbox's init, which no privilege the sensor can be
+	// given opens. The daemon degrades the processes surface only for the
+	// unreadable processes that are not protected.
+	ProcsProtected uint64
 	// SelfExcluded counts spoor's own hook processes that were not
 	// reported (self.go).
 	SelfExcluded uint64
@@ -222,12 +245,20 @@ type Monitor struct {
 	initErr   error
 	self      int
 	integrity event.Integrity
+	// privileged: the monitor holds the read privilege
+	// (platform.IsPrivileged); see protectedOwner.
+	privileged bool
 	// canaryParent is the pid of this process, the parent of every
 	// self-test process it starts (m.self can differ in tests).
 	canaryParent int
+	// idKey keys the argument digest of process.exec ids (argsDigest).
+	idKey []byte
 
 	// Injection points; New sets the real ones.
-	now      func() time.Time
+	now func() time.Time
+	// trusted decides which paths of spoor binaries are trusted for the
+	// self-hook test (platform.TrustedPath; self.go).
+	trusted  func(string) bool
 	disabled func() bool
 	openCN   func() (cnConn, error)
 	osq      execSource
@@ -280,7 +311,8 @@ type counters struct {
 	queueDropped, overflows, readMisses, tableFull, errors         atomic.Uint64
 	canaryRuns, canaryHits, osqEvents                              atomic.Uint64
 	lastCanary                                                     atomic.Int64
-	procsTotal, procsUnreadable, selfExcluded                      atomic.Uint64
+	procsTotal, procsUnreadable, procsHidden, procsProtected       atomic.Uint64
+	selfExcluded                                                   atomic.Uint64
 }
 
 // New returns a Monitor. It does not start anything; Run does. Agents and
@@ -303,6 +335,8 @@ func New(o Options) *Monitor {
 		openCN:       openCNProc,
 		canaryFn:     canaryCommand,
 		monoWall:     monotonicToWall,
+		trusted:      platform.TrustedPath,
+		idKey:        argsKeyFor(o.IDKey),
 		resync:       resyncEvery,
 		canaryEvery:  canaryEvery,
 		canaryFirst:  canaryFirst,
@@ -318,6 +352,7 @@ func New(o Options) *Monitor {
 	}
 	if platform.IsPrivileged() {
 		m.integrity = event.IntegrityRoot
+		m.privileged = true
 	}
 	m.provider.Store(SourcePoll)
 	m.cnErr.Store("not started")
@@ -419,6 +454,8 @@ func (m *Monitor) Stats() Stats {
 
 		ProcsTotal:      m.st.procsTotal.Load(),
 		ProcsUnreadable: m.st.procsUnreadable.Load(),
+		ProcsHidden:     m.st.procsHidden.Load(),
+		ProcsProtected:  m.st.procsProtected.Load(),
 		SelfExcluded:    m.st.selfExcluded.Load(),
 	}
 	if ns := m.st.lastCanary.Load(); ns != 0 {

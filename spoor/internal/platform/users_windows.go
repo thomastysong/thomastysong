@@ -33,6 +33,20 @@ var (
 // profile and sets other accounts' ACLs.
 func IsAdmin() bool { return IsPrivileged() }
 
+// IsSystemAccount reports whether uid (Proc.UID, a SID string) is one of
+// the service accounts protected processes run as (LocalSystem, LOCAL
+// SERVICE, NETWORK SERVICE), or empty: an elevated monitor with
+// SeDebugPrivilege that cannot read a process's token at all is looking at
+// a protected process (csrss, smss, services, a PPL anti-malware service).
+// UNVERIFIED: compiled, not executed in the build environment.
+func IsSystemAccount(uid string) bool {
+	switch uid {
+	case "", "S-1-5-18", "S-1-5-19", "S-1-5-20":
+		return true
+	}
+	return false
+}
+
 // IsPrivileged reports whether the process token is elevated (an
 // administrator past UAC, or LocalSystem). Elevation cannot change during
 // the life of a process, so the answer is cached.

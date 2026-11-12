@@ -16,6 +16,9 @@ func IsPrivileged() bool { return os.Geteuid() == 0 || capPrivileged() }
 // macOS IsAdmin).
 func IsAdmin() bool { return os.Geteuid() == 0 }
 
+// IsSystemAccount reports whether uid (Proc.UID) is the system account: 0.
+func IsSystemAccount(uid string) bool { return uid == "0" }
+
 // CurrentUser returns the account this process runs as.
 func CurrentUser() UserHome {
 	var u UserHome

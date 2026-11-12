@@ -23,6 +23,11 @@ type ident struct {
 	// It has no user memory to read, so it is left out of the readability
 	// counts.
 	kthread bool
+	// denied: list found the pid but may not read even its stat (/proc
+	// mounted hidepid=1). Only pid and uid (the owner of /proc/<pid>, ""
+	// when unknown) are set.
+	denied bool
+	uid    string
 }
 
 // source is a process-table backend. Implementations must be safe for
@@ -30,8 +35,10 @@ type ident struct {
 // same time.
 type source interface {
 	kind() string
-	// list returns every visible live process. recs is non-nil when the
-	// backend had to read full records anyway (it then saves a second read).
+	// list returns every visible live process, including denied ones
+	// (ident.denied) that the backend may list but not read. recs is
+	// non-nil when the backend had to read full records anyway (it then
+	// saves a second read).
 	list() (ids []ident, recs map[int]*platform.Proc, err error)
 	// identOf re-reads the cheap identity of one process.
 	identOf(pid int) (ident, bool)
@@ -47,10 +54,10 @@ type source interface {
 	// backend cannot enumerate children without a full listing.
 	children(pid int) (kids []int, ok bool)
 	cwd(pid int) string
-	// exeID is the file identity (platform.FileID) of the process's
-	// executable, "" when it cannot be read. exe is the path the record
-	// names, for backends without a kernel link to the image.
-	exeID(pid int, exe string) string
+	// selfImage reports whether the process, read as rec under identity
+	// id, runs one of spoor's binaries (self.go): false whenever that
+	// cannot be established.
+	selfImage(id ident, rec *platform.Proc, self *selfSet) bool
 	workload(pid int) (id, runtime, pod string)
 }
 
@@ -83,7 +90,10 @@ func newSource(hostRoot string) (source, error) {
 }
 
 // platformSource answers everything through internal/platform.
-type platformSource struct{}
+type platformSource struct {
+	// image is platform.ProcImagePath when nil (tests replace it).
+	image func(pid int, start time.Time) (string, error)
+}
 
 func (platformSource) kind() string { return "platform" }
 
@@ -160,18 +170,32 @@ func (platformSource) cwd(pid int) string {
 	return cleanPath(c)
 }
 
-// exeID stats the executable path the process table reports. On macOS
-// and Windows that path is in the one namespace every process shares;
-// UNVERIFIED there: compiled, not executed in the build environment.
-func (platformSource) exeID(_ int, exe string) string {
-	if exe == "" || !filepath.IsAbs(exe) {
-		return ""
+// selfImage asks the kernel for its name of the running image
+// (platform.ProcImagePath, for the process instance rec describes) and
+// requires that name to be one of spoor's trusted binary paths and the
+// file there to be spoor's by identity (self.go says why both). On macOS
+// and Windows every process shares one file system view, so the name
+// means the same here. UNVERIFIED there: compiled, not executed in the
+// build environment.
+func (s platformSource) selfImage(id ident, rec *platform.Proc, self *selfSet) bool {
+	var start time.Time
+	if rec != nil {
+		start = rec.Start
 	}
-	fi, err := os.Stat(exe)
+	img := s.image
+	if img == nil {
+		img = platform.ProcImagePath
+	}
+	p, err := img(id.pid, start)
+	if err != nil || !filepath.IsAbs(p) || !self.paths[selfPathKey(p)] {
+		return false
+	}
+	fi, err := os.Stat(p)
 	if err != nil || !fi.Mode().IsRegular() {
-		return ""
+		return false
 	}
-	return platform.FileID(fi, exe)
+	fid := platform.FileID(fi, p)
+	return fid != "" && self.ids[fid]
 }
 
 func (platformSource) workload(pid int) (string, string, string) {

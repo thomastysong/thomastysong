@@ -41,9 +41,12 @@ fi
 
 # While the binary exists: no agent keeps calling it (fail-closed entries
 # would block tool calls), as the deb/rpm pre-removal script does.
+# system: Codex's machine tier, written by hooks install --scope system.
 if [ -x "$BIN" ]; then
 	"$BIN" hooks uninstall --scope managed ${ROOT:+--root "$ROOT"} >/dev/null ||
 		echo "spoor uninstall: warning: managed hook entries not removed" >&2
+	"$BIN" hooks uninstall --scope system ${ROOT:+--root "$ROOT"} >/dev/null ||
+		echo "spoor uninstall: warning: system hook entries not removed" >&2
 fi
 
 restart=0

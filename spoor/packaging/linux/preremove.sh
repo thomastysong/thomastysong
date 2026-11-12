@@ -89,8 +89,11 @@ if [ "$unregistered" = 1 ]; then
 	fi
 fi
 
+# managed, and Codex's system tier (hooks install --scope system).
 if [ -x "$BIN" ]; then
 	"$BIN" hooks uninstall --scope managed >/dev/null 2>&1 ||
 		warn "could not remove managed hook entries; check with: spoor hooks status (before removal) or the agents' managed settings files"
+	"$BIN" hooks uninstall --scope system >/dev/null 2>&1 ||
+		warn "could not remove system hook entries; check with: spoor hooks status --scope system (before removal)"
 fi
 exit 0

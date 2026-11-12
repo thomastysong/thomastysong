@@ -85,6 +85,7 @@ type Engine struct {
 	guard    []*rule // activity rules with response ask|block
 	version  string
 	baseline Baseline
+	keep     *scriptKeep // what the rules match in a written script's facts
 
 	// The content hash labels detections. It is computed on first need
 	// from a snapshot of the set: rendering every rule's canonical form is
@@ -169,6 +170,7 @@ func NewEngine(s *Set, o Options) *Engine {
 			e.anyType = append(e.anyType, r)
 		}
 	}
+	e.keep = newScriptKeep(activity, e.lists)
 	// Each type's list keeps set order (typed and untyped rules
 	// interleaved), so results never depend on which index served them.
 	for t := range types {
@@ -272,8 +274,9 @@ func (e *Engine) evaluate(ev *event.Event, fired map[string]bool) (res Result) {
 		skey = SessionKey(ev)
 		st = e.session(skey, now)
 		e.mergePending(st, ev)
-		// The session scan (secret flow) may use half of the event's
-		// budget at most, so the rules always get the other half.
+		// The session work (written-script analysis and the secret-flow
+		// scans) may use half of the event's budget at most, so the rules
+		// always get the other half.
 		scanStop := start.Add(e.o.Deadline / 2)
 		e.updateSession(st, ev, now, func() bool { return e.clock().After(scanStop) })
 	}

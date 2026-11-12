@@ -14,13 +14,16 @@ import (
 // executed in a later event would hide every parsed shell fact from the
 // rules ("sh /tmp/x.sh"). When a file_write or file_edit event writes a
 // script, the engine keeps the script's shell facts (features.WrittenScripts)
-// under the path digest it already uses for session.runs_written_file;
-// when a later command or process.exec runs that path, the facts are merged
-// into the executing event (features.Inherit) before any rule sees it, so
-// the same rules fire there, with shell.inherited_kinds = written_script
-// and session.written_exec_path in the detection's evidence. A script that
-// carries a credential value remembered from an earlier read to the
-// network is scanned when it is written, and the execution inherits
+// under the path digest it already uses for session.runs_written_file,
+// with the script's text (credentials redacted, at most 8 KiB) so that a
+// later edit is analysed in the file it lands in; when a later command or
+// process.exec runs that path, the facts are merged into the executing
+// event (features.Inherit) before any rule sees it, so the same rules fire
+// there, with shell.inherited_kinds = written_script and
+// session.written_exec_path in the detection's evidence. The bounds of
+// the facts keep what the engine's rules match first (scriptKeep). A
+// script that carries a credential value remembered from an earlier read
+// to the network is scanned when it is written, and the execution inherits
 // session.secret_flow.
 //
 // Nothing is read from disk: a file is never opened, whatever path a
@@ -28,13 +31,16 @@ import (
 // tools wrote into it.
 
 // Bounds of the script memory. A session keeps at most maxScripts scripts
-// (each at most features.MaxScriptBytes of strings); writing one more
-// evicts the least recently written.
+// (each at most features.MaxScriptBytes of facts, and the text of at most
+// features.MaxScriptText, maxScriptTexts in all, for applying a later edit
+// in context); writing one more evicts the least valuable (scriptRank),
+// oldest first.
 const (
-	maxScripts    = 16
-	maxExecChecks = 64 // executed paths examined per event, scripts run by scripts included
-	maxExecDirs   = 8  // working directories one command's relative paths are resolved against
-	maxFlowKinds  = 16
+	maxScripts     = 16
+	maxScriptTexts = 32 << 10
+	maxExecChecks  = 64 // executed paths examined per event, scripts run by scripts included
+	maxExecDirs    = 8  // working directories one command's relative paths are resolved against
+	maxFlowKinds   = 16
 )
 
 // scriptRec is one remembered script.
@@ -42,6 +48,9 @@ type scriptRec struct {
 	d  string // path digest (pathDigest)
 	at time.Time
 	f  *features.ScriptFacts
+	// text is the file's whole text with credentials redacted
+	// (features.WrittenScript.Keep), or "" when it is not known.
+	text string
 	// flow holds the kinds of remembered credential values the script
 	// sends out (session.secret_flow on its execution); flowChk says its
 	// outbound text was scanned at all, flowCut that the scan hit a bound.
@@ -60,14 +69,31 @@ func (s *sessionState) script(d string) *scriptRec {
 }
 
 // putScript stores r as the most recently written script, replacing an
-// earlier record of the same path and evicting the oldest beyond
-// maxScripts.
-func (s *sessionState) putScript(r scriptRec) {
+// earlier record of the same path. Beyond maxScripts it evicts the record
+// rank orders lowest, the oldest of those (r itself when it is the only
+// lowest): a burst of ordinary source edits gives up its own records
+// before a script that downloads and runs code. Beyond maxScriptTexts of
+// held texts, the oldest texts go (their facts stay).
+func (s *sessionState) putScript(r scriptRec, rank func(*scriptRec) int) {
 	s.dropScript(r.d)
-	if len(s.scripts) >= maxScripts {
-		s.scripts = s.scripts[len(s.scripts)-maxScripts+1:]
-	}
 	s.scripts = append(s.scripts, r)
+	for len(s.scripts) > maxScripts {
+		low, at := -1, 0
+		for i := range s.scripts {
+			if v := rank(&s.scripts[i]); low < 0 || v < low {
+				low, at = v, i
+			}
+		}
+		s.scripts = append(s.scripts[:at:at], s.scripts[at+1:]...)
+	}
+	total := 0
+	for i := range s.scripts {
+		total += len(s.scripts[i].text)
+	}
+	for i := 0; total > maxScriptTexts && i < len(s.scripts)-1; i++ {
+		total -= len(s.scripts[i].text)
+		s.scripts[i].text = ""
+	}
 }
 
 func (s *sessionState) dropScript(d string) {
@@ -77,6 +103,27 @@ func (s *sessionState) dropScript(d string) {
 			return
 		}
 	}
+}
+
+// scriptRank orders remembered scripts for eviction: facts no rule can
+// match (0), facts with commands, paths or hosts only (1), facts with a
+// command a rule matches or a notable fact (2), or that send a remembered
+// credential value (3).
+func (e *Engine) scriptRank(r *scriptRec) int {
+	switch {
+	case len(r.flow) > 0:
+		return 3
+	case r.f.Notable():
+		return 2
+	case r.f.Inert():
+		return 0
+	}
+	for _, c := range r.f.Cmds {
+		if e.keep.Command(c) {
+			return 2
+		}
+	}
+	return 1
 }
 
 // inheritance is what an event inherited from the scripts it runs.
@@ -107,9 +154,7 @@ func execTargets(ev *event.Event) (named, run []string) {
 			run = append(run, p)
 		}
 	}
-	interps, _ := f["shell.interpreters"].([]string)
-	langs, _ := f["shell.inline_langs"].([]string)
-	if len(interps) > 0 && len(langs) == 0 {
+	if readsProgram(cmds) {
 		reads, _ := f["shell.reads"].([]string)
 		for _, r := range reads {
 			if fedToInterpreter(r, cmds) {
@@ -124,6 +169,23 @@ func execTargets(ev *event.Event) (named, run []string) {
 		run = run[:maxExecChecks]
 	}
 	return named, run
+}
+
+// readsProgram reports a command line with an interpreter that reads its
+// program from standard input (sh, bash -s, python3 -, pwsh -Command -):
+// a file a redirect or a plain reader hands to the line can be its
+// program. An interpreter given program text (sh -c, node -e) or a script
+// file reads its program from there, so a one-liner elsewhere on the line
+// does not make a redirect a run, and does not hide one either.
+func readsProgram(cmds []map[string]any) bool {
+	for _, c := range cmds {
+		name, _ := c["name"].(string)
+		args, _ := c["args"].([]string)
+		if k, _ := launchOf(name, args); k == launchStdin {
+			return true
+		}
+	}
+	return false
 }
 
 // runsPath reports whether a parsed command runs p: p is the command word
@@ -143,34 +205,54 @@ func runsPath(p string, cmds []map[string]any) bool {
 	return false
 }
 
+// launchKind is where an interpreter command takes its program from.
+type launchKind uint8
+
+const (
+	launchNone  launchKind = iota // not an interpreter
+	launchFile                    // a script file argument
+	launchStdin                   // standard input
+	launchText                    // program text on the command line (sh -c, node -e, python -m), or no program (--version)
+	launchCheck                   // a check-only mode that parses the program without running it
+)
+
 // scriptArg returns the index in args of the script file the interpreter
-// name runs, or -1: not an interpreter, program text given on the command
-// line (sh -c, python -c / -m, node -e, perl -e, pwsh -Command) or on
-// standard input ("-"), or a check-only mode that parses the script
-// without running it (sh -n, sh -o noexec, node --check, perl -c, ruby -c,
-// php -l). Options that take a value as the next word are skipped, so in
-// "python3 -c code x.py" or "python3 - x.py" the file is an argument of
-// the program, not the program.
+// name runs, or -1 (see launchOf).
 func scriptArg(name string, args []string) int {
+	if k, i := launchOf(name, args); k == launchFile {
+		return i
+	}
+	return -1
+}
+
+// launchOf returns where the interpreter name takes its program from and,
+// for a script file, its index in args: program text given on the command
+// line (sh -c, python -c / -m, node -e, perl -e, pwsh -Command), standard
+// input ("-", sh -s, or no script at all), or a check-only mode that
+// parses the script without running it (sh -n, sh -o noexec, node
+// --check, perl -c, ruby -c, php -l). Options that take a value as the
+// next word are skipped, so in "python3 -W ignore x.py" the file is x.py,
+// and a shell's "+" options (bash +x, +o posix) are read like its "-" ones.
+func launchOf(name string, args []string) (launchKind, int) {
 	switch {
 	case name == "source" || name == ".":
 		if len(args) > 0 {
-			return 0
+			return launchFile, 0
 		}
-		return -1
+		return launchNone, -1
 	case name == "pwsh" || name == "powershell" || name == "powershell_ise" || name == "pwsh-preview":
-		return pwshScriptArg(args)
+		return pwshLaunch(args)
 	case name == "wscript" || name == "cscript":
 		for i, a := range args {
 			if !strings.HasPrefix(a, "/") && !strings.HasPrefix(a, "-") {
-				return i
+				return launchFile, i
 			}
 		}
-		return -1
+		return launchNone, -1
 	}
 	spec, ok := interpSpecs(name)
 	if !ok {
-		return -1
+		return launchNone, -1
 	}
 	i := 0
 	if spec.sub != "" && len(args) > 0 && args[0] == spec.sub {
@@ -181,38 +263,52 @@ func scriptArg(name string, args []string) int {
 		switch {
 		case a == "--":
 			if i+1 < len(args) {
-				return i + 1
+				return launchFile, i + 1
 			}
-			return -1
+			return launchStdin, -1
 		case a == "-":
-			return -1
+			return launchStdin, -1
+		case spec.shell && len(a) >= 2 && a[0] == '+':
+			// set +x / +o name: an option turned off, never the script.
+			if strings.IndexByte(spec.val, a[len(a)-1]) >= 0 {
+				i++
+			}
 		case len(a) < 2 || a[0] != '-':
-			return i
+			return launchFile, i
 		case strings.HasPrefix(a, "--"):
 			opt, _, hasVal := strings.Cut(a, "=")
+			if contains(spec.longCheck, opt) {
+				return launchCheck, -1
+			}
 			if contains(spec.longStop, opt) {
-				return -1
+				return launchText, -1
 			}
 			if !hasVal && contains(spec.longVal, opt) {
 				i++
 			}
 		default:
 			if a == "-o" && i+1 < len(args) && args[i+1] == "noexec" && spec.shell {
-				return -1
+				return launchCheck, -1
 			}
-			// A short cluster: a stop letter ends it (code or check),
-			// a value letter takes the rest or the next word, the file
-			// letter names the script (php -f x.php).
+			// A short cluster: a stop letter ends it (code, check or
+			// stdin), a value letter takes the rest or the next word,
+			// the file letter names the script (php -f x.php).
 			for j := 1; j < len(a); j++ {
 				ch := a[j]
 				if strings.IndexByte(spec.stop, ch) >= 0 {
-					return -1
+					switch {
+					case strings.IndexByte(spec.check, ch) >= 0:
+						return launchCheck, -1
+					case spec.stdin != 0 && ch == spec.stdin:
+						return launchStdin, -1
+					}
+					return launchText, -1
 				}
 				if spec.file != 0 && ch == spec.file {
 					if j < len(a)-1 || i+1 >= len(args) {
-						return -1 // attached value: not a separate word to compare
+						return launchText, -1 // attached value: not a separate word to compare
 					}
-					return i + 1
+					return launchFile, i + 1
 				}
 				if strings.IndexByte(spec.val, ch) >= 0 {
 					if j == len(a)-1 {
@@ -223,19 +319,21 @@ func scriptArg(name string, args []string) int {
 			}
 		}
 	}
-	return -1
+	return launchStdin, -1
 }
 
-// interpSpec is what scriptArg needs to know about an interpreter's
-// options: short letters that mean "program text follows" or "check
-// only" (stop), short letters that take a value (val), the same for long
-// options, and a subcommand that precedes the script.
+// interpSpec is what launchOf needs to know about an interpreter's
+// options: short letters that end the options because program text, a
+// check-only mode or standard input follows (stop; check and stdin say
+// which of them are which, the others are program text), short letters
+// that take a value (val), the same for long options, and a subcommand
+// that precedes the script.
 type interpSpec struct {
-	stop, val         string
-	file              byte
-	longStop, longVal []string
-	sub               string
-	shell             bool
+	stop, check, val             string
+	stdin, file                  byte
+	longStop, longCheck, longVal []string
+	sub                          string
+	shell                        bool
 }
 
 // UNVERIFIED: the option letters below come from the interpreters' usage
@@ -243,16 +341,18 @@ type interpSpec struct {
 // matter most (sh -c/-n/-s, python -c/-m, node -e/-p/-c, perl -e/-c,
 // ruby -e/-c, php -r/-l) are long-standing; the value-taking letters of
 // perl, ruby and php are less certain. A wrong value letter only shifts
-// which argument counts as the script.
+// which argument counts as the script. perl's and ruby's -x takes its
+// directory attached (-xdir), never as the next word.
 func interpSpecs(name string) (interpSpec, bool) {
 	switch name {
 	case "sh", "bash", "zsh", "dash", "ksh", "mksh", "ash", "yash", "posh", "rbash", "fish", "csh", "tcsh":
-		return interpSpec{stop: "cns", val: "oO", longVal: []string{"--rcfile", "--init-file"}, shell: true}, true
+		return interpSpec{stop: "cns", check: "n", stdin: 's', val: "oO", longVal: []string{"--rcfile", "--init-file"}, shell: true}, true
 	case "busybox":
 		return interpSpec{}, false // busybox <applet> ...: the applet is the program
 	case "node", "nodejs":
-		return interpSpec{stop: "epc", val: "rC",
-			longStop: []string{"--eval", "--print", "--check", "--test", "--interactive"},
+		return interpSpec{stop: "epc", check: "c", val: "rC",
+			longStop:  []string{"--eval", "--print", "--test", "--interactive"},
+			longCheck: []string{"--check"},
 			longVal: []string{"--require", "--import", "--loader", "--experimental-loader", "--conditions",
 				"--inspect-port", "--title", "--input-type", "--env-file", "--max-old-space-size", "--redirect-warnings"},
 		}, true
@@ -275,9 +375,9 @@ func interpSpecs(name string) (interpSpec, bool) {
 	}{
 		{"python", interpSpec{stop: "cm", val: "WX", longStop: []string{"--version", "--help"}}},
 		{"pypy", interpSpec{stop: "cm", val: "WX"}},
-		{"perl", interpSpec{stop: "eEcv", val: "IMmx"}},
-		{"ruby", interpSpec{stop: "ecvy", val: "IrCEFx"}},
-		{"php", interpSpec{stop: "rlRBEia", val: "cdzt", file: 'f', longStop: []string{"--run", "--syntax-check"}}},
+		{"perl", interpSpec{stop: "eEcv", check: "c", val: "IMm"}},
+		{"ruby", interpSpec{stop: "ecvy", check: "c", val: "IrCEF"}},
+		{"php", interpSpec{stop: "rlRBEia", check: "l", val: "cdzt", file: 'f', longStop: []string{"--run"}, longCheck: []string{"--syntax-check"}}},
 		{"lua", interpSpec{stop: "e", val: "l"}},
 	} {
 		if rest, ok := strings.CutPrefix(name, x.pre); ok && versionTail(rest) {
@@ -296,22 +396,28 @@ func versionTail(s string) bool {
 	return true
 }
 
-// UNVERIFIED: that every parameter accepts an unambiguous prefix and that
-// Windows PowerShell 5.1 also takes /Parameter is from memory of the
-// about_Pwsh / PowerShell.exe help, not re-read here.
+// UNVERIFIED: that every parameter accepts an unambiguous prefix, the
+// one-letter aliases (-w WindowStyle, -o OutputFormat, -f File, -c
+// Command, -e EncodedCommand) and that Windows PowerShell 5.1 also takes
+// /Parameter are from memory of the about_Pwsh / PowerShell.exe help, not
+// re-read here.
 //
-// pwshScriptArg finds the script of a PowerShell command line: the value
-// of -File (any unambiguous prefix, case-insensitive), or the first
-// positional when no -Command / -EncodedCommand came first. Parameter
-// values are skipped.
-func pwshScriptArg(args []string) int {
+// pwshLaunch finds the program of a PowerShell command line: the value of
+// -File (any unambiguous prefix, case-insensitive), or the first
+// positional when no -Command / -EncodedCommand came first; "-" as the
+// -File or -Command value, or no program at all, reads standard input.
+// Parameter values are skipped; -Sta and -Mta are switches.
+func pwshLaunch(args []string) (launchKind, int) {
 	for i := 0; i < len(args); i++ {
 		a := strings.ToLower(args[i])
 		// Windows PowerShell also takes /Option; a slash followed by a
 		// path (pwsh /tmp/x.ps1 on Linux) is the script.
 		slashOpt := strings.HasPrefix(a, "/") && !strings.ContainsAny(a[1:], "/.\\")
+		if a == "-" {
+			return launchStdin, -1
+		}
 		if !strings.HasPrefix(a, "-") && !slashOpt {
-			return i
+			return launchFile, i
 		}
 		opt := strings.TrimLeft(a, "-/")
 		if opt, _, _ = strings.Cut(opt, ":"); opt == "" {
@@ -319,23 +425,30 @@ func pwshScriptArg(args []string) int {
 		}
 		switch {
 		case strings.HasPrefix("file", opt):
-			if i+1 < len(args) {
-				return i + 1
+			if i+1 < len(args) && args[i+1] != "-" {
+				return launchFile, i + 1
 			}
-			return -1
-		case strings.HasPrefix("command", opt), strings.HasPrefix("encodedcommand", opt) && len(opt) >= 2,
-			opt == "ec", opt == "e", opt == "enc":
-			return -1
+			return launchStdin, -1
+		case strings.HasPrefix("command", opt):
+			if i+1 < len(args) && args[i+1] == "-" {
+				return launchStdin, -1
+			}
+			return launchText, -1
+		case strings.HasPrefix("encodedcommand", opt) && len(opt) >= 2, opt == "ec", opt == "e", opt == "enc":
+			return launchText, -1
+		case opt == "w", opt == "o":
+			i++ // -w WindowStyle, -o OutputFormat
+			continue
 		}
 		for _, v := range []string{"executionpolicy", "ep", "workingdirectory", "wd", "configurationname", "outputformat",
-			"inputformat", "windowstyle", "version", "psconsolefile", "custompipename", "settingsfile", "sta", "mta"} {
-			if opt == v || (len(opt) >= 2 && strings.HasPrefix(v, opt) && v != "sta" && v != "mta") {
+			"inputformat", "windowstyle", "version", "psconsolefile", "custompipename", "settingsfile"} {
+			if opt == v || (len(opt) >= 2 && strings.HasPrefix(v, opt)) {
 				i++
 				break
 			}
 		}
 	}
-	return -1
+	return launchStdin, -1
 }
 
 // fedToInterpreter reports a read that reaches an interpreter's standard
@@ -455,7 +568,10 @@ func (e *Engine) runWritten(st *sessionState, ev *event.Event, cwd, goos string)
 				}
 				continue
 			}
-			if !features.Inherit(ev, rec.f, d) {
+			// An event evaluated again (a hook retrying on newer state)
+			// already carries the script's facts; its flow comes from the
+			// state as it is now, like the first time.
+			if !features.Inherited(ev, d) && !features.Inherit(ev, rec.f, d) {
 				continue
 			}
 			if firstInherited == "" {
@@ -507,10 +623,25 @@ func scriptRuns(s *features.ScriptFacts) []string {
 // rememberScripts records the scripts a file-tool event writes, forgets
 // files it replaces with something that is not a script or deletes, and
 // scans each script that contacts the network for remembered credential
-// values. stop bounds the scan like the event's own outbound scan.
+// values. An edit is applied to the text held for the file when there is
+// one. stop bounds the analysis and the scan like the event's own
+// outbound scan: both share the half of the event's budget the rules do
+// not get.
 func (e *Engine) rememberScripts(st *sessionState, ev *event.Event, cwd, goos string, now time.Time, stop func() bool) {
 	ctx := features.Context{Home: e.o.Home, CWD: cwd, OS: goos}
-	for _, ws := range features.WrittenScripts(ev, ctx) {
+	opts := features.ScriptOptions{
+		Stop: stop,
+		Keep: e.keep,
+		Prior: func(p string) (string, bool) {
+			if d := pathDigest(p, cwd, e.o.Home, goos); d != "" {
+				if r := st.script(d); r != nil && r.text != "" {
+					return r.text, true
+				}
+			}
+			return "", false
+		},
+	}
+	for _, ws := range features.WrittenScripts(ev, ctx, opts) {
 		d := pathDigest(ws.Path, cwd, e.o.Home, goos)
 		if d == "" {
 			continue
@@ -525,7 +656,7 @@ func (e *Engine) rememberScripts(st *sessionState, ev *event.Event, cwd, goos st
 				st.dropScript(fd)
 			}
 		}
-		if prev == nil && !ws.Replace {
+		if prev == nil && (!ws.Replace || ws.InContext) {
 			if r := st.script(d); r != nil {
 				cp := *r
 				prev = &cp
@@ -540,24 +671,35 @@ func (e *Engine) rememberScripts(st *sessionState, ev *event.Event, cwd, goos st
 			// a file nothing is known about that does not read as one).
 			st.dropScript(d)
 			continue
-		}
-		rec := scriptRec{d: d, at: now}
-		if ws.Facts != nil {
-			rec.f = ws.Facts
-			rec.flow, rec.flowChk, rec.flowCut = st.scriptFlow(ws, stop)
-		}
-		if prev != nil && !ws.Replace {
-			merged := prev.f.Clone()
-			merged.Merge(rec.f)
-			rec.f = merged
-			rec.flow = mergeKinds(prev.flow, rec.flow)
-			rec.flowChk = rec.flowChk || prev.flowChk
-			rec.flowCut = rec.flowCut || prev.flowCut
-		}
-		if rec.f == nil {
+		case ws.Facts == nil:
+			// Moved or touched without new content: what was known moves
+			// with it.
+			rec := *prev
+			rec.d, rec.at = d, now
+			st.putScript(rec, e.scriptRank)
 			continue
 		}
-		st.putScript(rec)
+		rec := scriptRec{d: d, at: now, f: ws.Facts, text: ws.Keep}
+		rec.flow, rec.flowChk, rec.flowCut = st.scriptFlow(ws, stop)
+		if prev != nil {
+			switch {
+			case ws.InContext:
+				// The held text has credential values redacted, so the
+				// scan of the edited text cannot find what the earlier
+				// text sent: that is kept.
+				rec.flow = mergeKinds(prev.flow, rec.flow)
+				rec.flowChk = rec.flowChk || prev.flowChk
+				rec.flowCut = rec.flowCut || prev.flowCut
+			case !ws.Replace:
+				merged := prev.f.Clone()
+				merged.Merge(rec.f, e.keep)
+				rec.f, rec.text = merged, ""
+				rec.flow = mergeKinds(prev.flow, rec.flow)
+				rec.flowChk = rec.flowChk || prev.flowChk
+				rec.flowCut = rec.flowCut || prev.flowCut
+			}
+		}
+		st.putScript(rec, e.scriptRank)
 	}
 }
 

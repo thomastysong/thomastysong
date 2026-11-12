@@ -23,6 +23,7 @@ const (
 	exitUsage    = 2 // bad flags or arguments
 	exitFindings = 3 // detect, ci exec: detections at or above --fail-on
 	exitCheck    = 4 // a check ran and failed: rules test/lint, bundle verify, catalog verify, doctor
+	exitGuardOff = 5 // hooks install --guard: hooks registered, guard mode not on (the change is printed)
 )
 
 const exitCodesHelp = `Exit codes:
@@ -32,6 +33,8 @@ const exitCodesHelp = `Exit codes:
   3  detect, ci exec: detections at or above --fail-on were found
   4  a check ran and failed: rules test, rules lint, bundle verify,
      catalog verify, doctor (at least one check failed)
+  5  hooks install --guard: the hooks were registered (with --dry-run:
+     would be) but guard mode is not on; the change to make is printed
   spoor hook always exits 0; ci exec otherwise exits with the command's code.`
 
 // app holds the process context so commands can be run from tests with

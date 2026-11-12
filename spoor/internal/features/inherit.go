@@ -7,13 +7,20 @@ import (
 	"github.com/thomastysong/spoor/internal/event"
 )
 
-// InheritedWrittenScript is the shell.inherited_kinds value of an event
-// that executes a script written earlier in the session: its shell and
-// network features include the script's.
-const InheritedWrittenScript = "written_script"
+// The shell.inherited_kinds values.
+const (
+	// InheritedWrittenScript marks an event that executes a script written
+	// earlier in the session: its shell and network features include the
+	// script's.
+	InheritedWrittenScript = "written_script"
+	// InheritedEditFragment marks an event whose inherited facts include
+	// an edit analysed apart from the text around it (ScriptFacts.Fragment):
+	// they may miss what the edit completes in the line it landed in.
+	InheritedEditFragment = "edit_fragment"
+)
 
 // InheritedKinds is the vocabulary of shell.inherited_kinds.
-var InheritedKinds = []string{InheritedWrittenScript}
+var InheritedKinds = []string{InheritedWrittenScript, InheritedEditFragment}
 
 // inheritedKey lists, per event, the scripts already merged into it, so a
 // second Inherit of the same script (an event evaluated twice) adds
@@ -29,14 +36,17 @@ const maxInherited = 16
 // ANDed), numbers take the maximum, the script's commands and installs are
 // appended to shell.cmds and shell.install_entries (and their names and
 // arguments to shell.commands and shell.argv), and incomplete features
-// join content.truncated_fields. The event then carries the same facts
-// it would have had with the script's content on its own command line, so
-// the same rules fire on it. shell.inherited_kinds records that it
-// happened ("written_script"), and output.untrusted is recomputed for a
-// shell result whose script downloads or reads third-party content. key
+// join content.truncated_fields. The event then carries the facts it would
+// have had with the script's content on its own command line, within the
+// bounds of ScriptFacts: what the bounds shed is what no rule matched when
+// the script was written (see ScriptKeep), and is recorded as incomplete,
+// so the same rules fire on it. shell.inherited_kinds records that it
+// happened ("written_script", and "edit_fragment" for facts that include
+// an edit analysed out of context), and output.untrusted is recomputed for
+// a shell result whose script downloads or reads third-party content. key
 // identifies the script (the caller's path digest): a second Inherit with
-// the same key on the same event is a no-op. It returns whether anything
-// was merged and never panics.
+// the same key on the same event is a no-op (see Inherited). It returns
+// whether anything was merged and never panics.
 func Inherit(e *event.Event, s *ScriptFacts, key string) (ok bool) {
 	if e == nil || s == nil {
 		return false
@@ -111,7 +121,11 @@ func Inherit(e *event.Event, s *ScriptFacts, key string) (ok bool) {
 			}
 		}
 	}
-	unionInto(f, "shell.inherited_kinds", []string{InheritedWrittenScript}, maxList)
+	kinds := []string{InheritedWrittenScript}
+	if s.Fragment {
+		kinds = append(kinds, InheritedEditFragment)
+	}
+	unionInto(f, "shell.inherited_kinds", kinds, maxList)
 
 	// A shell result is attacker-authorable when the command downloads or
 	// reads third-party content; the script may be what does that.
@@ -125,6 +139,17 @@ func Inherit(e *event.Event, s *ScriptFacts, key string) (ok bool) {
 		}
 	}
 	return true
+}
+
+// Inherited reports whether the script key was merged into e already, by
+// an earlier Inherit on the same event (an event evaluated again keeps its
+// features, inherited ones included).
+func Inherited(e *event.Event, key string) bool {
+	if e == nil || e.Feat == nil {
+		return false
+	}
+	done, _ := e.Feat[inheritedKey].([]string)
+	return contains(done, key)
 }
 
 // unionInto adds l to the []string feature k (first-seen order, no

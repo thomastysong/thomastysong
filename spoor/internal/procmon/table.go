@@ -322,10 +322,12 @@ func (m *Monitor) resolveSelf(n *node, o *observed, enc *root, now time.Time) (e
 }
 
 // countReadability stores the readability counts of the live user-space
-// processes in the table (Stats.ProcsTotal, Stats.ProcsUnreadable). The
-// caller holds m.mu.
-func (m *Monitor) countReadability() {
-	var total, unreadable uint64
+// processes (Stats.ProcsTotal, ProcsUnreadable, ProcsHidden,
+// ProcsProtected): the table's, plus denied, the processes the last listing
+// found but could not read at all and that are not in the table. nDenied
+// is how many the listing found in all. The caller holds m.mu.
+func (m *Monitor) countReadability(denied []ident, nDenied int) {
+	var total, unreadable, protected uint64
 	for _, n := range m.nodes {
 		if n.kthread || n.pid <= 0 {
 			continue
@@ -333,10 +335,34 @@ func (m *Monitor) countReadability() {
 		total++
 		if n.unreadable {
 			unreadable++
+			if m.protectedOwner(n.uid) {
+				protected++
+			}
+		}
+	}
+	for _, id := range denied {
+		// Kernel threads cannot be told apart here: they count too.
+		total++
+		unreadable++
+		if m.protectedOwner(id.uid) {
+			protected++
 		}
 	}
 	m.st.procsTotal.Store(total)
 	m.st.procsUnreadable.Store(unreadable)
+	m.st.procsHidden.Store(uint64(nDenied))
+	m.st.procsProtected.Store(protected)
+}
+
+// protectedOwner reports whether a process of this account that refuses
+// the monitor is a protected process rather than a sign of a missing
+// privilege: the monitor holds the read privilege (root, or the reader
+// capabilities, or an elevated token) and the process runs as the system
+// account (platform.IsSystemAccount). Windows protected processes and a
+// sandbox's init refuse even such a monitor, and no privilege the sensor
+// can be given opens them.
+func (m *Monitor) protectedOwner(uid string) bool {
+	return m.privileged && platform.IsSystemAccount(uid)
 }
 
 // settle resolves a node seen without an observation of its own (a parent

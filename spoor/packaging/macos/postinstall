@@ -16,7 +16,8 @@
 #  4. refreshes the osquery extension copy when spoor is registered in
 #     /var/osquery/extensions.load, and restarts osquery detached;
 #  5. (re)loads the launchd job so the new binary runs;
-#  6. rewrites spoor's managed hook entries where they already exist
+#  6. rewrites spoor's hook entries (managed tier, and Codex's system tier
+#     that `hooks install --scope system` writes) where they already exist
 #     (`spoor hooks install --only-installed`: entries an earlier release
 #     wrote report "modified" until then), keeping the options each file was
 #     installed with (--guard --fail-closed, --timeout); entries edited by
@@ -97,5 +98,12 @@ if out=$("$BIN" hooks install --only-installed --scope managed ${ROOT:+--root "$
 else
 	[ -z "$out" ] || printf '%s\n' "$out" | sed 's/^/spoor: /' >&2
 	warn "could not refresh the managed hooks; run: /usr/local/bin/spoor hooks install --only-installed --scope managed"
+fi
+# The same for Codex's system tier (hooks install --scope system).
+if out=$("$BIN" hooks install --only-installed --scope system ${ROOT:+--root "$ROOT"} --binary /usr/local/bin/spoor 2>&1); then
+	[ -z "$out" ] || printf '%s\n' "$out" | sed 's/^/spoor: /'
+else
+	[ -z "$out" ] || printf '%s\n' "$out" | sed 's/^/spoor: /' >&2
+	warn "could not refresh the system hooks; run: /usr/local/bin/spoor hooks install --only-installed --scope system"
 fi
 exit 0

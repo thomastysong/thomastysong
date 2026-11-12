@@ -68,6 +68,13 @@ try {
     Invoke-Native icacls.exe @($d, '/inheritance:r', '/grant:r', '*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F')
   }
   Invoke-Native icacls.exe @($Dir, '/grant:r', '*S-1-5-32-545:(OI)(CI)RX')
+  # `spoor hook` runs as the developer and reads spoor.yaml in the data
+  # directory (unreadable: built-in defaults, so no guard mode, privacy
+  # profile or exclusions) and the kill switch there. Users may list that
+  # directory itself, not inherited (state.db and the daemon's files keep
+  # SYSTEM and Administrators only), and read spoor.yaml (granted below), as
+  # packaging/windows/install-service.ps1 does.
+  Invoke-Native icacls.exe @($Data, '/grant:r', '*S-1-5-32-545:RX')
 
   function Same($a, $b) {
     (Test-Path $b) -and ((Get-FileHash -Algorithm SHA256 $a).Hash -eq (Get-FileHash -Algorithm SHA256 $b).Hash)
@@ -82,6 +89,8 @@ try {
     & $Exe export config --out $Config | Out-Null
     if ($LASTEXITCODE -ne 0) { Write-Warning "could not write $Config" }
   }
+  # Every run: also repairs a file an earlier release left unreadable.
+  if (Test-Path $Config) { Invoke-Native icacls.exe @($Config, '/grant:r', '*S-1-5-32-545:R') }
 
   # The command line goes to the service manager as one string, exactly.
   $bin = '"' + $Exe + '" run --config "' + $Config + '"'
@@ -97,9 +106,12 @@ try {
   if ((Get-Service -Name $Name).Status -ne 'Running') { Start-Service -Name $Name }
 
   # Hooks: entries an earlier release wrote read "modified" until
-  # reinstalled. Only already-hooked agents, each with its own options.
+  # reinstalled. Only already-hooked agents, each with its own options;
+  # system is Codex's machine tier (hooks install --scope system).
   & $Exe hooks install --only-installed --scope managed
   if ($LASTEXITCODE -ne 0) { Write-Warning 'managed hooks not refreshed' }
+  & $Exe hooks install --only-installed --scope system
+  if ($LASTEXITCODE -ne 0) { Write-Warning 'system hooks not refreshed' }
 
   Remove-Item -Force -ErrorAction SilentlyContinue -Path "$Ext.old"
   $restart = $false

@@ -136,6 +136,11 @@ type computer struct {
 	// the hosts and URLs handed to the network pass are.
 	cut    map[string]bool
 	netCut bool
+	// A written script's analysis (script.go) may know the credential
+	// kinds of its text already (secrets), or skip the scan for the time
+	// budget (secretsSkipped).
+	secrets        *[]string
+	secretsSkipped bool
 }
 
 func (c *computer) run(fn func()) {

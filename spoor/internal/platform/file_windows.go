@@ -4,7 +4,10 @@ package platform
 
 import (
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
+	"sync"
 
 	"golang.org/x/sys/windows"
 )
@@ -117,3 +120,58 @@ func PathOwner(path string) (string, bool) {
 // hostIDFileTrusted has no cheap equivalent of the POSIX mode check; access
 // to the config directory is governed by the ACL the installer sets.
 func hostIDFileTrusted(fi os.FileInfo, system bool) bool { return true }
+
+// TrustedPath reports whether the absolute path names a regular file in a
+// location only administrators can change. On Windows that is under the
+// Program Files, Program Files (x86) or Windows directory (the known
+// folders, not environment variables), whose default ACLs let only
+// SYSTEM, Administrators and TrustedInstaller write, and the file must be
+// owned by one of those. UNC and device paths never pass. This trusts the
+// location: an ACL an administrator loosened on a directory under Program
+// Files, or a junction placed there, is not examined. UNVERIFIED: compiled,
+// not executed in the build environment.
+func TrustedPath(p string) bool {
+	if !filepath.IsAbs(p) || strings.HasPrefix(p, `\\`) || strings.HasPrefix(p, `//`) {
+		return false
+	}
+	p = filepath.Clean(p)
+	fi, err := os.Lstat(p)
+	if err != nil || !fi.Mode().IsRegular() {
+		return false
+	}
+	owner, ok := PathOwner(p)
+	if !ok || !adminOwner(owner) {
+		return false
+	}
+	for _, root := range protectedRoots() {
+		if len(p) > len(root)+1 && strings.EqualFold(p[:len(root)], root) && os.IsPathSeparator(p[len(root)]) {
+			return true
+		}
+	}
+	return false
+}
+
+// adminOwner: LocalSystem, BUILTIN\Administrators or TrustedInstaller.
+func adminOwner(sid string) bool {
+	switch sid {
+	case "S-1-5-18", "S-1-5-32-544", "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464":
+		return true
+	}
+	return false
+}
+
+// protectedRoots are the directories TrustedPath accepts files under.
+var protectedRoots = sync.OnceValue(func() []string {
+	var roots []string
+	for _, id := range []*windows.KNOWNFOLDERID{windows.FOLDERID_ProgramFiles, windows.FOLDERID_ProgramFilesX86, windows.FOLDERID_Windows} {
+		p, err := windows.KnownFolderPath(id, 0)
+		if err != nil || !filepath.IsAbs(p) || strings.HasPrefix(p, `\\`) {
+			continue
+		}
+		p = strings.TrimRight(filepath.Clean(p), `\\`)
+		if len(p) > 3 { // never a whole volume
+			roots = append(roots, p)
+		}
+	}
+	return roots
+})

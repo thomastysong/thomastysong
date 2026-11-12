@@ -47,7 +47,7 @@ func (m *Monitor) prepare(id ident, rec *platform.Proc, via string, ts time.Time
 	}
 	o.envF = ix.scanEnv(env)
 	o.name = emitName(rec.Name)
-	if m.isSelfHook(id.pid, rec) {
+	if m.isSelfHook(id, rec) {
 		o.self = true
 		return o
 	}
@@ -244,10 +244,28 @@ func (m *Monitor) fullScan(now time.Time) {
 	var execd []bool
 	var changed []nameChange
 	var evs []*event.Event
+	var denied []ident // listed, not readable, not in the table
+	nDenied := 0
 	m.mu.Lock()
 	for _, id := range ids {
 		present[id.pid] = struct{}{}
 		n := m.nodes[id.pid]
+		if id.denied {
+			// Alive, and the monitor may not look at it (hidepid): a
+			// process it knew (one that ran a setuid program, or a fork it
+			// was told about) stays as it was, now unreadable; anything
+			// else is only counted.
+			nDenied++
+			if n != nil {
+				n.unreadable = true
+				if id.uid != "" && n.uid == "" {
+					n.uid = id.uid
+				}
+			} else {
+				denied = append(denied, id)
+			}
+			continue
+		}
 		switch {
 		case n == nil:
 			if mk, ok := m.exitMark[id.pid]; !ok || mk.seq <= seq0 {
@@ -295,7 +313,7 @@ func (m *Monitor) fullScan(now time.Time) {
 	obs = append(obs, m.observeChanges(changed, recs)...)
 	m.commit(obs, seq0, now)
 	m.mu.Lock()
-	m.countReadability()
+	m.countReadability(denied, nDenied)
 	m.mu.Unlock()
 }
 

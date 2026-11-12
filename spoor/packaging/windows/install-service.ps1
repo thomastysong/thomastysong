@@ -5,9 +5,10 @@
 # `sc.exe ... binPath=`: Windows PowerShell 5.1 does not escape quotes
 # embedded in a native argument, so sc.exe would receive `C:\Program` as the
 # program (found by the Fleet script builder; deploy/fleet/README.md). Every
-# native call checks its exit code. After an update spoor's managed hook
-# entries are rewritten where they already exist (`spoor hooks install
-# --only-installed`: entries an earlier release wrote report "modified"
+# native call checks its exit code. After an update spoor's hook entries in
+# the managed tier and Codex's system tier are rewritten where they already
+# exist (`spoor hooks install --only-installed`: entries an earlier release
+# wrote report "modified"
 # until install runs again), keeping the options each file was installed
 # with (--guard --fail-closed, --timeout); entries edited by hand are left
 # as they are and listed, and agents never hooked stay unhooked.
@@ -62,9 +63,12 @@ function Get-LoadLines {
 $svc = Get-Service -Name $Name -ErrorAction SilentlyContinue
 if ($Uninstall) {
   if (Test-Path $Exe) {
-    # Remove spoor's managed hook entries while the binary still exists.
+    # Remove spoor's hook entries while the binary still exists: managed,
+    # and Codex's machine tier (hooks install --scope system).
     & $Exe hooks uninstall --scope managed | Out-Null
     if ($LASTEXITCODE -ne 0) { Write-Warning 'could not remove the managed hook entries' }
+    & $Exe hooks uninstall --scope system | Out-Null
+    if ($LASTEXITCODE -ne 0) { Write-Warning 'could not remove the system hook entries' }
   }
   if ($svc) {
     Stop-Service -Name $Name -Force -ErrorAction SilentlyContinue
@@ -102,9 +106,10 @@ Invoke-Native icacls.exe @($Dir, '/grant:r', '*S-1-5-32-545:(OI)(CI)RX')
 # itself only, not inherited: state.db and what the daemon writes later
 # inherit SYSTEM and Administrators alone, and the daemon gives outbox,
 # spool and bundle protected ACLs of their own (internal/daemon). spoor.yaml
-# gets its own read grant below. A tool that replaces spoor.yaml with a new
-# file (rather than writing it in place) drops that grant: run this script
-# again, or icacls spoor.yaml /grant *S-1-5-32-545:R.
+# gets its own read grant below. spoor's own edit (hooks install --guard)
+# copies the file's ACL onto its replacement; another tool that replaces
+# spoor.yaml with a new file drops that grant: run this script again, or
+# icacls spoor.yaml /grant *S-1-5-32-545:R.
 Invoke-Native icacls.exe @($Data, '/grant:r', '*S-1-5-32-545:RX')
 
 if ($svc) { Stop-Service -Name $Name -Force -ErrorAction SilentlyContinue }
@@ -147,9 +152,12 @@ Invoke-Native sc.exe @('config', $Name, 'start=', 'delayed-auto')
 Invoke-Native sc.exe @('failure', $Name, 'reset=', '86400', 'actions=', 'restart/5000/restart/5000/restart/5000')
 Start-Service -Name $Name
 
-# Managed hooks: --only-installed rewrites only the files that already hold
-# spoor entries and reads each file's options back from them; it prints one
-# line per file and exits 0 when there is nothing to do.
+# Hooks: --only-installed rewrites only the files that already hold spoor
+# entries and reads each file's options back from them; it prints one line
+# per file and exits 0 when there is nothing to do. Both machine tiers:
+# managed, and Codex's system tier (hooks install --scope system).
 & $Exe hooks install --only-installed --scope managed
 if ($LASTEXITCODE -ne 0) { Write-Warning 'could not refresh the managed hooks; run: spoor.exe hooks install --only-installed --scope managed' }
+& $Exe hooks install --only-installed --scope system
+if ($LASTEXITCODE -ne 0) { Write-Warning 'could not refresh the system hooks; run: spoor.exe hooks install --only-installed --scope system' }
 Write-Output "spoor service installed: $Exe"

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/thomastysong/spoor/internal/platform"
@@ -19,17 +20,41 @@ import (
 // child they started, if any, still belongs to the agent) but never
 // reported.
 //
-// A process is spoor's hook when its argv[1] is "hook" AND its executable is
-// spoor's own binary by file identity (device and inode, platform.FileID):
-// the image this process runs (/proc/self/exe on Linux, which keeps its
-// identity after an upgrade replaced the file), the file at this binary's
-// path now (the upgraded binary new hooks start), and Options.SelfExes (the
-// installed binary the hooks name, when the sensor runs another copy).
-// Identity, not path: a path names whatever is there in the mount namespace
-// of the process that ran it, and an agent can put any program at
-// /usr/bin/spoor inside its own container or user namespace. Only the hook
-// path is left out: any other spoor command an agent runs (hooks uninstall,
-// privacy purge, ci exec) is exactly the activity a reader needs to see.
+// A process is spoor's hook when its argv[1] is "hook" AND it runs one of
+// spoor's own binaries, judged by what the kernel says about the running
+// image, never by a path the process could have arranged:
+//
+//   - Linux (procfs): the file identity (device and inode,
+//     platform.FileID) of /proc/<pid>/exe, the image the kernel mapped,
+//     is one of spoor's: the image this process runs (/proc/self/exe,
+//     which keeps its identity after an upgrade replaced the file), the
+//     file at this binary's path now (the upgraded binary new hooks
+//     start), or Options.SelfExes (the installed binary the hooks name,
+//     when the sensor runs another copy). A path names whatever is there
+//     in the mount namespace of the process that ran it, and an agent can
+//     put any program at /usr/bin/spoor inside its own container or user
+//     namespace; the identity of the mapped image it cannot choose.
+//   - macOS and Windows (platformSource): there is no link to the mapped
+//     image. The kernel's own name for it (platform.ProcImagePath:
+//     proc_pidpath, QueryFullProcessImageName; never the exec path in the
+//     process's memory) must be one of spoor's binary paths, and the file
+//     there must be spoor's by identity. The name alone is not enough, nor
+//     the identity of the file at it: proc_pidpath answers with the name
+//     the image had, as long as that name still resolves, so a program
+//     started from a path its user controls, which then renames a hard
+//     link of spoor's binary over that path, would pass an identity check
+//     of the file at the name.
+//
+// Every path of a spoor binary used here, other than /proc/self/exe, must
+// pass platform.TrustedPath: only root (or the sensor's own account) can
+// change what it names. A path anyone else can write to would let them put
+// their program there and have its processes taken for spoor's hook. This
+// leaves hooks reported where spoor is installed in such a place (on Intel
+// Macs with Homebrew, /usr/local/bin belongs to the Homebrew user).
+//
+// Only the hook path is left out: any other spoor command an agent runs
+// (hooks uninstall, privacy purge, ci exec) is exactly the activity a
+// reader needs to see.
 //
 // Limits: the guarded shell form some agents use (sh -c '[ -x BIN ] ||
 // exit 0; exec BIN hook ...') shows up as one sh process before it becomes
@@ -42,56 +67,84 @@ import (
 // recognised.
 const selfRefresh = 30 * time.Second
 
-// selfSet is the file identities of spoor's binaries, as of at.
+// selfSet is what is known about spoor's binaries, as of at: their file
+// identities (ids) and, for platformSource, their trusted paths (paths,
+// keyed by selfPathKey).
 type selfSet struct {
-	ids map[string]bool
-	at  time.Time
+	ids   map[string]bool
+	paths map[string]bool
+	at    time.Time
 }
 
-// selfIDs returns the file identities of spoor's own binaries.
-func (m *Monitor) selfIDs(now time.Time) map[string]bool {
-	if cur := m.selfSet.Load(); cur != nil && now.Sub(cur.at) < selfRefresh && !now.Before(cur.at) {
-		return cur.ids
+// selfPathKey is how paths are compared: cleaned, and on Windows without
+// regard to case.
+func selfPathKey(p string) string {
+	p = filepath.Clean(p)
+	if runtime.GOOS == "windows" {
+		p = strings.ToLower(p)
 	}
-	ids := map[string]bool{}
-	add := func(p string) {
+	return p
+}
+
+// selfIDs returns the file identities and trusted paths of spoor's own
+// binaries.
+func (m *Monitor) selfIDs(now time.Time) *selfSet {
+	if cur := m.selfSet.Load(); cur != nil && now.Sub(cur.at) < selfRefresh && !now.Before(cur.at) {
+		return cur
+	}
+	set := &selfSet{ids: map[string]bool{}, paths: map[string]bool{}, at: now}
+	idOf := func(p string) string {
 		fi, err := os.Stat(p)
 		if err != nil || !fi.Mode().IsRegular() {
+			return ""
+		}
+		return platform.FileID(fi, p)
+	}
+	add := func(p string) {
+		if !filepath.IsAbs(p) || m.trusted == nil || !m.trusted(p) {
 			return
 		}
-		if id := platform.FileID(fi, p); id != "" {
-			ids[id] = true
+		id := idOf(p)
+		if id == "" {
+			return
+		}
+		set.ids[id] = true
+		set.paths[selfPathKey(p)] = true
+		// The kernel names the image by its real path.
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			set.paths[selfPathKey(r)] = true
 		}
 	}
 	if runtime.GOOS == "linux" {
-		add("/proc/self/exe")
+		// The image this process runs: whatever happened to its file.
+		if id := idOf("/proc/self/exe"); id != "" {
+			set.ids[id] = true
+		}
 	}
 	if exe, err := os.Executable(); err == nil {
 		add(trimDeleted(exe))
 	}
 	for _, p := range m.o.SelfExes {
-		if filepath.IsAbs(p) {
-			add(p)
-		}
+		add(p)
 	}
-	m.selfSet.Store(&selfSet{ids: ids, at: now})
-	return ids
+	m.selfSet.Store(set)
+	return set
 }
 
 // hookArgv reports the argument shape of the hook path: `spoor hook ...`.
 func hookArgv(args []string) bool { return len(args) >= 2 && args[1] == "hook" }
 
-// isSelfHook reports whether a process is spoor's own hook supervisor or
-// worker. The cheap argument test comes first, so the executable is looked
-// at only for processes that call themselves a hook.
-func (m *Monitor) isSelfHook(pid int, rec *platform.Proc) bool {
+// isSelfHook reports whether a process, read as rec under identity id, is
+// spoor's own hook supervisor or worker. The cheap argument test comes
+// first, so the executable is looked at only for processes that call
+// themselves a hook.
+func (m *Monitor) isSelfHook(id ident, rec *platform.Proc) bool {
 	if rec == nil || !hookArgv(rec.Args) {
 		return false
 	}
-	ids := m.selfIDs(m.now())
-	if len(ids) == 0 {
+	set := m.selfIDs(m.now())
+	if len(set.ids) == 0 {
 		return false
 	}
-	id := m.src.exeID(pid, rec.Exe)
-	return id != "" && ids[id]
+	return m.src.selfImage(id, rec, set)
 }

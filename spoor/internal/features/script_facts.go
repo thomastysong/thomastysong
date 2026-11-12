@@ -7,6 +7,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/thomastysong/spoor/internal/classify"
 	"github.com/thomastysong/spoor/internal/shellx"
 )
 
@@ -15,10 +16,12 @@ import (
 // derived from its URLs and hosts), reduced to what matching a later
 // execution needs and bounded for session state. The rule engine keeps
 // them per path and exports them with a one-shot hook process's session,
-// so they are small, hold no raw content (arguments and URLs keep what the
-// analyzer extracted, with credentials redacted by the caller's evidence
-// stage only; secrets themselves are summarized as shell.secret_kinds),
-// and are validated as hostile input on import (Validate).
+// so they are small, hold no raw content beyond the analyzer's commands,
+// arguments and list values, and hold no credential value: every argument
+// and value passes through the evidence stage's redaction (classify) and a
+// credential is kept as "[REDACTED:<kind>]", with its kind in
+// shell.secret_kinds. They are validated as hostile input on import
+// (Validate).
 type ScriptFacts struct {
 	Lang     string              `json:"l"`
 	Bools    map[string]bool     `json:"b,omitempty"`
@@ -27,9 +30,14 @@ type ScriptFacts struct {
 	Cmds     []ScriptCommand     `json:"c,omitempty"`
 	Installs []ScriptInstall     `json:"i,omitempty"`
 	// Cut names the features whose value is incomplete (a size cap of the
-	// analyzer or of these bounds); they join content.truncated_fields of
-	// the event that inherits them.
+	// analyzer or of these bounds, the time budget, or a fragment); they
+	// join content.truncated_fields of the event that inherits them.
 	Cut []string `json:"x,omitempty"`
+	// Fragment is set when the facts include an edit analysed apart from
+	// the text around it (the file's text was not held): a change that is
+	// harmless on its own can complete a dangerous line. An event that
+	// inherits them carries shell.inherited_kinds = edit_fragment.
+	Fragment bool `json:"g,omitempty"`
 }
 
 // ScriptCommand is one shell.cmds entry.
@@ -82,7 +90,7 @@ func scriptKey(name string) bool {
 
 // scriptFromFeat builds bounded ScriptFacts from a feature map computed
 // over a script's content.
-func scriptFromFeat(lang string, f map[string]any) *ScriptFacts {
+func scriptFromFeat(lang string, f map[string]any, keep ScriptKeep) *ScriptFacts {
 	s := &ScriptFacts{Lang: lang, Bools: map[string]bool{}, Nums: map[string]float64{}, Lists: map[string][]string{}}
 	for k, v := range f {
 		if !scriptKey(k) {
@@ -132,8 +140,47 @@ func scriptFromFeat(lang string, f map[string]any) *ScriptFacts {
 			}
 		}
 	}
-	s.bound()
+	s.bound(keep)
 	return s
+}
+
+// cutFacts are the facts of a script none of which was analysed because
+// the event's time budget ran out first: unknown, which is recorded as
+// incomplete, never as clean.
+func cutFacts(lang string) *ScriptFacts {
+	s := &ScriptFacts{Lang: lang, Bools: map[string]bool{"shell.truncated": true, "content.truncated_scan": true},
+		Nums: map[string]float64{}, Lists: map[string][]string{}}
+	s.addCut("shell.cmds")
+	sort.Strings(s.Cut)
+	return s
+}
+
+// markFragment records that s are the facts of an edit analysed apart
+// from the text around it.
+func (s *ScriptFacts) markFragment(keep ScriptKeep) {
+	if s == nil {
+		return
+	}
+	s.Fragment = true
+	s.addCut("shell.cmds")
+	s.bound(keep)
+}
+
+// addSecretKinds records credential kinds the facts' text carries in a
+// form the analysis does not see (redaction markers of a held text).
+func (s *ScriptFacts) addSecretKinds(kinds []string, keep ScriptKeep) {
+	if s == nil || len(kinds) == 0 {
+		return
+	}
+	if s.Bools == nil {
+		s.Bools = map[string]bool{}
+	}
+	if s.Lists == nil {
+		s.Lists = map[string][]string{}
+	}
+	s.Bools["shell.has_secret"] = true
+	s.Lists["shell.secret_kinds"] = sortedUniq(append(append([]string(nil), s.Lists["shell.secret_kinds"]...), kinds...))
+	s.bound(keep)
 }
 
 func (s *ScriptFacts) addCut(k string) {
@@ -157,7 +204,7 @@ func (s *ScriptFacts) addCut(k string) {
 func fitString(v string) (string, bool) {
 	changed := false
 	if !utf8.ValidString(v) {
-		v = strings.ToValidUTF8(v, "�")
+		v = strings.ToValidUTF8(v, "\uFFFD")
 		changed = true
 	}
 	if len(v) > maxScriptString {
@@ -167,10 +214,11 @@ func fitString(v string) (string, bool) {
 	return v, changed
 }
 
-// fitList bounds a list to n entries (head and tail) of fitted strings,
+// fitList bounds the list feature name to n entries of fitted strings,
 // dropping empty and duplicate values, and reports whether it lost
-// anything.
-func fitList(l []string, n int) ([]string, bool) {
+// anything. Values a rule matches (keep) are kept first; of the rest, the
+// head and the tail.
+func fitList(name string, l []string, n int, keep ScriptKeep) ([]string, bool) {
 	cut := false
 	var u uniqList
 	for _, v := range l {
@@ -178,8 +226,79 @@ func fitList(l []string, n int) ([]string, bool) {
 		cut = cut || ch
 		u.add(fv)
 	}
-	kept, c := headTailCut(u.list, n)
-	return kept, cut || c
+	if len(u.list) <= n {
+		return u.list, cut
+	}
+	return pickRanked(u.list, n, valueRanks(name, u.list, keep)), true
+}
+
+// valueRanks ranks the values of a list feature: 1 for a value a rule
+// matches, 0 for the others.
+func valueRanks(name string, l []string, keep ScriptKeep) []int {
+	r := make([]int, len(l))
+	if keep == nil {
+		return r
+	}
+	for i, v := range l {
+		if keep.Value(name, v) {
+			r[i] = 1
+		}
+	}
+	return r
+}
+
+// cmdRanks orders commands for shedding: one a rule's command predicate
+// matches (2) outlasts any other (1), which outlasts a command whose
+// presence matters to no rule once its paths are recorded elsewhere (0).
+func cmdRanks(cmds []ScriptCommand, keep ScriptKeep) []int {
+	r := make([]int, len(cmds))
+	for i, c := range cmds {
+		switch {
+		case keep != nil && keep.Command(c):
+			r[i] = 2
+		case !inertCommand(c.Name):
+			r[i] = 1
+		}
+	}
+	return r
+}
+
+// pickRanked returns n entries of l: every entry of the highest ranks
+// that fit whole, and the head and the tail of the rank that does not, in
+// their original order.
+func pickRanked[T any](l []T, n int, rank []int) []T {
+	if len(l) <= n {
+		return l
+	}
+	top := 0
+	for _, r := range rank {
+		top = max(top, r)
+	}
+	count := make([]int, top+1)
+	for _, r := range rank {
+		count[r]++
+	}
+	room, tier := n, top
+	for ; tier > 0 && count[tier] < room; tier-- {
+		room -= count[tier]
+	}
+	// Of the boundary tier, keep the first room/2 and the last room -
+	// room/2 entries.
+	head, tail := room/2, room-room/2
+	seen := 0
+	out := make([]T, 0, n)
+	for i, v := range l {
+		switch {
+		case rank[i] > tier:
+			out = append(out, v)
+		case rank[i] == tier:
+			if seen < head || seen >= count[tier]-tail {
+				out = append(out, v)
+			}
+			seen++
+		}
+	}
+	return out
 }
 
 // inertCommand reports commands whose presence matters to no rule once
@@ -195,16 +314,29 @@ func inertCommand(name string) bool {
 	return false
 }
 
-// bound applies the per-item caps, then the byte budget: duplicate
-// commands go first (losslessly: any_command is existential), then inert
-// ones, then half of the commands at a time (head and tail kept), then the
-// longest list.
-func (s *ScriptFacts) bound() {
+// bound applies the per-item caps and the byte budget (fit, shed), then
+// redacts credentials; a redaction marker can be longer than the value it
+// replaces, so the budget is applied again after it.
+func (s *ScriptFacts) bound(keep ScriptKeep) {
+	s.fit(keep)
+	s.shed(keep)
+	if s.redact() {
+		s.fit(keep)
+		s.shed(keep)
+	}
+	sort.Strings(s.Cut)
+}
+
+// fit applies the per-item caps: string length and validity, entries per
+// list, arguments per command, commands, installs. Duplicate commands go
+// first (losslessly: any_command is existential); the count caps keep
+// what a rule matches first.
+func (s *ScriptFacts) fit(keep ScriptKeep) {
 	if s.Lang != "" {
 		s.Lang, _ = fitString(s.Lang)
 	}
 	for k, l := range s.Lists {
-		kept, cut := fitList(l, maxScriptList)
+		kept, cut := fitList(k, l, maxScriptList, keep)
 		if len(kept) == 0 {
 			delete(s.Lists, k)
 		} else {
@@ -247,8 +379,8 @@ func (s *ScriptFacts) bound() {
 		seen[id] = true
 		cmds = append(cmds, c)
 	}
-	if kept, c := headTailCut(cmds, maxScriptCmds); c {
-		cmds, cmdCut = kept, true
+	if len(cmds) > maxScriptCmds {
+		cmds, cmdCut = pickRanked(cmds, maxScriptCmds, cmdRanks(cmds, keep)), true
 	}
 	s.Cmds = cmds
 	insCut := false
@@ -261,24 +393,46 @@ func (s *ScriptFacts) bound() {
 		in.Manager, ch = fitString(in.Manager)
 		insCut = insCut || ch
 		var c1, c2 bool
-		in.Packages, c1 = fitList(in.Packages, maxScriptArgs)
-		in.Flags, c2 = fitList(in.Flags, maxScriptArgs)
+		in.Packages, c1 = fitList("", in.Packages, maxScriptArgs, nil)
+		in.Flags, c2 = fitList("", in.Flags, maxScriptArgs, nil)
 		insCut = insCut || c1 || c2
 	}
+	if cmdCut {
+		s.addCut("shell.cmds")
+	}
+	if insCut {
+		s.addCut("shell.install_entries")
+	}
+}
+
+// shed applies the byte budget. What no rule can match goes first, so
+// padding a script with ordinary commands, paths or hosts costs the
+// commands and values a rule matches nothing: inert commands, then half
+// of the other commands no rule matches at a time (head and tail kept),
+// then half of the unmatched values of the list with most of them; only
+// then half of the matched commands, the longest list, the installs.
+func (s *ScriptFacts) shed(keep ScriptKeep) {
+	cmdCut, insCut := false, false
+	var ranks []int
 shed:
 	for s.size() > MaxScriptBytes {
+		if len(ranks) != len(s.Cmds) {
+			ranks = cmdRanks(s.Cmds, keep)
+		}
 		switch {
-		case s.dropInert():
+		case s.dropRank(&ranks, 0, false):
 			cmdCut = true
-		case len(s.Cmds) > 1:
-			s.Cmds, _ = headTailCut(s.Cmds, len(s.Cmds)/2)
+		case s.dropRank(&ranks, 1, true):
+			cmdCut = true
+		case keep != nil && s.halveUnmatchedList(keep):
+		case s.dropRank(&ranks, 2, true):
 			cmdCut = true
 		case s.halveLongestList():
 		case len(s.Installs) > 0:
 			s.Installs, _ = headTailCut(s.Installs, len(s.Installs)/2)
 			insCut = true
 		case len(s.Cmds) == 1:
-			s.Cmds = nil
+			s.Cmds, ranks = nil, nil
 			cmdCut = true
 		default:
 			// Only single-entry lists, keys and scalars remain; the keys
@@ -296,20 +450,70 @@ shed:
 	if insCut {
 		s.addCut("shell.install_entries")
 	}
-	sort.Strings(s.Cut)
 }
 
-func (s *ScriptFacts) dropInert() bool {
-	out := s.Cmds[:0:0]
-	for _, c := range s.Cmds {
-		if !inertCommand(c.Name) {
-			out = append(out, c)
+// dropRank removes the commands of rank r: all of them, or with half half
+// of them (the head and the tail kept; one command is removed). It reports
+// whether any went.
+func (s *ScriptFacts) dropRank(ranks *[]int, r int, half bool) bool {
+	n := 0
+	for _, x := range *ranks {
+		if x == r {
+			n++
 		}
 	}
-	if len(out) == len(s.Cmds) {
+	if n == 0 {
 		return false
 	}
-	s.Cmds = out
+	keepN := 0
+	if half {
+		keepN = n / 2
+	}
+	head, tail := keepN/2, keepN-keepN/2
+	cmds := s.Cmds[:0:0]
+	rs := (*ranks)[:0:0]
+	seen := 0
+	for i, c := range s.Cmds {
+		if (*ranks)[i] == r {
+			keepIt := seen < head || seen >= n-tail
+			seen++
+			if !keepIt {
+				continue
+			}
+		}
+		cmds = append(cmds, c)
+		rs = append(rs, (*ranks)[i])
+	}
+	s.Cmds, *ranks = cmds, rs
+	return true
+}
+
+// halveUnmatchedList halves the values no rule matches of the list that
+// has most of them (head and tail kept; a single one is removed).
+func (s *ScriptFacts) halveUnmatchedList(keep ScriptKeep) bool {
+	best, most := "", 0
+	var bestRanks []int
+	for k, l := range s.Lists {
+		r := valueRanks(k, l, keep)
+		n := 0
+		for _, x := range r {
+			if x == 0 {
+				n++
+			}
+		}
+		if n > most || (n == most && n > 0 && k < best) {
+			best, most, bestRanks = k, n, r
+		}
+	}
+	if most == 0 {
+		return false
+	}
+	l := s.Lists[best]
+	s.Lists[best] = pickRanked(l, len(l)-most+most/2, bestRanks)
+	if len(s.Lists[best]) == 0 {
+		delete(s.Lists, best)
+	}
+	s.addCut(best)
 	return true
 }
 
@@ -326,6 +530,48 @@ func (s *ScriptFacts) halveLongestList() bool {
 	s.Lists[best], _ = headTailCut(s.Lists[best], n/2)
 	s.addCut(best)
 	return true
+}
+
+// redact replaces credentials in every argument, path and value the
+// facts hold (lists with a closed vocabulary hold none) and reports
+// whether anything changed.
+func (s *ScriptFacts) redact() bool {
+	changed := false
+	set := func(dst *string, v string) {
+		if v != *dst {
+			*dst, changed = v, true
+		}
+	}
+	for i := range s.Cmds {
+		c := &s.Cmds[i]
+		if len(c.Args) > 0 {
+			red := redactArgs(c.Name, c.Args)
+			for j := range c.Args {
+				set(&c.Args[j], red[j])
+			}
+		}
+		if c.Path != "" {
+			set(&c.Path, redactValue(c.Path))
+		}
+	}
+	for k, l := range s.Lists {
+		if fi, ok := Lookup(k); ok && fi.Vocab != nil {
+			continue
+		}
+		for i := range l {
+			set(&l[i], redactValue(l[i]))
+		}
+	}
+	for i := range s.Installs {
+		in := &s.Installs[i]
+		for j := range in.Packages {
+			set(&in.Packages[j], redactValue(in.Packages[j]))
+		}
+		for j := range in.Flags {
+			set(&in.Flags[j], redactValue(in.Flags[j]))
+		}
+	}
+	return changed
 }
 
 // size is the string bytes held, plus a small charge per string.
@@ -369,7 +615,7 @@ func (s *ScriptFacts) Clone() *ScriptFacts {
 	if s == nil {
 		return nil
 	}
-	c := &ScriptFacts{Lang: s.Lang, Bools: map[string]bool{}, Nums: map[string]float64{}, Lists: map[string][]string{}}
+	c := &ScriptFacts{Lang: s.Lang, Bools: map[string]bool{}, Nums: map[string]float64{}, Lists: map[string][]string{}, Fragment: s.Fragment}
 	for k, v := range s.Bools {
 		c.Bools[k] = v
 	}
@@ -395,8 +641,9 @@ func (s *ScriptFacts) Clone() *ScriptFacts {
 // Merge adds o's facts to s, for an edit that adds a fragment to a file
 // whose facts are known: lists are unioned, booleans ORed (shell.parse_ok
 // ANDed), numbers take the maximum, commands and installs are appended,
-// and the result is bounded again.
-func (s *ScriptFacts) Merge(o *ScriptFacts) {
+// and the result is bounded again (keep orders what is shed, as for
+// AnalyzeScript).
+func (s *ScriptFacts) Merge(o *ScriptFacts, keep ScriptKeep) {
 	if s == nil || o == nil {
 		return
 	}
@@ -437,7 +684,74 @@ func (s *ScriptFacts) Merge(o *ScriptFacts) {
 	for _, k := range o.Cut {
 		s.addCut(k)
 	}
-	s.bound()
+	s.Fragment = s.Fragment || o.Fragment
+	s.bound(keep)
+}
+
+// Inert reports facts no rule can match: no command, install or list
+// value, and no boolean set but shell.parse_ok. A session's bounded script
+// memory gives up inert facts first (an inert fragment of a file nothing
+// else is known about included: forgetting it loses nothing).
+func (s *ScriptFacts) Inert() bool {
+	if s == nil {
+		return true
+	}
+	if len(s.Cmds) > 0 || len(s.Installs) > 0 {
+		return false
+	}
+	for k, v := range s.Bools {
+		if v && k != "shell.parse_ok" {
+			return false
+		}
+	}
+	for _, l := range s.Lists {
+		if len(l) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// Notable reports facts that say a script does more than run ordinary
+// commands on ordinary files: a download, an interpreter fed code, eval,
+// privilege, a semantic category (destructive, persistence, credential
+// access, exfiltration ...), a credential, an install, a sensitive path
+// class or a risky host class, an incomplete analysis. A session's bounded
+// script memory keeps notable facts longest.
+func (s *ScriptFacts) Notable() bool {
+	if s == nil {
+		return false
+	}
+	if len(s.Installs) > 0 {
+		return true
+	}
+	for _, k := range [...]string{"shell.downloads", "shell.pipe_to_interpreter", "shell.download_and_execute",
+		"shell.eval", "shell.sudo", "shell.background", "shell.decoded", "shell.has_secret", "shell.install_exec",
+		"shell.dynamic", "shell.truncated", "net.url_has_secret", "net.is_ip"} {
+		if s.Bools[k] {
+			return true
+		}
+	}
+	for _, k := range [...]string{"shell.obfuscation", "shell.opaque", "shell.destructive", "shell.persistence",
+		"shell.defense_evasion", "shell.cred_access", "shell.exfil", "shell.net_tools", "shell.recon",
+		"shell.privilege", "shell.git_ops", "shell.secret_kinds", "shell.installs", "shell.inline_langs",
+		"shell.interpreters", "shell.executes_paths"} {
+		if len(s.Lists[k]) > 0 {
+			return true
+		}
+	}
+	if classify.IsSensitiveRead(s.Lists["shell.read_classes"]) || classify.IsSensitiveWrite(s.Lists["shell.write_classes"]) ||
+		classify.IsSensitiveWrite(s.Lists["shell.delete_classes"]) {
+		return true
+	}
+	for _, h := range s.Lists["shell.host_classes"] {
+		switch h {
+		case classify.HostCodeHost, classify.HostPackageRegistry, classify.HostLoopback, classify.HostPrivateIP, classify.HostLLMAPI:
+		default:
+			return true
+		}
+	}
+	return false
 }
 
 // Validate checks facts that crossed a trust boundary (a session state

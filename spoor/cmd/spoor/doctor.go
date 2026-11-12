@@ -18,6 +18,7 @@ import (
 	"github.com/thomastysong/spoor/internal/catalog"
 	"github.com/thomastysong/spoor/internal/config"
 	"github.com/thomastysong/spoor/internal/daemon"
+	"github.com/thomastysong/spoor/internal/event"
 	"github.com/thomastysong/spoor/internal/hookinstall"
 	"github.com/thomastysong/spoor/internal/platform"
 	"github.com/thomastysong/spoor/internal/sink"
@@ -423,13 +424,16 @@ func (a *app) doctorHooks(r *doctorReport, cfg *config.Config, home string) {
 	case home != "":
 		var st []hookinstall.State
 		st, err = hookinstall.Status(cat, hookinstall.Options{Home: home})
-		states = toHookStates(st, filepath.Base(home))
+		states = toHookStates(st, filepath.Base(home), home)
+		states = append(states, systemHookStates(cat, nil, "")...)
 	case r.Privileged:
 		states, err = allHookStates(cat, nil, "")
 	default:
 		var st []hookinstall.State
-		st, err = hookinstall.Status(cat, hookinstall.Options{Home: a.homeDir(), Env: a.relocationEnv(cat)})
-		states = toHookStates(st, currentUser().Name)
+		h := a.homeDir()
+		st, err = hookinstall.Status(cat, hookinstall.Options{Home: h, Env: a.relocationEnv(cat)})
+		states = toHookStates(st, currentUser().Name, h)
+		states = append(states, systemHookStates(cat, nil, "")...)
 	}
 	r.Hooks = states
 	if states == nil && err != nil {
@@ -444,8 +448,14 @@ func (a *app) doctorHooks(r *doctorReport, cfg *config.Config, home string) {
 		if s.Hash != "" {
 			bins, berr := installedBinaries(s.Path)
 			s.Binaries = bins
+			// A user-scope hook runs as the home's account; managed and
+			// system hooks as any account.
+			var acc *accessor
+			if s.Scope == event.ScopeUser {
+				acc = accessorForHome(s.User, s.home)
+			}
 			for _, b := range bins {
-				if why := binaryProblem(b); why != "" {
+				if why := binaryProblemAs(b, acc); why != "" {
 					s.BinaryProblem = b + ": " + why
 					missingBin++
 					notes = append(notes, fmt.Sprintf("hooks.binary_missing: %s %s hook runs %s, which is %s (the guarded hook exits silently: no records)", s.Agent, s.Scope, b, why))

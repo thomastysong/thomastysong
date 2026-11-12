@@ -164,9 +164,10 @@ configuration every hook reads on each call, ` + "`<system config dir>/spoor.yam
 (below --root when given). With --scope managed (or system) --guard sets
 guard.mode: advisory there, keeping the rest of the file as it is; when the
 file cannot be edited safely nothing is written and the exact change is
-printed. With --scope user it changes no machine configuration and prints
-the change for the administrator. In hook files --guard only allows
---fail-closed.`
+printed. With --scope user it changes no machine configuration: the hooks
+are registered, the change is printed for the administrator, and the exit
+code is 5 unless guard mode is already on. In hook files --guard only
+allows --fail-closed.`
 
 func (a *app) hooksChange(verb string, args []string) int {
 	name := "hooks " + verb
@@ -321,6 +322,11 @@ A file that held nothing but spoor's entries is removed (kept as a backup).`
 		}
 		return exitError
 	}
+	if ge != nil && ge.Action == guardManual {
+		// --guard was asked for and guard mode is off: a script must not
+		// take this run for the guarded installation it requested.
+		return exitGuardOff
+	}
 	return exitOK
 }
 
@@ -350,8 +356,8 @@ func (a *app) printGuard(name string, ge *guardEdit, dry bool) {
 		}
 	case guardManual:
 		// A user-scope install: the hooks are registered, guard mode is
-		// not on. Said on stderr so a script sees it.
-		a.warn(name, "--guard: guard mode is NOT on: %s", strings.TrimSpace(ge.Note))
+		// not on. Said on stderr, and in the exit code (5).
+		a.warn(name, "--guard: guard mode is NOT on (exit %d): %s", exitGuardOff, strings.TrimSpace(ge.Note))
 	}
 }
 
@@ -414,28 +420,33 @@ type hookState struct {
 	// fills them in and reports one that is missing (hooks.binary_missing).
 	Binaries      []string `json:"binaries,omitempty"`
 	BinaryProblem string   `json:"binary_problem,omitempty"`
+	// home is the home of a user-scope file: its owner is the account the
+	// hook runs as.
+	home string
 }
 
-func toHookStates(st []hookinstall.State, user string) []hookState {
+func toHookStates(st []hookinstall.State, user, home string) []hookState {
 	out := make([]hookState, 0, len(st))
 	for _, s := range st {
-		u := ""
+		u, h := "", ""
 		if s.Scope == event.ScopeUser {
-			u = user
+			u, h = user, home
 		}
-		out = append(out, hookState{Agent: s.AgentID, Scope: s.Scope, User: u, Path: s.Path, Status: s.Status, Hash: s.Hash, Detail: s.Detail})
+		out = append(out, hookState{Agent: s.AgentID, Scope: s.Scope, User: u, Path: s.Path, Status: s.Status, Hash: s.Hash, Detail: s.Detail, home: h})
 	}
 	return out
 }
 
-// allHookStates audits the managed tier once and the user tier of every
-// account this process can see (every person's home when privileged).
+// allHookStates audits the managed tier once, the machine-wide system tier
+// where it exists, and the user tier of every account this process can see
+// (every person's home when privileged).
 func allHookStates(cat *catalog.Catalog, agents []string, root string) ([]hookState, error) {
 	st, err := hookinstall.Status(cat, hookinstall.Options{Scope: event.ScopeManaged, Agents: agents, Root: root})
 	if err != nil {
 		return nil, err
 	}
-	out := toHookStates(st, "")
+	out := toHookStates(st, "", "")
+	out = append(out, systemHookStates(cat, agents, root)...)
 	users, uerr := platform.Users()
 	seen := map[string]bool{}
 	for _, u := range users {
@@ -447,9 +458,32 @@ func allHookStates(cat *catalog.Catalog, agents []string, root string) ([]hookSt
 		if err != nil {
 			continue
 		}
-		out = append(out, toHookStates(us, firstNonEmpty(u.Name, u.UID))...)
+		out = append(out, toHookStates(us, firstNonEmpty(u.Name, u.UID), u.Home)...)
 	}
 	return out, uerr
+}
+
+// systemHookStates audits the machine-wide tier that is not policy (Codex
+// reads hooks.json beside its system config.toml; `hooks install --scope
+// system` writes it). Only files that exist are returned: the tier is
+// optional and absent on most machines, and the agents without one have
+// nothing to report.
+func systemHookStates(cat *catalog.Catalog, agents []string, root string) []hookState {
+	st, err := hookinstall.Status(cat, hookinstall.Options{Scope: event.ScopeSystem, Agents: agents, Root: root})
+	if err != nil {
+		return nil
+	}
+	var keep []hookinstall.State
+	for _, s := range st {
+		if s.Path == "" || !filepath.IsAbs(s.Path) {
+			continue
+		}
+		if _, err := os.Lstat(s.Path); err != nil {
+			continue
+		}
+		keep = append(keep, s)
+	}
+	return toHookStates(keep, "", "")
 }
 
 func (a *app) hooksStatus(args []string) int {
@@ -458,10 +492,10 @@ func (a *app) hooksStatus(args []string) int {
 what install would write), missing, modified, foreign_only, unsupported,
 shadowed (a higher-ranked policy source makes the agent ignore the file) or
 insecure_permissions. "managed" is not proof that the agent runs the hook:
-Detail says what could not be seen from disk. Default: the managed tier and
-the caller's user tier.`)
+Detail says what could not be seen from disk. Default: the managed tier, the
+system tier where a file exists (Codex), and the caller's user tier.`)
 	var h hookFlags
-	h.register(fs, "managed, user or system (default: managed and the caller's user tier)")
+	h.register(fs, "managed, user or system (default: managed, system where present, and the caller's user tier)")
 	allUsers := fs.Bool("all-users", false, "audit the user tier of every account (needs privilege to see other homes)")
 	pos, code, done := a.parse(fs, args)
 	if done {
@@ -489,7 +523,10 @@ the caller's user tier.`)
 		if err != nil {
 			return a.fail("hooks status", err)
 		}
-		states = toHookStates(st, platform.CurrentUser().Name)
+		states = toHookStates(st, platform.CurrentUser().Name, o.Home)
+		if o.Scope == "" {
+			states = append(states, systemHookStates(cat, h.agents, h.root)...)
+		}
 	}
 	if h.asJSON {
 		return a.printJSON(states)

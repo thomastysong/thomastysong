@@ -417,11 +417,13 @@ type exportState struct {
 }
 
 // exportScript is a remembered script: its path digest, when it was
-// written, its facts and what its outbound scan found.
+// written, its facts, its text (credentials redacted) and what its
+// outbound scan found.
 type exportScript struct {
 	D    string                `json:"d"`
 	At   int64                 `json:"a"`
 	F    *features.ScriptFacts `json:"f"`
+	Text string                `json:"x,omitempty"`
 	Flow []string              `json:"k,omitempty"`
 	Chk  bool                  `json:"c,omitempty"`
 	Cut  bool                  `json:"t,omitempty"`
@@ -474,7 +476,7 @@ func (s *sessionState) export() exportState {
 	}
 	for _, r := range s.scripts {
 		x.Scripts = append(x.Scripts, exportScript{
-			D: r.d, At: ms(r.at), F: r.f, Flow: append([]string(nil), r.flow...), Chk: r.flowChk, Cut: r.flowCut,
+			D: r.d, At: ms(r.at), F: r.f, Text: r.text, Flow: append([]string(nil), r.flow...), Chk: r.flowChk, Cut: r.flowCut,
 		})
 	}
 	if len(s.salt) > 0 {
@@ -521,8 +523,8 @@ func scopedName(rule, by string) string { return rule + "/" + by }
 
 // marshalBounded encodes the state and, if it exceeds maxExport, sheds the
 // least valuable state first (threshold history, then dedup memory, then
-// the oldest remembered scripts, then the oldest written paths) until it
-// fits.
+// the texts held for applying edits, oldest first, then the oldest
+// remembered scripts, then the oldest written paths) until it fits.
 func marshalBounded(x exportState) ([]byte, error) {
 	for round := 0; round < 64; round++ {
 		b, err := json.Marshal(x)
@@ -557,6 +559,7 @@ func marshalBounded(x exportState) ([]byte, error) {
 				}
 				n++
 			}
+		case dropTexts(x.Scripts):
 		case len(x.Scripts) > 0:
 			x.Scripts = x.Scripts[(len(x.Scripts)+1)/2:]
 		case len(x.Written) > 0:
@@ -577,6 +580,32 @@ func marshalBounded(x exportState) ([]byte, error) {
 		}
 	}
 	return nil, errors.New("rules: session state does not fit the export limit")
+}
+
+// dropTexts clears the texts of the older half of the scripts that hold
+// one and reports whether there were any. The slice is a copy of the
+// session's, so the session keeps them.
+func dropTexts(scs []exportScript) bool {
+	n := 0
+	for _, sc := range scs {
+		if sc.Text != "" {
+			n++
+		}
+	}
+	if n == 0 {
+		return false
+	}
+	drop := (n + 1) / 2
+	for i := range scs {
+		if drop == 0 {
+			break
+		}
+		if scs[i].Text != "" {
+			scs[i].Text = ""
+			drop--
+		}
+	}
+	return true
 }
 
 // ErrBadSession is returned by ImportSession for state that is oversized,
@@ -703,7 +732,8 @@ func importState(key string, data []byte, now time.Time) (*sessionState, error) 
 		return nil, badState("too many scripts")
 	}
 	for _, sc := range x.Scripts {
-		if !isHex(sc.D, 16) || !okTime(sc.At) || st.script(sc.D) != nil || len(sc.Flow) > maxFlowKinds {
+		if !isHex(sc.D, 16) || !okTime(sc.At) || st.script(sc.D) != nil || len(sc.Flow) > maxFlowKinds ||
+			len(sc.Text) > features.MaxScriptText || !utf8.ValidString(sc.Text) {
 			return nil, badState("invalid script record")
 		}
 		if err := sc.F.Validate(); err != nil {
@@ -715,7 +745,7 @@ func importState(key string, data []byte, now time.Time) (*sessionState, error) 
 			}
 		}
 		st.scripts = append(st.scripts, scriptRec{
-			d: sc.D, at: fromMS(sc.At), f: sc.F, flow: sc.Flow, flowChk: sc.Chk, flowCut: sc.Cut,
+			d: sc.D, at: fromMS(sc.At), f: sc.F, text: sc.Text, flow: sc.Flow, flowChk: sc.Chk, flowCut: sc.Cut,
 		})
 	}
 	if x.Salt != "" {

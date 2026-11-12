@@ -178,7 +178,7 @@ func TestSDDLProblem(t *testing.T) {
 		{"O:BAD:QQ(A;;FA;;;SY)", false},                    // unknown flag
 		{"O:BAD:(A;;FA;;;SY)junk(A;;FA;;;BA)", false},      // text between entries
 		{"O:BAD:(A;;FA;;;SY", false},                       // unterminated entry
-		{"O:BAD:(ZA;;FW;;;BU;(WIN://x))(A;;FA;;;BA)", false}, // callback object entry
+		{"O:BAD:(ZA;;FW;;;BU)(A;;FA;;;BA)", false},            // callback object entry
 	}
 	for _, tc := range cases {
 		if got := sddlProblem(tc.sddl); (got == "") != tc.ok {
@@ -294,5 +294,52 @@ func TestChainWalk(t *testing.T) {
 	}
 	if _, err := openDirChain(filepath.Join(a, "x"), root, dirPolicy{create: true}); !errors.Is(err, ErrSymlink) {
 		t.Errorf("link under a confining root: %v", err)
+	}
+}
+
+func TestTOMLBounds(t *testing.T) {
+	deep := func(n int) string { return strings.Repeat("{b=", n) + "1" + strings.Repeat("}", n) }
+	ok := []string{
+		requirementsTOML,
+		"[otel]\nexporter = { otlp-http = { endpoint = \"http://x/v1/logs\", protocol = \"json\" } }\n",
+		"a = " + deep(maxTOMLDepth-1) + "\n",
+		"[a.b.c]\nd = " + deep(maxTOMLDepth-4) + "\n",
+		// Brackets inside strings and comments do not nest anything.
+		"s = \"" + strings.Repeat("[{", 50) + "\"\n# " + strings.Repeat("[", 50) + "\nl = '" + strings.Repeat("{", 50) + "'\n",
+		"m = \"\"\"\n" + strings.Repeat("[", 50) + "\"\"\n\"\"\"\nn = '''" + strings.Repeat("{", 50) + "'''\n",
+		"o = \"\"\"\"x\"\"\"\"\np = [" + strings.Repeat("1,", 10) + "]\n",
+		"q = \"a\\\"[[[[[[[[[[[[[[[[[[[[\"\n",
+		"[[hooks.PreToolUse]]\nmatcher = \"^Bash$\"\n[[hooks.PreToolUse.hooks]]\ncommand = \"x\"\n",
+		"[projects.\"/a.b.c.d.e.f.g.h.i.j.k.l.m.n.o.p.q.r\"]\ntrust_level = \"trusted\"\n",
+		"v = [1.5, 2.5, 3.5]\nw = 1979-05-27T07:32:00.999\n",
+	}
+	for _, src := range ok {
+		var m map[string]any
+		if _, err := toml.Decode(src, &m); err != nil {
+			t.Errorf("test input is not valid TOML: %q: %v", src, err)
+		}
+		if err := tomlBounds([]byte(src)); err != nil {
+			t.Errorf("refused %q: %v", src, err)
+		}
+	}
+	bad := map[string]string{
+		"inline tables":        "a = " + deep(maxTOMLDepth+1) + "\n",
+		"arrays":               "a = " + strings.Repeat("[", maxTOMLDepth+1) + strings.Repeat("]", maxTOMLDepth+1) + "\n",
+		"dotted key":           "a" + strings.Repeat(".b", maxTOMLDepth) + " = 1\n",
+		"header":               "[a" + strings.Repeat(".b", maxTOMLDepth) + "]\n",
+		"header then value":    "[a" + strings.Repeat(".b", 9) + "]\nc = " + deep(8) + "\n",
+		"dotted key in inline": "a = {b" + strings.Repeat(".c", 10) + " = " + deep(7) + "}\n",
+		"after a string":       "s = \"}}}]]]\"\na = " + deep(maxTOMLDepth+1) + "\n",
+		"after a comment":      "# }}}]]]\na = " + deep(maxTOMLDepth+1) + "\n",
+		"after a ml string":    "s = '''\n}}}]]]\n'''\na = " + deep(maxTOMLDepth+1) + "\n",
+		"size":                 strings.Repeat("k = 1\n", maxTOMLSize/6+1),
+	}
+	for name, src := range bad {
+		if err := tomlBounds([]byte(src)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+		if _, err := parseTOML([]byte(src)); err == nil {
+			t.Errorf("%s: parseTOML accepted", name)
+		}
 	}
 }

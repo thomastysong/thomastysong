@@ -633,6 +633,111 @@ func TestOTel(t *testing.T) {
 			t.Fatalf("%s", summarize(plans))
 		}
 	})
+	t.Run("uninstall keeps a switch the user's own export needs", func(t *testing.T) {
+		// The user exports metrics with CLAUDE_CODE_ENABLE_TELEMETRY=1;
+		// install adds the logs settings, uninstall must take only those.
+		o := opts(t, "linux", event.ScopeUser, "claude-code")
+		o.OTel = "http://127.0.0.1:4319"
+		path := targetPath(t, c, o, "claude-code")
+		orig := []byte(`{
+  "env": {
+    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+    "OTEL_METRICS_EXPORTER": "otlp",
+    "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT": "https://metrics.example.com/v1/metrics"
+  }
+}
+`)
+		writeFile(t, path, orig, 0o600)
+		plans := mustPlan(t, c, o)
+		if len(plans) != 1 || plans[0].Action != ActionMerge || !contains(plans[0].After, "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT") {
+			t.Fatalf("%s", summarize(plans))
+		}
+		mustApply(t, plans)
+		u := mustUnplan(t, c, o)
+		if !strings.Contains(only(t, u, "claude-code").Note, "CLAUDE_CODE_ENABLE_TELEMETRY") {
+			t.Errorf("uninstall note: %s", only(t, u, "claude-code").Note)
+		}
+		mustApply(t, u)
+		if got := readBytes(t, path); !bytes.Equal(got, orig) {
+			t.Errorf("install + uninstall did not restore the file:\n%s", got)
+		}
+	})
+	t.Run("an env spoor created goes as a whole", func(t *testing.T) {
+		o := opts(t, "linux", event.ScopeUser, "claude-code")
+		o.OTel = "http://127.0.0.1:4319"
+		path := targetPath(t, c, o, "claude-code")
+		orig := []byte("{\n  \"model\": \"opus\",\n  \"env\": {\n    \"FOO\": \"bar\"\n  }\n}\n")
+		writeFile(t, path, orig, 0o644)
+		mustApply(t, mustPlan(t, c, o))
+		mustApply(t, mustUnplan(t, c, o))
+		if got := readBytes(t, path); !bytes.Equal(got, orig) {
+			t.Errorf("not restored:\n%s", got)
+		}
+	})
+	for _, tc := range []struct{ name, env string }{
+		// A logs destination the user already has: the default endpoint
+		// of an otlp exporter, or a protocol choice.
+		{"existing logs exporter", `{"OTEL_LOGS_EXPORTER": "otlp"}`},
+		{"existing logs protocol", `{"OTEL_EXPORTER_OTLP_LOGS_PROTOCOL": "grpc"}`},
+		// Switching telemetry on would also start this dormant export.
+		{"dormant metrics export", `{"OTEL_METRICS_EXPORTER": "otlp"}`},
+		{"telemetry switched off", `{"CLAUDE_CODE_ENABLE_TELEMETRY": "0"}`},
+	} {
+		t.Run("claude refused: "+tc.name, func(t *testing.T) {
+			o := opts(t, "linux", event.ScopeUser, "claude-code")
+			o.OTel = "http://127.0.0.1:4319"
+			path := targetPath(t, c, o, "claude-code")
+			writeFile(t, path, []byte(`{"env": `+tc.env+`}`), 0o644)
+			plans := mustPlan(t, c, o)
+			if len(plans) != 2 || plans[1].Action != ActionUnsupported || contains(plans[0].After, "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT") {
+				t.Fatalf("%s", summarize(plans))
+			}
+		})
+	}
+	t.Run("gemini refused when telemetry is already enabled", func(t *testing.T) {
+		o := opts(t, "linux", event.ScopeUser, "gemini-cli")
+		o.OTel = "http://127.0.0.1:4319"
+		path := targetPath(t, c, o, "gemini-cli")
+		writeFile(t, path, []byte(`{"telemetry": {"enabled": true}}`), 0o644)
+		plans := mustPlan(t, c, o)
+		if len(plans) != 2 || plans[1].Action != ActionUnsupported || !strings.Contains(plans[1].Note, "telemetry.enabled") {
+			t.Fatalf("%s", summarize(plans))
+		}
+	})
+	t.Run("codex user refused when the system layer pins otel", func(t *testing.T) {
+		// Addendum 2: refused when managed config already pins a telemetry
+		// endpoint. A user-level [otel] would also override the system
+		// config.toml's.
+		for _, file := range []string{"requirements.toml", "config.toml"} {
+			o := opts(t, "linux", event.ScopeUser, "codex")
+			o.OTel = "http://127.0.0.1:4319"
+			writeFile(t, filepath.Join(o.Root, "etc", "codex", file),
+				[]byte("[otel]\nexporter = { otlp-http = { endpoint = \"https://siem.example.com/v1/logs\", protocol = \"json\" } }\n"), 0o644)
+			n := 0
+			for _, p := range mustPlan(t, c, o) {
+				if strings.HasSuffix(p.Path, "config.toml") {
+					n++
+					if p.Action != ActionUnsupported || !strings.Contains(p.Note, file) {
+						t.Errorf("%s pins [otel]: user-scope OTel plan %s for %s: %s", file, p.Action, p.Path, p.Note)
+					}
+				}
+			}
+			if n != 1 {
+				t.Errorf("%s: %d OTel plans", file, n)
+			}
+		}
+	})
+	t.Run("codex user allowed next to spoor's own system block", func(t *testing.T) {
+		m := opts(t, "linux", event.ScopeManaged, "codex")
+		m.OTel = "http://127.0.0.1:4319"
+		mustApply(t, mustPlan(t, c, m))
+		o := opts(t, "linux", event.ScopeUser, "codex")
+		o.Root, o.OTel = m.Root, m.OTel
+		plans := mustPlan(t, c, o)
+		if len(plans) != 2 || plans[1].Action != ActionCreate {
+			t.Fatalf("%s", summarize(plans))
+		}
+	})
 	t.Run("copilot has no native otel", func(t *testing.T) {
 		o := opts(t, "linux", event.ScopeUser, "copilot-cli")
 		o.OTel = "http://127.0.0.1:4319"
@@ -778,5 +883,98 @@ func TestCrossOSPlanWithoutRoot(t *testing.T) {
 	}
 	if err := Apply([]Plan{p}); err == nil {
 		t.Error("a Windows path was applied on a unix host")
+	}
+}
+
+// TestHostileTOMLIsBounded: the TOML decoder's cost grows with size times
+// nesting, and ~/.codex/config.toml belongs to the user whose agent a root
+// installer configures. A 24 KB file of nested inline tables made
+// PlanInstall allocate 4 GiB (a 400 KB one got the process OOM-killed).
+// Such files are now refused before they reach the decoder.
+func TestHostileTOMLIsBounded(t *testing.T) {
+	c := testCatalog(t)
+	const n = 6000
+	for name, cfg := range map[string][]byte{
+		"nested inline tables": []byte("a = " + strings.Repeat("{b=", n) + "1" + strings.Repeat("}", n) + "\n"),
+		"nested arrays":        []byte("a = " + strings.Repeat("[", n) + "1" + strings.Repeat("]", n) + "\n"),
+		"dotted key":           []byte("a" + strings.Repeat(".b", n) + " = 1\n"),
+		"oversized":            bytes.Repeat([]byte("k = { x = { y = 1 } }\n"), (maxTOMLSize/22)+1),
+	} {
+		for _, scope := range []event.Scope{event.ScopeUser, event.ScopeManaged} {
+			o := opts(t, "linux", scope, "codex")
+			o.OTel = "http://127.0.0.1:4319"
+			path := targetPath(t, c, o, "codex")
+			writeFile(t, filepath.Join(filepath.Dir(path), "config.toml"), cfg, 0o644)
+			var plans []Plan
+			alloc := allocDuring(func() { plans = mustPlan(t, c, o) })
+			if alloc > 64<<20 {
+				t.Errorf("%s (%s): a %d-byte config.toml made PlanInstall allocate %d MiB", name, scope, len(cfg), alloc>>20)
+			}
+			for _, p := range plans {
+				if strings.HasSuffix(p.Path, "config.toml") && p.Action != ActionUnsupported {
+					t.Errorf("%s (%s): %s %s", name, scope, p.Action, p.Note)
+				}
+			}
+			alloc = allocDuring(func() { _ = states(t, c, o) })
+			if alloc > 64<<20 {
+				t.Errorf("%s (%s): Status allocated %d MiB", name, scope, alloc>>20)
+			}
+		}
+	}
+	// The managed tier's own file: refused as unreadable, never rewritten.
+	o := opts(t, "linux", event.ScopeManaged, "codex")
+	path := targetPath(t, c, o, "codex")
+	writeFile(t, path, []byte("x = "+strings.Repeat("[", 40)+strings.Repeat("]", 40)+"\n"), 0o644)
+	if p := only(t, mustPlan(t, c, o), "codex"); p.Action != ActionUnsupported || !strings.Contains(p.Note, "nested") {
+		t.Errorf("requirements.toml: %s %s", p.Action, p.Note)
+	}
+}
+
+// TestRelatedFilesStayInRoot: with Options.Root (a container or host
+// root), the files read beside the target (managed settings, drop-in
+// siblings, Codex requirements) are reached through the same confined walk
+// as the target: a link below the root that leads out of it is not
+// followed, so another tree's policy is never reported as this one's.
+func TestRelatedFilesStayInRoot(t *testing.T) {
+	c := testCatalog(t)
+	outside := t.TempDir()
+	numbat := `{"allowManagedHooksOnly": true, "env": {"OTEL_EXPORTER_OTLP_ENDPOINT": "https://x"}, "hooks": {"PreToolUse": [{"hooks": [{"type": "command", "command": "/usr/bin/numbat hook pre --agent claude"}]}]}}`
+	writeFile(t, filepath.Join(outside, "managed-settings.json"), []byte(numbat), 0o644)
+	writeFile(t, filepath.Join(outside, "managed-settings.d", "10-x.json"), []byte(numbat), 0o644)
+	writeFile(t, filepath.Join(outside, "requirements.toml"), []byte("allow_managed_hooks_only = true\n[otel]\nexporter = \"none\"\n"), 0o644)
+	cases := []struct {
+		agent, link, target string
+		scope               event.Scope
+	}{
+		{"claude-code", "etc/claude-code", outside, event.ScopeUser},
+		{"claude-code", "etc/claude-code/managed-settings.d", filepath.Join(outside, "managed-settings.d"), event.ScopeUser},
+		{"codex", "etc/codex", outside, event.ScopeUser},
+	}
+	for _, tc := range cases {
+		o := opts(t, "linux", tc.scope, tc.agent)
+		o.OTel = "http://127.0.0.1:4319"
+		link := filepath.Join(o.Root, filepath.FromSlash(tc.link))
+		if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		// An absolute link: inside the container it names the container's
+		// own path, read from the host it is the host's.
+		if err := os.Symlink(tc.target, link); err != nil {
+			t.Fatal(err)
+		}
+		plans := mustPlan(t, c, o)
+		for _, p := range plans {
+			for _, leak := range []string{"numbat", "allowManagedHooksOnly", "allow_managed_hooks_only", outside} {
+				if strings.Contains(p.Note, leak) {
+					t.Errorf("%s via %s: a file outside Root was read through a link below it: %s %s", tc.agent, tc.link, p.Action, p.Note)
+				}
+			}
+		}
+		mustApply(t, plans)
+		for _, s := range states(t, c, o) {
+			if strings.Contains(s.Detail, outside) || s.Status == StatusShadowed {
+				t.Errorf("%s via %s: Status read outside Root: %s %s", tc.agent, tc.link, s.Status, s.Detail)
+			}
+		}
 	}
 }

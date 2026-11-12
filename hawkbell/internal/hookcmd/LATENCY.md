@@ -1,4 +1,113 @@
-# `spoor hook` latency
+# `hawkbell hook` latency
+
+## Current figures: release build (2026-11-12)
+
+Measured with `tools/hooklatency`, which is in the repository: one process
+per hooked event, the 540-byte Claude Code `PreToolUse` payload
+(`internal/hookio/testdata/claude/PreToolUse.json`) on stdin, wall time
+from process start to exit as the agent sees it. 300 runs per case after 10
+discarded warm-up rounds, all cases interleaved round-robin. The binary is
+built like the release (`CGO_ENABLED=0 go build -trimpath -buildvcs=false
+-ldflags '-s -w -buildid='`, 22.9 MB) with a fresh embedded rule cache
+(`TestEmbeddedCacheFresh` passed). The spool is on local ext4. Same VM as
+the earlier records (Linux 6.18 Firecracker guest, 4 vCPU). The machine was
+quiet this time: nothing else was building, and the load average was 1.3
+to 1.9.
+
+```
+CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags '-s -w -buildid=' -o /tmp/hb ./cmd/hawkbell
+go run ./tools/hooklatency -bin /tmp/hb -dir "$(mktemp -d)" -hello <empty Go program> \
+    -payload internal/hookio/testdata/claude/PreToolUse.json -n 300 [-alt <other build>]
+```
+
+p50 / p90 / p99, ms, n = 300 each. 0 non-zero exits in 9,000 runs, and no
+`hook_worker_timeout` record in any guard spool:
+
+| case | direct | `sh -c` | `bash -lc` |
+|---|---|---|---|
+| empty hook (`/bin/true`) | 1.33 / 1.62 / 1.91 | 2.19 / 2.80 / 3.43 | 9.61 / 10.88 / 11.98 |
+| empty Go program | 1.55 / 1.78 / 3.08 | | |
+| kill switch on (process start + package init + one stat) | 4.30 / 5.25 / 6.17 | | |
+| **observe, supervised** | **10.42 / 12.07 / 18.24** | **10.97 / 12.76 / 14.20** | **18.74 / 21.17 / 24.45** |
+| observe, unsupervised (worker alone) | 5.61 / 6.73 / 7.90 | | |
+| guard, supervised | 16.64 / 19.30 / 23.05 | 18.04 / 20.98 / 23.37 | 25.78 / 29.79 / 33.31 |
+| guard, unsupervised | 11.97 / 14.64 / 16.40 | | |
+| detect-in-hook, supervised | 19.73 / 22.62 / 25.59 | 20.69 / 24.07 / 28.53 | 28.80 / 32.68 / 37.28 |
+| detect-in-hook, unsupervised | 15.38 / 17.99 / 21.06 | | |
+
+The shell columns run the command line hookinstall renders,
+`[ -x BIN ] || exit 0; exec BIN hook --agent claude-code --config CFG`.
+"Supervised" is what hookinstall registers. Before each run, the guard
+case was checked to answer "ask" for `curl ... | sh` (HB-EXEC-001), and the
+detect-in-hook case was checked to write a detection record.
+
+### Two start-up changes
+
+The commit that recorded these figures made two changes to process
+start-up. Both were measured in the same rounds against the rename commit
+`d261f98`, built the same way (p50 ms):
+
+| case | `d261f98` | with the changes | change |
+|---|---|---|---|
+| kill switch (start + init) | 5.96 | 4.30 | -1.66 |
+| observe, unsupervised, direct | 7.54 | 5.61 | -1.93 |
+| observe, supervised, direct | 14.53 | 10.42 | -4.11 |
+| observe, supervised, `bash -lc` | 23.05 | 18.74 | -4.31 |
+| guard, supervised, direct | 20.59 | 16.64 | -3.95 |
+| detect-in-hook, supervised, direct | 24.83 | 19.73 | -5.10 |
+
+- **`go.opentelemetry.io/otel` v1.16.0 to v1.24.0** (`otel`, `otel/metric`
+  and `otel/trace`; `go-logr/logr` moves from 1.2.4 to 1.4.1; no new
+  modules). otel is linked only through `github.com/osquery/osquery-go`,
+  which the osquery extension and `internal/osqexec` need. In v1.16.0,
+  `otel/trace` compiles two regular expressions at package init, about
+  1.0 ms per process. That was the largest single init cost, and a
+  supervised hook paid it twice. v1.24.0 validates trace state without
+  regular expressions. Checked afterwards: the extension registers and
+  answers queries on all 9 of its tables in osquery 5.19 shell mode. That
+  check ran as `nobody`, with every file under a scratch directory.
+- **Lazy patterns.** The catalog's nine validation regular expressions
+  (`internal/catalog/validate.go`) and the daemon's uid pattern
+  (`internal/daemon/dirs.go`) now compile on first use, not at package
+  init. Only catalog loading and the daemon use them. They cost about
+  0.35 ms and 0.2 ms per process.
+
+Package init per process (`GODEBUG=inittrace=1`, 7 runs) went from 2.9 to
+4.6 ms down to 1.4 to 1.8 ms. The largest remaining items are
+`klauspost/compress/internal/snapref` (0.19 ms, zstd for compressed
+transcripts), `modernc.org/libc` (0.14 ms, the state database),
+`BurntSushi/toml` (0.08 ms) and `yaml.v3` (0.05 ms).
+
+The earlier full-binary record below (18.06 ms observe p50) was measured
+with the load average at 2.8 to 3.3. To separate code from load, the code
+of that record (`7e6441a`) was rebuilt the same way and measured in the
+same rounds as `d261f98`. With the two files a clean checkout of
+`7e6441a` lacks taken from `c384122`, observe supervised was 15.86 ms
+against 14.62 ms. So between that record and the rename, the code got
+about 1.2 ms faster. The rest of the gap from 18.06 ms was machine load.
+
+### Against the spec budget (still open)
+
+Observe supervised is now 9.1, 8.8 and 9.1 ms above the empty hook p50
+(direct, `sh -c`, `bash -lc`). Before these changes the gap was about 13 ms.
+The spec asks for "a few ms". Of what remains, a supervised call is two
+starts of the 22.9 MB binary at about 4.3 ms each (the kill-switch row),
+plus about 1.3 ms of observe work (the unsupervised row minus the
+kill-switch row).
+The way to close most of the rest is still the slim launcher described
+below: a hook-only supervisor binary would start in about the empty Go
+program time, saving an estimated 2.5 to 3 ms per call. That is a second
+binary in packaging and in the hook command hookinstall writes, so it
+remains the integrator's decision. Until then, observe latency is a
+recorded deviation.
+
+Guard mode stays far inside its 150 ms default deadline: p99 is 23 to
+33 ms depending on the launch path, the slowest of this build's 1,200 guard runs took
+40.6 ms, and none timed out. Rule loading and engine construction are the
+difference between the guard and observe rows, about 6 ms. Detect-in-hook
+builds the engine for the full rule set, which adds about 3 ms more.
+
+## Earlier records
 
 Recorded before the rename from the working name spoor to hawkbell: commands, paths and names below use the old name.
 

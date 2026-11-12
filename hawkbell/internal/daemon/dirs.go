@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sync"
 
 	"github.com/thomastysong/thomastysong/hawkbell/internal/config"
 	"github.com/thomastysong/thomastysong/hawkbell/internal/platform"
@@ -120,9 +121,13 @@ func (l layout) spoolDirFor(uid string) (string, bool) {
 	return filepath.Join(l.spool, uid), true
 }
 
-var uidRE = regexp.MustCompile(`^(?:[0-9]{1,10}|S-1(?:-[0-9]{1,10}){1,15})$`)
+// uidRE is compiled on first use: the hook links this package too, and a
+// package-level compile would cost every hooked event at start-up.
+var uidRE = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^(?:[0-9]{1,10}|S-1(?:-[0-9]{1,10}){1,15})$`)
+})
 
-func validUID(uid string) bool { return uidRE.MatchString(uid) }
+func validUID(uid string) bool { return uidRE().MatchString(uid) }
 
 // ensureUserSpool creates <data>/spool/<uid>/ for an account: mode 0700,
 // owned by the account, so that its hooks can append there and nobody else

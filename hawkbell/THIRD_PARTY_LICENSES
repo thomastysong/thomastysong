@@ -40,7 +40,7 @@ github.com/BurntSushi/toml        v1.6.0                              MIT; all r
 github.com/Microsoft/go-winio     v0.6.2                              MIT; windows only
 github.com/apache/thrift          v0.23.0                             Apache-2.0; all release targets
 github.com/dustin/go-humanize     v1.1.0                              MIT; all release targets
-github.com/go-logr/logr           v1.2.4                              Apache-2.0; all release targets
+github.com/go-logr/logr           v1.4.1                              Apache-2.0; all release targets
 github.com/go-logr/stdr           v1.2.2                              Apache-2.0; all release targets
 github.com/google/uuid            v1.6.0                              BSD-3-Clause; linux, darwin only
 github.com/klauspost/compress     v1.20.4                             BSD-3-Clause AND MIT; all release targets
@@ -49,9 +49,9 @@ github.com/ncruces/go-strftime    v1.1.0                              MIT; darwi
 github.com/osquery/osquery-go     v0.0.0-20260630173615-eb39ad3443df  MIT; all release targets
 github.com/pkg/errors             v0.8.0                              BSD-2-Clause; all release targets
 github.com/remyoudompheng/bigfft  v0.0.0-20230129092748-24d4a6f8daec  BSD-3-Clause; all release targets
-go.opentelemetry.io/otel          v1.16.0                             Apache-2.0; all release targets
-go.opentelemetry.io/otel/metric   v1.16.0                             Apache-2.0; all release targets
-go.opentelemetry.io/otel/trace    v1.16.0                             Apache-2.0; all release targets
+go.opentelemetry.io/otel          v1.24.0                             Apache-2.0; all release targets
+go.opentelemetry.io/otel/metric   v1.24.0                             Apache-2.0; all release targets
+go.opentelemetry.io/otel/trace    v1.24.0                             Apache-2.0; all release targets
 golang.org/x/sys                  v0.50.0                             BSD-3-Clause; all release targets
 golang.org/x/text                 v0.44.0                             BSD-3-Clause; all release targets
 gopkg.in/yaml.v3                  v3.0.1                              MIT AND Apache-2.0; all release targets
@@ -494,14 +494,14 @@ SOFTWARE.
 <http://www.opensource.org/licenses/mit-license.php>
 
 ================================================================================
-github.com/go-logr/logr v1.2.4
+github.com/go-logr/logr v1.4.1
 ================================================================================
 
 License: Apache-2.0
 Linked on: all release targets
 Files: LICENSE
 
----- github.com/go-logr/logr v1.2.4: LICENSE ----
+---- github.com/go-logr/logr v1.4.1: LICENSE ----
 
                                  Apache License
                            Version 2.0, January 2004
@@ -1471,14 +1471,14 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ================================================================================
-go.opentelemetry.io/otel v1.16.0
+go.opentelemetry.io/otel v1.24.0
 ================================================================================
 
 License: Apache-2.0
 Linked on: all release targets
 Files: LICENSE
 
----- go.opentelemetry.io/otel v1.16.0: LICENSE ----
+---- go.opentelemetry.io/otel v1.24.0: LICENSE ----
 
                                  Apache License
                            Version 2.0, January 2004
@@ -1683,14 +1683,14 @@ Files: LICENSE
    limitations under the License.
 
 ================================================================================
-go.opentelemetry.io/otel/metric v1.16.0
+go.opentelemetry.io/otel/metric v1.24.0
 ================================================================================
 
 License: Apache-2.0
 Linked on: all release targets
 Files: LICENSE
 
----- go.opentelemetry.io/otel/metric v1.16.0: LICENSE ----
+---- go.opentelemetry.io/otel/metric v1.24.0: LICENSE ----
 
                                  Apache License
                            Version 2.0, January 2004
@@ -1895,14 +1895,14 @@ Files: LICENSE
    limitations under the License.
 
 ================================================================================
-go.opentelemetry.io/otel/trace v1.16.0
+go.opentelemetry.io/otel/trace v1.24.0
 ================================================================================
 
 License: Apache-2.0
 Linked on: all release targets
 Files: LICENSE
 
----- go.opentelemetry.io/otel/trace v1.16.0: LICENSE ----
+---- go.opentelemetry.io/otel/trace v1.24.0: LICENSE ----
 
                                  Apache License
                            Version 2.0, January 2004

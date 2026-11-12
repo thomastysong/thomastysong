@@ -85,7 +85,7 @@ func (st *state) build() (*snapshot, error) {
 	l := &errList{}
 	if st.version == "" {
 		l.addf("catalog: no data file sets a version")
-	} else if !versionRe.MatchString(st.version) {
+	} else if !versionRe().MatchString(st.version) {
 		l.addf("catalog: version %q is malformed", st.version)
 	}
 	for i := range st.products {

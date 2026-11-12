@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/thomastysong/thomastysong/hawkbell/internal/event"
@@ -22,17 +23,25 @@ const (
 	maxErrors      = 40
 )
 
+// The validation patterns are compiled on first use, not at package init:
+// every process that links the catalog (the hook included, twice per hooked
+// event) would otherwise pay for them, and only catalog loading needs them.
 var (
-	idRe       = regexp.MustCompile(`^[a-z][a-z0-9._-]{0,63}$`)
-	versionRe  = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}$`)
-	slugRe     = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,63}$`)
-	envNameRe  = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
-	chromeIDRe = regexp.MustCompile(`^[a-p]{32}$`)
-	extIDRe    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*\.[A-Za-z0-9][A-Za-z0-9._-]*$`)
-	hostRe     = regexp.MustCompile(`^(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$`)
-	teamIDRe   = regexp.MustCompile(`^[A-Z0-9]{10}$`)
-	flagRe     = regexp.MustCompile(`^--?[A-Za-z0-9][A-Za-z0-9_-]*( [^\s]+)?$`)
+	idRe       = lazyRegexp(`^[a-z][a-z0-9._-]{0,63}$`)
+	versionRe  = lazyRegexp(`^[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}$`)
+	slugRe     = lazyRegexp(`^[a-z0-9][a-z0-9_.-]{0,63}$`)
+	envNameRe  = lazyRegexp(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
+	chromeIDRe = lazyRegexp(`^[a-p]{32}$`)
+	extIDRe    = lazyRegexp(`^[A-Za-z0-9][A-Za-z0-9-]*\.[A-Za-z0-9][A-Za-z0-9._-]*$`)
+	hostRe     = lazyRegexp(`^(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$`)
+	teamIDRe   = lazyRegexp(`^[A-Z0-9]{10}$`)
+	flagRe     = lazyRegexp(`^--?[A-Za-z0-9][A-Za-z0-9_-]*( [^\s]+)?$`)
 )
+
+// lazyRegexp returns a function that compiles pattern once, on first call.
+func lazyRegexp(pattern string) func() *regexp.Regexp {
+	return sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(pattern) })
+}
 
 // errList collects validation errors up to a cap, so one broken file is
 // reported in full without producing an unbounded message.
@@ -65,8 +74,8 @@ func validateProduct(p *Product, l *errList) {
 	bad := func(format string, a ...any) {
 		l.addf("catalog: product %q: "+format, append([]any{p.ID}, a...)...)
 	}
-	if !idRe.MatchString(p.ID) {
-		bad("id must match %s", idRe)
+	if !idRe().MatchString(p.ID) {
+		bad("id must match %s", idRe())
 		return
 	}
 	if strings.TrimSpace(p.Name) == "" {
@@ -129,7 +138,7 @@ func validateProduct(p *Product, l *errList) {
 		return ""
 	}
 	envName := func(s string) string {
-		if !envNameRe.MatchString(s) {
+		if !envNameRe().MatchString(s) {
 			return "is not an environment variable name"
 		}
 		return ""
@@ -209,14 +218,14 @@ func validateProduct(p *Product, l *errList) {
 	checkList("appx", p.Appx, nil)
 	checkList("desktop_ids", p.DesktopIDs, nil)
 	checkList("extension_ids", p.ExtensionIDs, func(s string) string {
-		if !extIDRe.MatchString(s) {
+		if !extIDRe().MatchString(s) {
 			return `must be "publisher.name"`
 		}
 		return ""
 	})
 	checkList("jetbrains_ids", p.JetBrainsIDs, nil)
 	checkList("chrome_ids", p.ChromeIDs, func(s string) string {
-		if !chromeIDRe.MatchString(s) {
+		if !chromeIDRe().MatchString(s) {
 			return "is not a 32-letter Chromium extension id"
 		}
 		return ""
@@ -232,13 +241,13 @@ func validateProduct(p *Product, l *errList) {
 	checkList("subagents", p.Subagents, pathCheck(true))
 	checkList("commands", p.Commands, pathCheck(true))
 	checkList("risky_flags", p.RiskyFlags, func(s string) string {
-		if !flagRe.MatchString(s) {
+		if !flagRe().MatchString(s) {
 			return `must be "--flag" or "--flag value"`
 		}
 		return ""
 	})
 	checkList("api_hosts", p.APIHosts, func(s string) string {
-		if !hostRe.MatchString(s) {
+		if !hostRe().MatchString(s) {
 			return "is not a lowercase host name"
 		}
 		return ""
@@ -288,7 +297,7 @@ func validateProduct(p *Product, l *errList) {
 		checkList(field+".project_paths", m.ProjectPaths, relPath)
 	}
 	if t := p.Transcript; t != nil {
-		if !slugRe.MatchString(t.Format) {
+		if !slugRe().MatchString(t.Format) {
 			bad("transcript.format %q must be a lowercase slug", t.Format)
 		}
 		if t.Globs.IsZero() {
@@ -296,7 +305,7 @@ func validateProduct(p *Product, l *errList) {
 		}
 		// "./x" is allowed: Aider writes its history into the project.
 		checkPathsWith("transcript.globs", t.Globs, pathCheck(true))
-		if t.HomeEnv != "" && !envNameRe.MatchString(t.HomeEnv) {
+		if t.HomeEnv != "" && !envNameRe().MatchString(t.HomeEnv) {
 			bad("transcript.home_env %q is not an environment variable name", t.HomeEnv)
 		}
 	}
@@ -336,7 +345,7 @@ func validateProduct(p *Product, l *errList) {
 		if s.Op == "exists" && s.Value != "" {
 			bad("%s.value must be empty for op exists", field)
 		}
-		if !slugRe.MatchString(s.Flag) {
+		if !slugRe().MatchString(s.Flag) {
 			bad("%s.flag %q must be a lowercase slug", field, s.Flag)
 		}
 		if s.Severity != "" && event.SeverityRank(s.Severity) == 0 {
@@ -344,7 +353,7 @@ func validateProduct(p *Product, l *errList) {
 		}
 		switch s.Format {
 		case "env":
-			if !envNameRe.MatchString(s.Key) {
+			if !envNameRe().MatchString(s.Key) {
 				bad("%s.key %q must be an environment variable name for format env", field, s.Key)
 			}
 			if !s.File.IsZero() {
@@ -375,7 +384,7 @@ func validateProduct(p *Product, l *errList) {
 		}
 		checkText(field+".value", s.Value, maxStringLen)
 	}
-	if id := p.Signers.DarwinTeamID; id != "" && !teamIDRe.MatchString(id) {
+	if id := p.Signers.DarwinTeamID; id != "" && !teamIDRe().MatchString(id) {
 		bad("signers.darwin_team_id %q is not a 10-character team id", id)
 	}
 	checkText("signers.windows_publisher", p.Signers.WindowsPublisher, maxStringLen)

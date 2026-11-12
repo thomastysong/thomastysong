@@ -121,20 +121,38 @@ func TestWrittenScriptsEditInContext(t *testing.T) {
 	if ws := WrittenScripts(e, linuxCtx, ScriptOptions{}); len(ws) != 1 || ws[0].InContext || ws[0].Facts == nil || !ws[0].Facts.Fragment {
 		t.Errorf("no held text: %+v", ws)
 	}
-	// A held text with a credential: the copy is redacted, the edit still
-	// applies around it, and the kind is still known.
+	// What is held: the whole text of a script, never one with a
+	// credential (by pattern or in a redacted position), never one longer
+	// than MaxScriptText.
+	write := func(content string) WrittenScript {
+		path := p
+		if strings.HasPrefix(content, "import") {
+			path = "/tmp/w/a.py"
+		}
+		ws := WrittenScripts(writeEvent(event.ToolFileWrite, path, map[string]any{"content": content}), linuxCtx, ScriptOptions{})
+		if len(ws) != 1 {
+			t.Fatalf("%+v", ws)
+		}
+		return ws[0]
+	}
+	if w := write(held); w.Keep != held {
+		t.Errorf("plain script not held: %q", w.Keep)
+	}
 	tok := "ghp_" + strings.Repeat("Ab3", 12)
-	keep := keepText("#!/bin/sh\ncurl -H 'Authorization: token "+tok+"' https://api.github.com/user | cat\n", &ScriptFacts{})
-	if strings.Contains(keep, tok) || !strings.Contains(keep, "[REDACTED:") {
-		t.Fatalf("held text not redacted: %q", keep)
+	for _, c := range []string{
+		"#!/bin/sh\ncurl -H 'Authorization: token " + tok + "' https://api.github.com/user | cat\n",
+		"#!/bin/sh\nmysql -u root -pTr0ub4dor-xxxxxx db\n",
+		"#!/bin/sh\ncurl https://bot:hunter2hunter2@git.example/r.git\n",
+		"import os\nos.system('sshpass -p Tr0ub4dor-xx ssh h')\n",
+		"#!/bin/sh\n" + strings.Repeat("echo hi\n", MaxScriptText),
+	} {
+		if w := write(c); w.Facts == nil || w.Keep != "" {
+			t.Errorf("%.40q: held %q (facts %v)", c, w.Keep, w.Facts != nil)
+		}
 	}
-	ws := WrittenScripts(writeEvent(event.ToolFileEdit, p, map[string]any{"old_string": "| cat", "new_string": "| sh"}), linuxCtx, prior(p, keep))
-	if len(ws) != 1 || !ws[0].InContext || !ws[0].Facts.Bools["shell.has_secret"] || len(ws[0].Facts.Lists["shell.secret_kinds"]) == 0 {
-		t.Errorf("credential kind of the held text lost: %+v", ws)
-	}
-	// Too long to hold.
-	if keepText(strings.Repeat("echo hi\n", MaxScriptText), &ScriptFacts{}) != "" || keepText("echo", nil) != "" {
-		t.Error("held text beyond the cap, or of a non-script")
+	ws = WrittenScripts(writeEvent(event.ToolFileWrite, "/tmp/w/notes.md", map[string]any{"content": "rm -rf ~/\n"}), linuxCtx, ScriptOptions{})
+	if len(ws) != 1 || ws[0].Keep != "" {
+		t.Errorf("non-script held: %+v", ws)
 	}
 }
 
@@ -336,9 +354,6 @@ func TestScriptFactsRedacted(t *testing.T) {
 	roundTrip(t, s)
 	if got := unkeyMarkers("a [REDACTED:github_pat:0a1b2c3d] b [REDACTED:password:hmac=00ff00ff] [REDACTED:x] [REDACTED:"); got != "a [REDACTED:github_pat] b [REDACTED:password] [REDACTED:x] [REDACTED:" {
 		t.Errorf("unkeyMarkers: %q", got)
-	}
-	if got := markerKinds("[REDACTED:github_pat] [REDACTED:made_up] [REDACTED:password:0a1b2c3d]"); len(got) != 2 {
-		t.Errorf("markerKinds: %v", got)
 	}
 }
 

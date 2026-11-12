@@ -8,9 +8,7 @@ func ownerIDs(fi os.FileInfo) (uid, gid int, ok bool) { return 0, 0, false }
 
 func writableByOthers(path string, fi os.FileInfo) string { return "" }
 
-func hardenIn(r *os.Root, name string) error { return nil }
-
-func hardenPath(path string) error { return nil }
+func hardenIn(r *os.Root, name string, dir bool) error { return nil }
 
 func linkTrusted(path string, fi os.FileInfo) bool { return false }
 

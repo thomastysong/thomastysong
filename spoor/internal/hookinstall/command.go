@@ -48,6 +48,18 @@ func bareCommand(bin, agent string) string {
 	return bin + hookMarker + agent
 }
 
+// windowsCommand is the command line for a Windows field whose shell is
+// PowerShell by default but may be cmd.exe: bare when the path allows it,
+// else the PowerShell call form (a path with spaces cannot be written so
+// that both shells accept it; the package doc recommends a path without
+// spaces for that reason).
+func windowsCommand(bin, agent string) string {
+	if plainWindowsPath(bin) {
+		return bareCommand(bin, agent)
+	}
+	return pwshCommand(bin, agent)
+}
+
 // plainWindowsPath reports whether a Windows path can be written without
 // quotes in both cmd.exe and PowerShell: letters, digits and the few
 // punctuation characters neither shell gives a meaning to.

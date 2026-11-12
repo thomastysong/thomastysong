@@ -1,0 +1,106 @@
+# agent: copilot-cli
+# scope: managed
+# path: /etc/github-copilot/policy.d/spoor.json
+# action: create
+{
+  "version": 1,
+  "hooks": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "bash": "'/usr/local/bin/spoor' hook --agent copilot-cli",
+        "powershell": "& '/usr/local/bin/spoor' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "type": "command",
+        "bash": "'/usr/local/bin/spoor' hook --agent copilot-cli",
+        "powershell": "& '/usr/local/bin/spoor' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "PreToolUse": [
+      {
+        "type": "command",
+        "bash": "'/usr/local/bin/spoor' hook --agent copilot-cli",
+        "powershell": "& '/usr/local/bin/spoor' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "type": "command",
+        "bash": "'/usr/local/bin/spoor' hook --agent copilot-cli",
+        "powershell": "& '/usr/local/bin/spoor' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "PostToolUse": [
+      {
+        "type": "command",
+        "bash": "'/usr/local/bin/spoor' hook --agent copilot-cli",
+        "powershell": "& '/usr/local/bin/spoor' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "type": "command",
+        "bash": "'/usr/local/bin/spoor' hook --agent copilot-cli",
+        "powershell": "& '/usr/local/bin/spoor' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "subagentStart": [
+      {
+        "type": "command",
+        "bash": "'/usr/local/bin/spoor' hook --agent copilot-cli",
+        "powershell": "& '/usr/local/bin/spoor' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "SubagentStop": [
+      {
+        "type": "command",
+        "bash": "'/usr/local/bin/spoor' hook --agent copilot-cli",
+        "powershell": "& '/usr/local/bin/spoor' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "bash": "'/usr/local/bin/spoor' hook --agent copilot-cli",
+        "powershell": "& '/usr/local/bin/spoor' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "PreCompact": [
+      {
+        "type": "command",
+        "bash": "'/usr/local/bin/spoor' hook --agent copilot-cli",
+        "powershell": "& '/usr/local/bin/spoor' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "ErrorOccurred": [
+      {
+        "type": "command",
+        "bash": "'/usr/local/bin/spoor' hook --agent copilot-cli",
+        "powershell": "& '/usr/local/bin/spoor' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "SessionEnd": [
+      {
+        "type": "command",
+        "bash": "'/usr/local/bin/spoor' hook --agent copilot-cli",
+        "powershell": "& '/usr/local/bin/spoor' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ]
+  }
+}
+# ----

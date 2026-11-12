@@ -148,7 +148,9 @@ func newline(src []byte) string {
 	return "\n"
 }
 
-// putBlock replaces the marked block, or appends it after one blank line.
+// putBlock replaces the marked block, or appends it after exactly one
+// line break: that ends an unterminated last line, or leaves one blank
+// line after a terminated one. cutBlock relies on there being one.
 func putBlock(src []byte, b block, text, nl string) []byte {
 	if b.found {
 		out := make([]byte, 0, len(src)+len(text))
@@ -158,20 +160,21 @@ func putBlock(src []byte, b block, text, nl string) []byte {
 	}
 	out := append([]byte(nil), src...)
 	if len(out) > 0 {
-		if !bytes.HasSuffix(out, []byte("\n")) {
-			out = append(out, nl...)
-		}
 		out = append(out, nl...)
 	}
 	return append(out, text...)
 }
 
-// cutBlock removes the marked block and the blank line putBlock put in
-// front of it.
+// cutBlock removes the marked block and the line break putBlock put in
+// front of it: the blank line before the block, or, for a block at the end
+// of the file, the break that ended the previous line, so a file that had
+// no final newline gets its exact bytes back.
 func cutBlock(src []byte, b block) []byte {
 	start := b.start
+	atEnd := b.end == len(src)
 	for _, sep := range []string{"\r\n", "\n"} {
-		if bytes.HasSuffix(src[:start], []byte(sep+sep)) {
+		head := src[:start]
+		if bytes.HasSuffix(head, []byte(sep+sep)) || (atEnd && bytes.HasSuffix(head, []byte(sep))) {
 			start -= len(sep)
 			break
 		}

@@ -264,18 +264,90 @@ func (d *jsonDoc) addElem(arr *node, v any) []byte {
 }
 
 // drop removes child i of container c together with the separator that
-// insert would have written in front of it.
+// insert would have written in front of it, so dropping what insert added
+// gives the original bytes back. Comments in the separator (JSONC, only
+// edited under Force) stay where they are: a comment after the previous
+// member's comma belongs to that member, one before the next member to
+// that member.
 func (d *jsonDoc) drop(c *node, i int) []byte {
 	n := c.children()
 	start, end := c.span(i)
-	switch {
-	case n == 1:
+	if n == 1 {
 		return d.splice(c.start+1, c.end-1, "")
-	case i > 0:
-		_, prevEnd := c.span(i - 1)
-		return d.splice(prevEnd, end, "")
-	default:
-		nextStart, _ := c.span(1)
+	}
+	var before []byte // separator in front of the child, if any
+	prevEnd := -1
+	if i > 0 {
+		_, prevEnd = c.span(i - 1)
+		before = d.src[prevEnd:start]
+	}
+	if i < n-1 {
+		nextStart, _ := c.span(i + 1)
+		after := d.src[end:nextStart]
+		if hasComment(after) || hasComment(before) {
+			// Remove the child, its own comma and the blanks after it;
+			// comments on either side stay.
+			if comma := separatorComma(after); comma >= 0 {
+				j := end + comma + 1
+				for j < nextStart && isBlank(d.src[j]) {
+					j++
+				}
+				return d.splice(start, j, "")
+			}
+		}
+		if i > 0 {
+			return d.splice(prevEnd, end, "")
+		}
 		return d.splice(start, nextStart, "")
 	}
+	// The last child: insert put ",<newline><indent>" in front of it.
+	if hasComment(before) {
+		comma := separatorComma(before)
+		nl := bytes.LastIndexByte(before, '\n')
+		if comma >= 0 && nl > comma && blank(before[nl+1:]) {
+			out := make([]byte, 0, len(d.src))
+			out = append(out, d.src[:prevEnd+comma]...)
+			out = append(out, d.src[prevEnd+comma+1:prevEnd+nl]...)
+			return append(out, d.src[end:]...)
+		}
+	}
+	return d.splice(prevEnd, end, "")
+}
+
+func isBlank(c byte) bool { return c == ' ' || c == '\t' || c == '\r' || c == '\n' }
+
+// hasComment reports whether a separator region holds a comment. Regions
+// between two values contain no strings, so a plain search is exact.
+func hasComment(region []byte) bool {
+	return bytes.Contains(region, []byte("//")) || bytes.Contains(region, []byte("/*"))
+}
+
+// separatorComma finds the comma of a separator region, skipping comments.
+func separatorComma(region []byte) int {
+	for i := 0; i < len(region); i++ {
+		switch {
+		case region[i] == ',':
+			return i
+		case region[i] == '/' && i+1 < len(region) && region[i+1] == '/':
+			for i < len(region) && region[i] != '\n' {
+				i++
+			}
+		case region[i] == '/' && i+1 < len(region) && region[i+1] == '*':
+			k := bytes.Index(region[i+2:], []byte("*/"))
+			if k < 0 {
+				return -1
+			}
+			i += k + 3
+		}
+	}
+	return -1
+}
+
+func blank(b []byte) bool {
+	for _, c := range b {
+		if c != ' ' && c != '\t' && c != '\r' {
+			return false
+		}
+	}
+	return true
 }

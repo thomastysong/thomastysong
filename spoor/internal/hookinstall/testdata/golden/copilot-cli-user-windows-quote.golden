@@ -1,0 +1,106 @@
+# agent: copilot-cli
+# scope: user
+# path: /C/Users/dev/.copilot/hooks/spoor.json
+# action: create
+{
+  "version": 1,
+  "hooks": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "bash": "'C:\\Users\\O'\\''Brien Tools\\spoor.exe' hook --agent copilot-cli",
+        "powershell": "& 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "type": "command",
+        "bash": "'C:\\Users\\O'\\''Brien Tools\\spoor.exe' hook --agent copilot-cli",
+        "powershell": "& 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "PreToolUse": [
+      {
+        "type": "command",
+        "bash": "'C:\\Users\\O'\\''Brien Tools\\spoor.exe' hook --agent copilot-cli",
+        "powershell": "& 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "type": "command",
+        "bash": "'C:\\Users\\O'\\''Brien Tools\\spoor.exe' hook --agent copilot-cli",
+        "powershell": "& 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "PostToolUse": [
+      {
+        "type": "command",
+        "bash": "'C:\\Users\\O'\\''Brien Tools\\spoor.exe' hook --agent copilot-cli",
+        "powershell": "& 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "type": "command",
+        "bash": "'C:\\Users\\O'\\''Brien Tools\\spoor.exe' hook --agent copilot-cli",
+        "powershell": "& 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "subagentStart": [
+      {
+        "type": "command",
+        "bash": "'C:\\Users\\O'\\''Brien Tools\\spoor.exe' hook --agent copilot-cli",
+        "powershell": "& 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "SubagentStop": [
+      {
+        "type": "command",
+        "bash": "'C:\\Users\\O'\\''Brien Tools\\spoor.exe' hook --agent copilot-cli",
+        "powershell": "& 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "bash": "'C:\\Users\\O'\\''Brien Tools\\spoor.exe' hook --agent copilot-cli",
+        "powershell": "& 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "PreCompact": [
+      {
+        "type": "command",
+        "bash": "'C:\\Users\\O'\\''Brien Tools\\spoor.exe' hook --agent copilot-cli",
+        "powershell": "& 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "ErrorOccurred": [
+      {
+        "type": "command",
+        "bash": "'C:\\Users\\O'\\''Brien Tools\\spoor.exe' hook --agent copilot-cli",
+        "powershell": "& 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ],
+    "SessionEnd": [
+      {
+        "type": "command",
+        "bash": "'C:\\Users\\O'\\''Brien Tools\\spoor.exe' hook --agent copilot-cli",
+        "powershell": "& 'C:\\Users\\O''Brien Tools\\spoor.exe' hook --agent copilot-cli",
+        "timeoutSec": 10
+      }
+    ]
+  }
+}
+# ----

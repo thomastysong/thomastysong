@@ -35,11 +35,12 @@ func writableByOthers(path string, fi os.FileInfo) string {
 	return ""
 }
 
-// hardenIn makes name (a file in r, or "." for the directory itself)
-// root-owned and not writable by group or others. Ownership can only be
-// repaired by root; an unprivileged caller gets the mode fixed and Status
-// reports the rest.
-func hardenIn(r *os.Root, name string) error {
+// hardenIn makes name (a file or directory in r, or "." for the directory
+// itself) root-owned and not writable by group or others. Ownership can
+// only be repaired by root; an unprivileged caller gets the mode fixed and
+// Status reports the rest. dir only matters on Windows, where files and
+// directories get different access lists.
+func hardenIn(r *os.Root, name string, dir bool) error {
 	fi, err := r.Lstat(name)
 	if err != nil {
 		return err
@@ -56,16 +57,6 @@ func hardenIn(r *os.Root, name string) error {
 		return r.Chmod(name, perm&^0o022)
 	}
 	return nil
-}
-
-// hardenPath does the same for a directory addressed by path.
-func hardenPath(path string) error {
-	r, err := os.OpenRoot(path)
-	if err != nil {
-		return err
-	}
-	defer r.Close()
-	return hardenIn(r, ".")
 }
 
 // linkTrusted reports whether a symbolic link found on the way to a target

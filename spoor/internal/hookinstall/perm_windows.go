@@ -5,6 +5,7 @@ package hookinstall
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"golang.org/x/sys/windows"
 )
@@ -56,24 +57,29 @@ func setSDDL(path, sddl string) error {
 		owner, nil, dacl, nil)
 }
 
-// hardenIn sets the managed DACL on a file of the pinned directory, or on
-// the directory itself for ".". The Win32 call takes a path, so the name is
-// resolved against the directory's own path.
-func hardenIn(r *os.Root, name string) error {
-	if name == "." {
-		return hardenPath(r.Name())
+// hardenIn sets the managed DACL on a file or directory of the pinned
+// directory, or on the directory itself for ".". The Win32 call takes a
+// path, so the name is resolved against the directory's own path; the
+// caller has checked that it is not a reparse point. Setting the owner to
+// Administrators needs SeRestorePrivilege or ownership, which an elevated
+// installer has.
+func hardenIn(r *os.Root, name string, dir bool) error {
+	path := r.Name()
+	if name != "." {
+		fi, err := r.Lstat(name)
+		if err != nil {
+			return err
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%s is a reparse point", name)
+		}
+		path = strings.TrimRight(path, `\`) + `\` + name
 	}
-	fi, err := r.Lstat(name)
-	if err != nil {
-		return err
+	if dir {
+		return setSDDL(path, managedDirSDDL)
 	}
-	if fi.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("%s is a reparse point", name)
-	}
-	return setSDDL(r.Name()+`\`+name, managedFileSDDL)
+	return setSDDL(path, managedFileSDDL)
 }
-
-func hardenPath(path string) error { return setSDDL(path, managedDirSDDL) }
 
 // linkTrusted: no reparse point on the way to a hook file is followed. The
 // system junctions that exist on a stock installation (Documents and

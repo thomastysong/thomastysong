@@ -1,0 +1,136 @@
+// Package procmon is spoor's OS-side view of AI agents: which agent
+// processes run, under what flags and parents, and which processes they
+// start. It corroborates what hooks and transcripts (both written by the
+// agent, as the user) report, and it sees agents that have neither.
+//
+// # Model
+//
+// The monitor keeps a table of every visible process with a handful of
+// fields (pid, parent, start time, name, executable, uid, the agent marker
+// variables in its environment). An agent root is a process the catalog
+// identifies as a product of kind "agent" (catalog.MatchProcessDetail: name,
+// install path, package path or command-line evidence). Every process below
+// a root belongs to the nearest root above it; the decision is made when
+// the process is first seen and kept when the process is re-parented to
+// init, because a daemon an agent started is still the agent's doing.
+// Process identity is (pid, start time): a recycled pid is a new process.
+//
+// Nesting rules: a process of the same agent directly under a root is that
+// root's helper or relaunch (Gemini CLI re-executes itself); the payload of
+// a launcher root (npx, uvx, bunx naming the package) is the same agent;
+// any other agent below an agent is a nested agent with its own root
+// (AgentProc.ParentAgent, rule R47).
+//
+// IDEs and desktop apps (catalog kinds other than "agent") are not roots:
+// most of what runs under an editor was started by a person. Their agent
+// runs are attributed through the marker variables the catalog lists
+// (CURSOR_AGENT, CLAUDE_CODE_IS_COWORK, ...). Marker attribution also covers
+// agents the catalog cannot identify (a renamed or rebuilt binary): when a
+// process carries a strong marker of an agent (a session variable, or an
+// EnvMarkers entry the catalog has verified) and its parent does not, the
+// parent is the agent and becomes a root with Evidence "env_marker". This
+// is the marker-boundary technique from the OS telemetry research; it
+// fails against an agent whose children's environment is scrubbed.
+//
+// # Exec providers
+//
+// In order of preference:
+//
+//  1. cn_proc, the Linux netlink process connector (Options.ExecEvents).
+//     Fork, exec and exit events for every process on the host; on exec the
+//     monitor reads /proc/<pid> at once, in the reader goroutine, before a
+//     short-lived process is gone. A netlink overrun (ENOBUFS) triggers a
+//     full rescan, and a full rescan runs every 30 s regardless. Messages
+//     not sent by the kernel (netlink port id 0) are dropped. Needs root,
+//     or kernel 6.6+, and the initial user and pid namespaces (the kernel
+//     ignores LISTEN from elsewhere without an answer; the monitor waits
+//     one second for the acknowledgement and falls back).
+//  2. osquery (internal/osqexec): exec rows from a running osqueryd's
+//     evented process table over its extension socket, attributed through
+//     the same table (exited processes stay answerable as tombstones for
+//     two minutes, because rows arrive 2 to 15 s after the exec).
+//  3. poll: the process table is listed every Idle interval (2 s), and the
+//     descendants of live roots every Active interval (200 ms) through
+//     /proc/<pid>/task/<tid>/children. Polling sees agent roots and
+//     long-lived children; it misses most processes shorter than the
+//     interval (measured: 7 of 120 short processes at 1 s), so it is not
+//     exec ground truth and ExecHealthy is always false under it.
+//
+// Polling runs under every provider: it finds agents that were running
+// before the monitor started and repairs the table after overruns. A scan
+// never takes more than about 5% of a core: its interval stretches to
+// twenty times its own duration on hosts with very many processes.
+//
+// # Exec self-test
+//
+// A provider can report itself active while delivering nothing. Every five
+// minutes the monitor runs /usr/bin/true (cmd.exe /c rem on Windows) with a
+// random nonce argument, directly with os.StartProcess (this package does
+// not import os/exec), and checks that the active provider reported that
+// exec within 5 s (cn_proc) or 90 s (osquery). ExecHealthy reports the
+// result. The canary itself is never emitted.
+//
+// # Events
+//
+// agent.process.start (TS = process start, deterministic id so a sensor
+// restart re-reports an agent with the same id), agent.process.stop
+// (Outcome carries the exit status when the connector saw the exit), and
+// process.exec for every process an agent root (or marker) owns. All carry
+// Source process (osquery rows keep Source osquery), Fidelity observed,
+// Integrity root when the monitor runs privileged. AgentProc attributes
+// without a contract field are labels: headless, bare, hook_free,
+// persistence_free, lifecycle_parent, config_home, parent_agent, evidence.
+// process.exec events are capped at 20 per second per agent root (500 per
+// second overall); the number dropped is attached as labels.exec_dropped to
+// the next event of that root and counted in Stats.RateDropped.
+//
+// # What is read and what is emitted
+//
+// Command lines go through classify.RedactArgs and are bounded (64
+// arguments, 1 KiB each, 8 KiB in all; cuts are listed in Truncated).
+// Environments are read (at most 256 KiB) to find marker variable NAMES;
+// the only values kept are session ids (only when they look like plain
+// identifiers) and HomeEnv overrides such as CLAUDE_CONFIG_DIR. npm's
+// lifecycle variables are read to decide LifecycleParent and then dropped.
+// Nothing read from a process is ever executed or opened as a path.
+//
+// # Kill switch
+//
+// While platform.Disabled() is true the monitor stops every provider, emits
+// nothing and Source reports "disabled"; when the file goes away it rescans
+// and carries on.
+//
+// # Platforms and limits
+//
+//   - Linux: procfs is read directly for the cheap identity pass (one stat
+//     read per process) and children lists; full records come from
+//     internal/platform so start times match every other spoor component.
+//     With Options.HostRoot (a sensor container that has the host's /proc
+//     mounted at <HostRoot>/proc instead of sharing the host pid namespace)
+//     everything is read from that mount, user names from
+//     <HostRoot>/etc/passwd. cn_proc is unavailable in that layout (it
+//     needs the initial pid namespace).
+//   - macOS and Windows: every scan is platform.Processes; there is no
+//     children shortcut, so the Active interval stretches with scan cost.
+//     cn_proc does not exist; osquery (es_process_events,
+//     process_etw_events) is the only exec provider. These code paths are
+//     compiled and vetted but were not executed where this package was
+//     built. macOS withholds the environment of hardened processes even
+//     from root, which blinds marker attribution there.
+//   - Reading another user's environment needs root (or CAP_SYS_PTRACE);
+//     unprivileged, only the monitor's own user's processes have markers,
+//     session ids and config homes.
+//   - cn_proc reports exec after it happened; a process that exits within
+//     microseconds can be gone before /proc is read (Stats.ReadMisses).
+//   - HookFree cannot see Gemini CLI's hooksConfig.enabled=false: it is a
+//     settings-file key, reported by discovery as the hooks_disabled risk
+//     flag, not visible on the command line or in the environment.
+//   - The headless, bare, hook-free and persistence-free tables in
+//     traits.go cover claude-code, codex, gemini-cli, copilot-cli,
+//     cursor-agent and kiro-cli; entries not checked against a primary
+//     source are marked UNVERIFIED there, as are the extension-host and URL
+//     handler spellings in lifecycle.go.
+//   - osquery rows are attributed by pid; a pid reused within the seconds
+//     before a row arrives can be attributed to the wrong process (the same
+//     limit internal/osqexec documents).
+package procmon

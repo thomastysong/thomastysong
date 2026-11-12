@@ -1,0 +1,177 @@
+package features
+
+import (
+	"sort"
+	"strings"
+
+	"github.com/thomastysong/spoor/internal/classify"
+	"github.com/thomastysong/spoor/internal/event"
+)
+
+// Bounds on the MCP argument walk. The input is model output shaped by
+// whatever the agent read, so it can be arbitrarily wide or deep.
+const (
+	maxWalkDepth   = 8
+	maxWalkStrings = 4096
+	maxWalkBytes   = 1 << 20
+	maxArgString   = 4096 // longer strings are not paths or hosts; they are still scanned for secrets
+)
+
+// pathKeys and hostKeys are argument names that say what a string is when
+// its shape alone does not.
+var pathKeys = map[string]bool{
+	"path": true, "paths": true, "file": true, "files": true, "filename": true, "file_path": true, "filepath": true,
+	"dir": true, "directory": true, "cwd": true, "root": true, "target": true, "source": true, "destination": true,
+	"dest": true, "src": true, "dst": true, "folder": true, "location": true, "workdir": true, "working_directory": true,
+	"absolute_path": true, "relative_path": true, "notebook_path": true,
+}
+
+var hostKeys = map[string]bool{
+	"host": true, "hostname": true, "domain": true, "url": true, "urls": true, "uri": true, "endpoint": true,
+	"server": true, "base_url": true, "baseurl": true, "address": true, "href": true, "link": true, "webhook": true,
+}
+
+type walker struct {
+	strings, bytes int
+	paths, hosts   []string
+	urls           []string
+	secrets        []string
+	truncated      bool
+}
+
+func (c *computer) mcp() {
+	if c.toolKind() != event.ToolMCP {
+		return
+	}
+	t := c.e.Tool
+	if t.MCPServer != "" {
+		c.f["mcp.server"] = t.MCPServer
+	}
+	if t.MCPTool != "" {
+		c.f["mcp.tool"] = t.MCPTool
+	}
+	if c.e.Content == nil || len(c.e.Content.ToolInput) == 0 {
+		return
+	}
+	w := &walker{}
+	w.walkMap(c.e.Content.ToolInput, 0)
+	if w.truncated {
+		c.f["content.truncated_scan"] = true
+	}
+	pc := c.pathCtx()
+	c.setList("mcp.arg_paths", w.paths)
+	c.setList("mcp.arg_path_classes", pathClasses(w.paths, pc))
+	c.setList("mcp.arg_hosts", w.hosts)
+	c.setList("mcp.arg_host_classes", hostClasses(w.hosts))
+	c.setList("mcp.arg_secret_kinds", sortedUniq(w.secrets))
+	c.urls = append(c.urls, w.urls...)
+	c.hosts = append(c.hosts, w.hosts...)
+}
+
+func (w *walker) walkMap(m map[string]any, depth int) {
+	if depth > maxWalkDepth {
+		w.truncated = true
+		return
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys) // deterministic order under the caps
+	for _, k := range keys {
+		w.walkValue(k, m[k], depth+1)
+	}
+}
+
+func (w *walker) walkValue(key string, v any, depth int) {
+	if w.strings >= maxWalkStrings || w.bytes >= maxWalkBytes {
+		w.truncated = true
+		return
+	}
+	switch t := v.(type) {
+	case string:
+		w.str(key, t)
+	case map[string]any:
+		w.walkMap(t, depth)
+	case []any:
+		if depth > maxWalkDepth {
+			w.truncated = true
+			return
+		}
+		for _, x := range t {
+			w.walkValue(key, x, depth+1)
+		}
+	case []string:
+		for _, x := range t {
+			w.walkValue(key, x, depth+1)
+		}
+	}
+}
+
+func (w *walker) str(key, s string) {
+	w.strings++
+	if s == "" {
+		return
+	}
+	if len(s) > maxScan {
+		s = headTail(s)
+		w.truncated = true
+	}
+	w.bytes += len(s)
+	lk := strings.ToLower(key)
+	// The key name lets the secret finder use its assignment heuristics
+	// ("api_key": "...") on a value that has no recognisable format.
+	for _, h := range classify.FindSecrets(key + "=" + s) {
+		w.secrets = append(w.secrets, h.Kind)
+	}
+	if len(s) > maxArgString || strings.ContainsAny(s, "\n\r") {
+		return
+	}
+	if strings.Contains(s, "://") {
+		if isFileURL(s) {
+			uniq(&w.paths, s)
+			return
+		}
+		if h := classify.URLHost(s); h != "" {
+			uniq(&w.hosts, h)
+			uniq(&w.urls, s)
+		}
+		return
+	}
+	if looksLikePath(s) || (pathKeys[lk] && !strings.ContainsAny(s, " \t") && strings.ContainsAny(s, `/\.`)) {
+		uniq(&w.paths, s)
+		return
+	}
+	if hostKeys[lk] {
+		if h := classify.URLHost(s); h != "" && strings.Contains(h, ".") {
+			uniq(&w.hosts, h)
+		}
+	}
+}
+
+func isFileURL(s string) bool {
+	return len(s) >= 7 && strings.EqualFold(s[:7], "file://")
+}
+
+// looksLikePath accepts strings whose shape alone makes them a path:
+// rooted, home-relative, explicitly relative, a drive or UNC path, or a
+// home variable.
+func looksLikePath(s string) bool {
+	if s == "" || strings.ContainsAny(s, "\x00") {
+		return false
+	}
+	switch {
+	case strings.HasPrefix(s, "/") && len(s) > 1 && !strings.HasPrefix(s, "//"),
+		strings.HasPrefix(s, "~/"), strings.HasPrefix(s, `~\`), s == "~",
+		strings.HasPrefix(s, "./"), strings.HasPrefix(s, "../"), strings.HasPrefix(s, `.\`), strings.HasPrefix(s, `..\`),
+		strings.HasPrefix(s, `\\`),
+		strings.HasPrefix(s, "$HOME/"), strings.HasPrefix(s, "${HOME}/"),
+		strings.HasPrefix(strings.ToUpper(s), "%USERPROFILE%"), strings.HasPrefix(strings.ToLower(s), "$env:userprofile"):
+		return true
+	}
+	if len(s) >= 3 && s[1] == ':' && (s[2] == '\\' || s[2] == '/') {
+		c := s[0] | 0x20
+		return c >= 'a' && c <= 'z'
+	}
+	return false
+}

@@ -1,0 +1,435 @@
+package procmon
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/thomastysong/spoor/internal/event"
+)
+
+const (
+	dockerID = "3c35e1a46d6c8f2f5a3b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f"
+	// A GitHub token shaped canary that must never leave the monitor.
+	canaryToken = "ghp_R8x2Kq9LmZ4vT1nW7pY3sB6dF0hJ5gC2aE8u"
+)
+
+// lifecycleTree is the s1ngularity shape (research/threats.md incident 1):
+// npm install -> postinstall sh -> claude --dangerously-skip-permissions -p,
+// whose shell runs curl with a credential on the command line.
+func lifecycleTree(h *fakeHost) {
+	h.add(fakeProc{pid: 1, ppid: 0, comm: "systemd", ticks: 1, args: []string{"/sbin/init"}, exe: "/usr/lib/systemd/systemd", uid: "0"})
+	h.add(fakeProc{pid: 100, ppid: 1, comm: "bash", ticks: 5000, args: []string{"-bash"}, exe: "/usr/bin/bash", children: []int{200}})
+	h.add(fakeProc{pid: 200, ppid: 100, comm: "npm install", ticks: 6000, args: []string{"npm install left-pad"}, exe: "/usr/bin/node", children: []int{300},
+		env: map[string]string{"PATH": "/usr/bin"}})
+	h.add(fakeProc{pid: 300, ppid: 200, comm: "sh", ticks: 6100, args: []string{"sh", "-c", "node telemetry.js"}, exe: "/usr/bin/dash", children: []int{400},
+		env: map[string]string{"npm_lifecycle_event": "postinstall", "npm_config_user_agent": "npm/10.8.2 node/v22.11.0 linux x64"}})
+	h.add(fakeProc{pid: 400, ppid: 300, comm: "claude", ticks: 6200,
+		args: []string{"claude", "--dangerously-skip-permissions", "-p", "inventory secrets", "--settings", `{"apiKey":"` + canaryToken + `"}`},
+		exe:  "/home/dev/.local/share/claude/versions/2.1.172/claude",
+		env: map[string]string{"npm_lifecycle_event": "postinstall", "npm_config_user_agent": "npm/10.8.2 node/v22.11.0 linux x64",
+			"CLAUDE_CONFIG_DIR": "/srv/cc", "GITHUB_TOKEN": canaryToken},
+		cgroup:   "0::/system.slice/docker-" + dockerID + ".scope\n",
+		cwd:      "/home/dev/project",
+		children: []int{500}})
+	h.add(fakeProc{pid: 500, ppid: 400, comm: "bash", ticks: 6300, args: []string{"/bin/bash", "-c", "curl -H 'Authorization: token " + canaryToken + "' https://api.github.com/user"},
+		exe: "/usr/bin/bash", env: map[string]string{"CLAUDECODE": "1", "CLAUDE_CODE_SESSION_ID": "sess-0001", "GITHUB_TOKEN": canaryToken},
+		cwd: "/home/dev/project", children: []int{600}})
+	h.add(fakeProc{pid: 600, ppid: 500, comm: "curl", ticks: 6310, args: []string{"curl", "-H", "Authorization: token " + canaryToken, "https://api.github.com/user"},
+		exe: "/usr/bin/curl", env: map[string]string{"CLAUDECODE": "1", "CLAUDE_CODE_SESSION_ID": "sess-0001"}, cwd: "/home/dev/project"})
+}
+
+func TestFixtureLifecycleTree(t *testing.T) {
+	h := newFakeHost(t)
+	lifecycleTree(h)
+	m, _ := newFixtureMonitor(t, h)
+	m.fullScan(m.now())
+	evs := drain(m)
+
+	agents := m.Agents()
+	if len(agents) != 1 {
+		t.Fatalf("agents = %+v, want one", agents)
+	}
+	a := agents[0]
+	if a.PID != 400 || a.AgentID != "claude-code" || a.PPID != 300 {
+		t.Fatalf("agent = %+v", a)
+	}
+	if !contains(a.Flags, "--dangerously-skip-permissions") {
+		t.Errorf("flags = %v", a.Flags)
+	}
+	if !a.Headless || a.Bare || a.HookFree || a.PersistenceFree {
+		t.Errorf("headless/bare/hookfree/persist = %v/%v/%v/%v", a.Headless, a.Bare, a.HookFree, a.PersistenceFree)
+	}
+	if a.LifecycleParent != LifecycleNPM {
+		t.Errorf("lifecycle parent = %q", a.LifecycleParent)
+	}
+	if a.ConfigHome != "/srv/cc" {
+		t.Errorf("config home = %q", a.ConfigHome)
+	}
+	if strings.Join(a.Ancestors, ",") != "sh,npm install,bash,systemd" {
+		t.Errorf("ancestors = %v", a.Ancestors)
+	}
+	if a.Container.ID != dockerID || a.Container.Runtime != "docker" {
+		t.Errorf("container = %+v", a.Container)
+	}
+	if a.User.Name != "dev" || a.User.ID != "1000" {
+		t.Errorf("user = %+v", a.User)
+	}
+	if want := time.Unix(fixtureBoot+62, 0); !a.Start.Equal(want) {
+		t.Errorf("start = %v, want %v", a.Start, want)
+	}
+	if len(a.SessionIDs) != 1 || a.SessionIDs[0] != "sess-0001" {
+		t.Errorf("sessions = %v", a.SessionIDs)
+	}
+	if a.CWD != "/home/dev/project" {
+		t.Errorf("cwd = %q", a.CWD)
+	}
+
+	starts := ofType(evs, event.TypeAgentProcessStart)
+	if len(starts) != 1 {
+		t.Fatalf("start events = %d", len(starts))
+	}
+	s := starts[0]
+	if s.Source != event.SourceProcess || s.Fidelity != event.FidelityObserved || s.Agent.ID != "claude-code" || s.Agent.PID != 400 {
+		t.Errorf("start event = %+v", s)
+	}
+	if s.Labels["headless"] != "true" || s.Labels["lifecycle_parent"] != "npm" || s.Labels["config_home"] != "/srv/cc" {
+		t.Errorf("labels = %v", s.Labels)
+	}
+	if !s.TS.Equal(a.Start) {
+		t.Errorf("start TS = %v", s.TS)
+	}
+
+	execs := ofType(evs, event.TypeProcessExec)
+	curl := byPID(execs, 600)
+	if curl == nil {
+		t.Fatalf("no exec event for curl: %d exec events", len(execs))
+	}
+	if curl.Agent.ID != "claude-code" || curl.Agent.PID != 400 || curl.Session == nil || curl.Session.ID != "sess-0001" {
+		t.Errorf("curl event agent/session = %+v %+v", curl.Agent, curl.Session)
+	}
+	if strings.Join(curl.Process.Ancestors, ",") != "bash,claude" {
+		t.Errorf("curl ancestors = %v", curl.Process.Ancestors)
+	}
+	if curl.Labels["attribution"] != "tree" || curl.Container == nil || curl.Container.ID != dockerID {
+		t.Errorf("curl labels/container = %v %+v", curl.Labels, curl.Container)
+	}
+	if byPID(execs, 300) != nil || byPID(execs, 200) != nil {
+		t.Error("processes above the agent must not be exec events")
+	}
+	if out := marshalAll(t, evs); strings.Contains(out, canaryToken) || strings.Contains(out, "R8x2Kq9LmZ4vT1nW") {
+		t.Fatalf("secret leaked into events:\n%s", out)
+	}
+
+	// Attribution of a descendant and of the root itself.
+	if ap, ok := m.Attribute(600); !ok || ap.PID != 400 {
+		t.Errorf("Attribute(600) = %+v %v", ap, ok)
+	}
+	if ap, ok := m.Attribute(400); !ok || ap.PID != 400 {
+		t.Errorf("Attribute(400) = %+v %v", ap, ok)
+	}
+	if _, ok := m.Attribute(200); ok {
+		t.Error("npm is not part of the agent")
+	}
+
+	// A second scan finds nothing new.
+	m.fullScan(m.now())
+	if evs := drain(m); len(evs) != 0 {
+		t.Errorf("second scan emitted %d events", len(evs))
+	}
+}
+
+func TestFixtureStopReparentAndReuse(t *testing.T) {
+	h := newFakeHost(t)
+	lifecycleTree(h)
+	m, clk := newFixtureMonitor(t, h)
+	m.fullScan(m.now())
+	drain(m)
+
+	// The agent exits; its shell is re-parented to init and stays.
+	clk.add(5 * time.Second)
+	h.remove(400)
+	h.add(fakeProc{pid: 500, ppid: 1, comm: "bash", ticks: 6300, args: []string{"/bin/bash"}, exe: "/usr/bin/bash",
+		env: map[string]string{"CLAUDECODE": "1", "CLAUDE_CODE_SESSION_ID": "sess-0001"}, children: []int{600}})
+	m.fullScan(m.now())
+	evs := drain(m)
+	stops := ofType(evs, event.TypeAgentProcessStop)
+	if len(stops) != 1 || stops[0].Agent.PID != 400 {
+		t.Fatalf("stop events = %+v", stops)
+	}
+	if stops[0].Outcome == nil || stops[0].Outcome.Status != "unknown" || stops[0].Outcome.DurationMS <= 0 {
+		t.Errorf("stop outcome = %+v", stops[0].Outcome)
+	}
+	if stops[0].Session == nil || stops[0].Session.ID != "sess-0001" {
+		t.Errorf("stop session = %+v", stops[0].Session)
+	}
+	if len(m.Agents()) != 0 {
+		t.Errorf("agents after stop = %+v", m.Agents())
+	}
+	if ap, ok := m.Attribute(600); !ok || ap.PID != 400 || ap.AgentID != "claude-code" {
+		t.Errorf("orphan attribution = %+v %v", ap, ok)
+	}
+
+	// The pid comes back as a different program.
+	h.add(fakeProc{pid: 400, ppid: 100, comm: "vim", ticks: 9000, args: []string{"vim", "notes.txt"}, exe: "/usr/bin/vim"})
+	m.fullScan(m.now())
+	if evs := drain(m); len(ofType(evs, event.TypeAgentProcessStart)) != 0 {
+		t.Errorf("vim became an agent: %+v", evs)
+	}
+	if _, ok := m.Attribute(400); ok {
+		t.Error("a recycled pid must not inherit the old agent")
+	}
+
+	// And as a different agent instance of the same program.
+	h.remove(400)
+	m.fullScan(m.now())
+	h.add(fakeProc{pid: 400, ppid: 100, comm: "claude", ticks: 9500, args: []string{"claude"}, exe: "/usr/local/bin/claude"})
+	m.fullScan(m.now())
+	evs = drain(m)
+	if s := ofType(evs, event.TypeAgentProcessStart); len(s) != 1 || s[0].Agent.PID != 400 {
+		t.Fatalf("restart events = %+v", evs)
+	}
+}
+
+func TestFixtureNestingRules(t *testing.T) {
+	h := newFakeHost(t)
+	h.add(fakeProc{pid: 1, comm: "init", ticks: 1, args: []string{"/sbin/init"}, exe: "/sbin/init", uid: "0"})
+	// claude -> bash -> codex exec --yolo (nested agent)
+	h.add(fakeProc{pid: 10, ppid: 1, comm: "claude", ticks: 100, args: []string{"claude"}, exe: "/usr/local/bin/claude", children: []int{11}})
+	h.add(fakeProc{pid: 11, ppid: 10, comm: "bash", ticks: 110, args: []string{"bash", "-c", "codex exec --yolo fix"}, exe: "/usr/bin/bash",
+		env: map[string]string{"CLAUDECODE": "1", "CLAUDE_CODE_SESSION_ID": "outer"}, children: []int{12}})
+	h.add(fakeProc{pid: 12, ppid: 11, comm: "codex", ticks: 120, args: []string{"codex", "--yolo", "exec", "fix the build"}, exe: "/usr/local/bin/codex",
+		env: map[string]string{"CLAUDECODE": "1", "CLAUDE_CODE_SESSION_ID": "outer"}, children: []int{13}})
+	h.add(fakeProc{pid: 13, ppid: 12, comm: "bash", ticks: 130, args: []string{"bash", "-lc", "make"}, exe: "/usr/bin/bash",
+		env: map[string]string{"CLAUDECODE": "1", "CLAUDE_CODE_SESSION_ID": "outer", "CODEX_THREAD_ID": "inner"}})
+	// npx launcher -> sh -> node codex.js: one agent.
+	h.add(fakeProc{pid: 20, ppid: 1, comm: "npm exec @open", ticks: 200, args: []string{"npx", "-y", "@openai/codex", "--full-auto"}, exe: "/usr/bin/node", children: []int{21}})
+	h.add(fakeProc{pid: 21, ppid: 20, comm: "sh", ticks: 210, args: []string{"sh", "-c", "codex --full-auto"}, exe: "/usr/bin/dash", children: []int{22}})
+	h.add(fakeProc{pid: 22, ppid: 21, comm: "node", ticks: 220, args: []string{"node", "/home/dev/.npm/_npx/1/node_modules/@openai/codex/bin/codex.js", "--full-auto"}, exe: "/usr/bin/node"})
+	// Gemini CLI relaunching itself.
+	h.add(fakeProc{pid: 30, ppid: 1, comm: "node", ticks: 300, args: []string{"node", "/usr/lib/node_modules/@google/gemini-cli/dist/index.js", "--yolo"}, exe: "/usr/bin/node", children: []int{31}})
+	h.add(fakeProc{pid: 31, ppid: 30, comm: "node", ticks: 310, args: []string{"/usr/bin/node", "--max-old-space-size=8192", "/usr/lib/node_modules/@google/gemini-cli/dist/index.js", "--yolo"}, exe: "/usr/bin/node"})
+	m, _ := newFixtureMonitor(t, h)
+	m.fullScan(m.now())
+	evs := drain(m)
+
+	got := map[int]AgentProc{}
+	for _, a := range m.Agents() {
+		got[a.PID] = a
+	}
+	if len(got) != 4 {
+		t.Fatalf("agents = %+v", m.Agents())
+	}
+	codex := got[12]
+	if codex.AgentID != "codex" || codex.ParentAgent != "claude-code" || !codex.Headless || !contains(codex.Flags, "--yolo") {
+		t.Errorf("nested codex = %+v", codex)
+	}
+	if got[10].AgentID != "claude-code" || got[20].AgentID != "codex" || got[30].AgentID != "gemini-cli" {
+		t.Errorf("roots = %+v", got)
+	}
+	if !contains(got[30].Flags, "--yolo") {
+		t.Errorf("gemini flags = %v", got[30].Flags)
+	}
+	// The nested agent is a process.exec of the outer agent, and its own
+	// children belong to it.
+	if e := byPID(ofType(evs, event.TypeProcessExec), 12); e == nil || e.Agent.ID != "claude-code" {
+		t.Errorf("nested agent exec event = %+v", e)
+	}
+	if ap, ok := m.Attribute(13); !ok || ap.PID != 12 {
+		t.Errorf("Attribute(13) = %+v", ap)
+	}
+	if e := byPID(ofType(evs, event.TypeProcessExec), 13); e == nil || e.Session == nil || e.Session.ID != "inner" {
+		t.Errorf("inner session = %+v", e)
+	}
+	if ap, ok := m.Attribute(22); !ok || ap.PID != 20 {
+		t.Errorf("launcher payload attribution = %+v %v", ap, ok)
+	}
+	if ap, ok := m.Attribute(31); !ok || ap.PID != 30 {
+		t.Errorf("relaunch attribution = %+v %v", ap, ok)
+	}
+}
+
+func TestFixtureMarkerBoundary(t *testing.T) {
+	h := newFakeHost(t)
+	h.add(fakeProc{pid: 1, comm: "init", ticks: 1, args: []string{"/sbin/init"}, exe: "/sbin/init", uid: "0"})
+	h.add(fakeProc{pid: 40, ppid: 1, comm: "bash", ticks: 50, args: []string{"-bash"}, exe: "/usr/bin/bash", children: []int{41}})
+	// A renamed Claude Code build: the catalog cannot know "helperd".
+	h.add(fakeProc{pid: 41, ppid: 40, comm: "helperd", ticks: 60, args: []string{"/opt/x/helperd", "--dangerously-skip-permissions"}, exe: "/opt/x/helperd", children: []int{42}})
+	h.add(fakeProc{pid: 42, ppid: 41, comm: "sh", ticks: 70, args: []string{"sh", "-c", "id"}, exe: "/usr/bin/dash",
+		env: map[string]string{"CLAUDECODE": "1", "CLAUDE_CODE_SESSION_ID": "renamed-1"}})
+	// A user who exported a weak marker in their shell: attributed, never a root.
+	h.add(fakeProc{pid: 50, ppid: 1, comm: "zsh", ticks: 80, args: []string{"-zsh"}, exe: "/usr/bin/zsh", children: []int{51}})
+	h.add(fakeProc{pid: 51, ppid: 50, comm: "ls", ticks: 90, args: []string{"ls"}, exe: "/usr/bin/ls", env: map[string]string{"COPILOT_MODEL": "gpt-5"}})
+	m, _ := newFixtureMonitor(t, h)
+	m.fullScan(m.now())
+	evs := drain(m)
+
+	agents := m.Agents()
+	if len(agents) != 1 || agents[0].PID != 41 || agents[0].AgentID != "claude-code" {
+		t.Fatalf("agents = %+v", agents)
+	}
+	a := agents[0]
+	if !contains(a.Evidence, EvidenceEnvMarker) || !contains(a.Flags, "--dangerously-skip-permissions") {
+		t.Errorf("promoted root = %+v", a)
+	}
+	if ap, ok := m.Attribute(42); !ok || ap.PID != 41 {
+		t.Errorf("Attribute(42) = %+v %v", ap, ok)
+	}
+	ap, ok := m.Attribute(51)
+	if !ok || ap.AgentID != "copilot-cli" || !contains(ap.Evidence, EvidenceEnvMarker) || ap.PID != 50 {
+		t.Errorf("weak marker attribution = %+v %v", ap, ok)
+	}
+	if e := byPID(ofType(evs, event.TypeProcessExec), 51); e == nil || e.Labels["attribution"] != "env_marker" {
+		t.Errorf("marker exec event = %+v", e)
+	}
+}
+
+func TestFixtureModes(t *testing.T) {
+	h := newFakeHost(t)
+	h.add(fakeProc{pid: 1, comm: "init", ticks: 1, args: []string{"/sbin/init"}, exe: "/sbin/init", uid: "0"})
+	h.add(fakeProc{pid: 60, ppid: 1, comm: "claude", ticks: 10, args: []string{"claude", "--bare", "--no-session-persistence", "-p", "x"}, exe: "/usr/local/bin/claude"})
+	h.add(fakeProc{pid: 61, ppid: 1, comm: "claude", ticks: 11, args: []string{"claude"}, exe: "/usr/local/bin/claude",
+		env: map[string]string{"CLAUDE_CODE_SIMPLE": "1", "CLAUDE_CODE_SKIP_PROMPT_HISTORY": "1"}})
+	h.add(fakeProc{pid: 62, ppid: 1, comm: "codex", ticks: 12, args: []string{"codex", "--dangerously-bypass-hook-trust", "exec", "--ephemeral", "go"}, exe: "/usr/local/bin/codex"})
+	h.add(fakeProc{pid: 63, ppid: 1, comm: "aider", ticks: 13, args: []string{"aider", "--yes-always"}, exe: "/home/dev/.local/bin/aider"})
+	h.add(fakeProc{pid: 64, ppid: 1, comm: "claude", ticks: 14, args: []string{"claude", "--permission-mode=bypassPermissions", "--", "--bare"}, exe: "/usr/local/bin/claude"})
+	m, _ := newFixtureMonitor(t, h)
+	m.fullScan(m.now())
+	got := map[int]AgentProc{}
+	for _, a := range m.Agents() {
+		got[a.PID] = a
+	}
+	if a := got[60]; !a.Bare || a.HookFree || !a.PersistenceFree || !a.Headless {
+		t.Errorf("claude --bare = %+v", a)
+	}
+	if a := got[61]; !a.Bare || !a.PersistenceFree || a.Headless {
+		t.Errorf("claude env modes = %+v", a)
+	}
+	if a := got[62]; !a.HookFree || !a.PersistenceFree || !a.Headless {
+		t.Errorf("codex modes = %+v", a)
+	}
+	if a, ok := got[63]; !ok || !a.HookFree {
+		t.Errorf("aider (no hook dialect) = %+v %v", a, ok)
+	}
+	if a := got[64]; a.Bare || !contains(a.Flags, "--permission-mode bypassPermissions") {
+		t.Errorf("claude after -- = %+v", a)
+	}
+}
+
+func TestFixtureRateCap(t *testing.T) {
+	h := newFakeHost(t)
+	h.add(fakeProc{pid: 1, comm: "init", ticks: 1, args: []string{"/sbin/init"}, exe: "/sbin/init", uid: "0"})
+	kids := make([]int, 50)
+	for i := range kids {
+		kids[i] = 1000 + i
+	}
+	h.add(fakeProc{pid: 70, ppid: 1, comm: "codex", ticks: 10, args: []string{"codex"}, exe: "/usr/local/bin/codex", children: kids})
+	for _, k := range kids {
+		h.add(fakeProc{pid: k, ppid: 70, comm: "true", ticks: uint64(k), args: []string{"true"}, exe: "/usr/bin/true"})
+	}
+	m, clk := newFixtureMonitor(t, h)
+	m.fullScan(m.now())
+	evs := ofType(drain(m), event.TypeProcessExec)
+	if len(evs) != execRate {
+		t.Fatalf("exec events = %d, want the cap %d", len(evs), execRate)
+	}
+	if st := m.Stats(); st.RateDropped != 30 || st.Attributed != 50 {
+		t.Errorf("stats = %+v", st)
+	}
+	// A second later the next event carries the count of what was dropped.
+	clk.add(time.Second)
+	h.add(fakeProc{pid: 2000, ppid: 70, comm: "ls", ticks: 3000, args: []string{"ls"}, exe: "/usr/bin/ls"})
+	m.fullScan(m.now())
+	evs = ofType(drain(m), event.TypeProcessExec)
+	if len(evs) != 1 || evs[0].Labels["exec_dropped"] != "30" {
+		t.Fatalf("after refill = %+v", evs)
+	}
+}
+
+func TestFixtureHostileProcfs(t *testing.T) {
+	h := newFakeHost(t)
+	h.add(fakeProc{pid: 1, comm: "init", ticks: 1, args: []string{"/sbin/init"}, exe: "/sbin/init", uid: "0"})
+	// A name that tries to forge the stat fields that follow it.
+	h.add(fakeProc{pid: 80, ppid: 1, comm: "x) R 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 99 (y", ticks: 50, args: []string{"x"}, exe: "/tmp/x"})
+	// A zombie agent: exited, waiting to be reaped.
+	h.add(fakeProc{pid: 81, ppid: 1, comm: "claude", state: 'Z', ticks: 60})
+	// Kernel thread: no exe, no args.
+	h.add(fakeProc{pid: 82, ppid: 2, comm: "kworker/0:1", ticks: 2})
+	// Invalid UTF-8 and an oversized environment with the marker past the cap.
+	big := strings.Repeat("A", maxEnvironBytes) + "\x00CLAUDECODE=1\x00"
+	h.add(fakeProc{pid: 83, ppid: 1, comm: "py\xff", ticks: 70, args: []string{"py\xff\xfe", strings.Repeat("z", 100_000)}, exe: "/usr/bin/python3", rawEnv: []byte(big)})
+	// An agent whose exe link points somewhere hostile: it is only read.
+	h.add(fakeProc{pid: 84, ppid: 1, comm: "codex", ticks: 80, args: []string{"codex", "--yolo"}, exe: "/etc/shadow"})
+	h.write("proc/85/stat", "garbage")
+	h.write("proc/self/stat", "not a pid")
+	m, _ := newFixtureMonitor(t, h)
+	m.fullScan(m.now())
+	evs := drain(m)
+	agents := m.Agents()
+	if len(agents) != 1 || agents[0].PID != 84 {
+		t.Fatalf("agents = %+v", agents)
+	}
+	if n := m.nodes[80]; n == nil || n.ppid != 1 || !strings.HasPrefix(n.comm, "x) R 1") {
+		t.Errorf("forged stat parsed as %+v", n)
+	}
+	if _, ok := m.Attribute(83); ok {
+		t.Error("marker beyond the environment cap must not be trusted")
+	}
+	for _, e := range evs {
+		if _, err := e.MarshalLine(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestFixtureKillSwitch(t *testing.T) {
+	h := newFakeHost(t)
+	lifecycleTree(h)
+	m, _ := newFixtureMonitor(t, h)
+	off := true
+	m.disabled = func() bool { return off }
+	r := &runner{m: m}
+	r.tick(t.Context())
+	if m.Source() != SourceDisabled || len(drain(m)) != 0 || len(m.Agents()) != 0 {
+		t.Fatalf("disabled monitor did work: source %s", m.Source())
+	}
+	off = false
+	r.tick(t.Context())
+	if m.Source() != SourcePoll || len(m.Agents()) != 1 {
+		t.Fatalf("re-enabled: source %s agents %d", m.Source(), len(m.Agents()))
+	}
+}
+
+func TestFixtureActiveScan(t *testing.T) {
+	h := newFakeHost(t)
+	h.add(fakeProc{pid: 1, comm: "init", ticks: 1, args: []string{"/sbin/init"}, exe: "/sbin/init", uid: "0"})
+	h.add(fakeProc{pid: 90, ppid: 1, comm: "codex", ticks: 10, args: []string{"codex"}, exe: "/usr/local/bin/codex"})
+	m, clk := newFixtureMonitor(t, h)
+	m.fullScan(m.now())
+	if len(m.Agents()) != 1 {
+		t.Fatalf("agents = %+v", m.Agents())
+	}
+	drain(m)
+	clk.add(200 * time.Millisecond)
+	h.add(fakeProc{pid: 90, ppid: 1, comm: "codex", ticks: 10, args: []string{"codex"}, exe: "/usr/local/bin/codex", children: []int{91}})
+	h.add(fakeProc{pid: 91, ppid: 90, comm: "bash", ticks: 30, args: []string{"bash", "-lc", "git status"}, exe: "/usr/bin/bash",
+		env: map[string]string{"CODEX_THREAD_ID": "t-91"}, children: []int{92}})
+	h.add(fakeProc{pid: 92, ppid: 91, comm: "git", ticks: 31, args: []string{"git", "status"}, exe: "/usr/bin/git",
+		env: map[string]string{"CODEX_THREAD_ID": "t-91"}})
+	if !m.activeScan(m.now()) {
+		t.Fatal("children lists should be supported")
+	}
+	execs := ofType(drain(m), event.TypeProcessExec)
+	if e := byPID(execs, 92); e == nil || e.Agent.PID != 90 || e.Session == nil || e.Session.ID != "t-91" {
+		t.Fatalf("active scan missed the grandchild: %+v", execs)
+	}
+	if st := m.Stats(); st.ActiveScans != 1 {
+		t.Errorf("active scans = %d", st.ActiveScans)
+	}
+	// The root disappears: the active scan reports the stop at once.
+	h.remove(90)
+	m.activeScan(m.now())
+	if s := ofType(drain(m), event.TypeAgentProcessStop); len(s) != 1 {
+		t.Fatalf("stop not seen by the active scan: %+v", s)
+	}
+}

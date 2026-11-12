@@ -1,0 +1,14 @@
+# Named lists referenced by rules through |in_list and |any_in_list.
+# Matching ignores case. "*.example.com" matches any subdomain of
+# example.com (not example.com itself); "prefix*" matches by prefix.
+# Bundles replace a list by name (Set.Merge).
+lists:
+  # Hosts whose curl|sh installers are widely documented by the vendor.
+  trusted_installer_hosts:
+    - sh.rustup.rs
+    - claude.ai
+    - bun.sh
+    - deno.land
+    - astral.sh
+    - get.pnpm.io
+    - install.python-poetry.org

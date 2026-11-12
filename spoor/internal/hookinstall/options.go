@@ -43,14 +43,19 @@ const (
 
 // Options selects what to install and where.
 type Options struct {
-	Binary     string      // absolute path of the spoor binary to invoke
-	Scope      event.Scope // managed | user (and system, for Codex only)
-	Agents     []string    // catalog ids; empty = every agent whose catalog entry has a hook dialect
-	Guard      bool        // register blocking events synchronously; otherwise everything is registered async where the agent supports it
-	FailClosed bool        // only where the agent supports it (Claude Code onFailure, Cursor failClosed); never the default
-	Timeout    int         // seconds, default 10
-	Root       string      // filesystem prefix for tests and --host-root
-	Home       string      // user home for user scope
+	Binary string      // absolute path of the spoor binary to invoke
+	Scope  event.Scope // managed | user (and system, for Codex only)
+	Agents []string    // catalog ids; empty = every agent whose catalog entry has a hook dialect
+	// Guard was "register blocking events synchronously, everything else
+	// async". Since every tool, prompt and session hook is now registered
+	// synchronously (a background hook dies with the session and loses the
+	// record), Guard only gates FailClosed: a hook that never denies has no
+	// reason to block the agent when it fails.
+	Guard      bool
+	FailClosed bool   // only where the agent supports it (Claude Code onFailure, Cursor failClosed); never the default
+	Timeout    int    // seconds, default 10
+	Root       string // filesystem prefix for tests and --host-root
+	Home       string // user home for user scope
 	GOOS       string
 
 	// Coexist allows installing next to another sensor's hook (numbat,
@@ -71,13 +76,21 @@ type Options struct {
 	Env map[string]string
 }
 
-// Plan is one file change, computed but not applied.
+// Plan is one file change, computed but not applied. Path is where this
+// process finds the file (Options.Root applied). Before is the file as it
+// was read (nil when it does not exist) and After what Apply will write;
+// for ActionRemove the file is deleted (kept as a backup), for unchanged
+// both hold the current bytes.
 type Plan struct {
 	AgentID, Path string
 	Scope         event.Scope
 	Action        string // create | merge | append | remove | unchanged | unsupported
 	Before, After []byte
 	Note          string
+
+	// root is Options.Root: Apply confines the write to it and follows no
+	// symbolic link below it.
+	root string
 }
 
 // State is the audit result for one agent and scope.
@@ -178,6 +191,18 @@ func validBinary(bin, goos string) error {
 		return errors.New("hookinstall: Binary path contains control characters")
 	case !absFor(bin, goos):
 		return fmt.Errorf("hookinstall: Binary must be an absolute %s path", goos)
+	case strings.ContainsAny(bin, "$`"):
+		// Claude Code substitutes ${CLAUDE_*} placeholders into an exec-form
+		// command and Gemini CLI replaces $GEMINI_* (and $CLAUDE_PROJECT_DIR)
+		// in the command text before any shell sees it, so a dollar sign in
+		// the path could turn into a project directory chosen by whoever
+		// controls the repository.
+		return errors.New("hookinstall: Binary path must not contain '$' or '`'")
+	case goos != "windows" && strings.Contains(bin, `\`):
+		// fish treats \ and \' as escapes even inside single quotes, so a
+		// POSIX path with a backslash has no quoting valid in every login
+		// shell.
+		return errors.New("hookinstall: Binary path must not contain a backslash")
 	}
 	return nil
 }

@@ -19,7 +19,11 @@ const (
 
 // params is everything a dialect needs to render one handler.
 type params struct {
-	binary     string
+	binary string
+	// agentID is the value of --agent. It is the id hookio stamps on the
+	// events of the dialect (so "cursor" for the Cursor IDE and CLI alike),
+	// which keeps the command line identical whichever product id the
+	// caller named.
 	agentID    string
 	goos       string
 	timeout    int
@@ -59,8 +63,6 @@ type dialectSpec struct {
 	// block the action.
 	failClosed bool
 	handler    func(p params, ev hookio.HookEvent, async bool) jobj
-	// notes are facts the operator must know about this agent's hook tier.
-	notes func(p params, scope string) []string
 }
 
 var dialects = map[string]dialectSpec{
@@ -71,8 +73,23 @@ var dialects = map[string]dialectSpec{
 	"cursor":  {id: "cursor", failClosed: true, handler: cursorHandler},
 }
 
+// notificationEvents are the only events that may run in the background.
+// A background (async) hook is killed when the session ends right after the
+// event, and the record is lost without an error (Claude Code finalises
+// still-running async hooks as "cancelled" at -p teardown,
+// code.claude.com/docs/en/hooks.md "Run hooks in the background"). Tool,
+// prompt and session events are the record spoor exists to keep, so they
+// are registered synchronously whatever hookio's Async hint says; only
+// events that announce something without recording an action qualify.
+var notificationEvents = map[string]bool{
+	"Notification": true, "notification": true,
+	"PostCompact": true, "PreCompact": true, "PreCompress": true,
+}
+
 // entries renders the registration for every event the hookio dialect asks
-// for.
+// for. Guard mode does not change which events are registered or how: the
+// hook path decides between observing and gating from its own
+// configuration. It only enables fail-closed handling where asked for.
 func (d dialectSpec) entries(p params) ([]entry, bool) {
 	hd, ok := hookio.Get(d.id)
 	if !ok {
@@ -83,11 +100,7 @@ func (d dialectSpec) entries(p params) ([]entry, bool) {
 		if ev.Name == "" {
 			continue
 		}
-		// Without guard mode nothing waits for spoor's answer, so events
-		// that could be gated go to the background as well. Events hookio
-		// marks neither async nor blocking (session end) stay synchronous:
-		// the agent is exiting and would kill a background hook.
-		async := d.async && (ev.Async || (ev.Blocking && !p.guard))
+		async := d.async && ev.Async && !ev.Blocking && notificationEvents[ev.Name]
 		out = append(out, entry{event: ev.Name, matcher: ev.Matcher, handler: d.handler(p, ev, async)})
 	}
 	return out, len(out) > 0
@@ -123,9 +136,12 @@ func claudeHandler(p params, ev hookio.HookEvent, async bool) jobj {
 const codexSessionEndMax = 3
 
 // codexHandler writes one string per shell field. Codex runs "command"
-// through the user's shell (<shell> -c on unix, pwsh/powershell
-// -NoProfile -Command on Windows) and prefers "commandWindows" on Windows.
-// "timeout" is in seconds.
+// through the user's login shell (<shell> -c on unix) and "commandWindows"
+// through pwsh or powershell -NoProfile -Command on Windows; $SHELL -lc and
+// %COMSPEC% /C are only its fallbacks. The Windows string is therefore
+// written bare when the path needs no quoting (valid in PowerShell and
+// cmd.exe alike) and as a PowerShell call otherwise. "timeout" is in
+// seconds.
 // VERIFIED: codex-rs/core/config.schema.json (HookHandlerConfig),
 // codex-rs/hooks/src/engine/discovery.rs, codex-rs/core/src/session/mod.rs
 // (build_hooks_config), read 2026-11-11.
@@ -135,7 +151,7 @@ func codexHandler(p params, ev hookio.HookEvent, async bool) jobj {
 		{"command", posixCommand(p.binary, p.agentID)},
 	}
 	if p.goos == "windows" {
-		h = append(h, jfield{"commandWindows", pwshCommand(p.binary, p.agentID)})
+		h = append(h, jfield{"commandWindows", windowsCommand(p.binary, p.agentID)})
 	}
 	t := p.timeout
 	if ev.Name == "SessionEnd" && t > codexSessionEndMax {
@@ -152,7 +168,11 @@ func codexHandler(p params, ev hookio.HookEvent, async bool) jobj {
 // and "powershell" on Windows. "timeoutSec" is in seconds. Timeouts always
 // fail open, including for policy hooks.
 // VERIFIED: github/docs content/copilot/reference/hooks-reference.md,
-// "Command hooks" and "Exit codes for command hooks", read 2026-11-11.
+// "Command hooks" and "Exit codes for command hooks", re-read 2026-11-12.
+// The CLI now also accepts an exec form ("exec" plus "args"), but the page
+// marks it CLI-only and the same files are loaded by the VS Code Copilot
+// harness and by older CLI releases, where an entry without a shell field
+// is dropped; the shell fields work everywhere.
 func copilotHandler(p params, ev hookio.HookEvent, async bool) jobj {
 	return jobj{
 		{"type", "command"},
@@ -192,11 +212,7 @@ func geminiHandler(p params, ev hookio.HookEvent, async bool) jobj {
 func cursorHandler(p params, ev hookio.HookEvent, async bool) jobj {
 	cmd := posixCommand(p.binary, p.agentID)
 	if p.goos == "windows" {
-		if plainWindowsPath(p.binary) {
-			cmd = bareCommand(p.binary, p.agentID)
-		} else {
-			cmd = pwshCommand(p.binary, p.agentID)
-		}
+		cmd = windowsCommand(p.binary, p.agentID)
 	}
 	h := jobj{
 		{"command", cmd},

@@ -15,9 +15,11 @@ import (
 type target struct {
 	agentID string
 	also    []string // other catalog ids that share this file
-	dialect string
-	scope   event.Scope
-	kind    fileKind
+	// cmdAgent is the --agent value written into the command line.
+	cmdAgent string
+	dialect  string
+	scope    event.Scope
+	kind     fileKind
 	// logical is the path as the agent sees it, in the style of the target
 	// OS; path is where this process finds it (Root applied).
 	logical string
@@ -106,7 +108,11 @@ func resolveTarget(p catalog.Product, o Options, scope event.Scope) target {
 		t.unsupported = "hook dialect is not implemented"
 		return t
 	}
-	if !validAgentID(p.ID) {
+	t.cmdAgent = p.ID
+	if canon, ok := hookio.AgentIDFor(t.dialect); ok {
+		t.cmdAgent = canon
+	}
+	if !validAgentID(t.cmdAgent) {
 		t.unsupported = "agent id cannot be used on a command line"
 		return t
 	}
@@ -143,7 +149,15 @@ func resolveTarget(p catalog.Product, o Options, scope event.Scope) target {
 		return t
 	}
 
-	logical := catalog.Expand(raw, o.Home, o.Env, o.GOOS)
+	// Machine-wide paths are fixed locations: neither the caller's Env nor
+	// a home directory may move them (%ProgramData% resolves to its
+	// conventional value). User paths follow the variables that relocate
+	// the agent's directory.
+	home, env := o.Home, o.Env
+	if scope != event.ScopeUser {
+		home, env = "", nil
+	}
+	logical := catalog.Expand(raw, home, env, o.GOOS)
 	if left := catalog.Unexpanded(logical, o.GOOS); len(left) > 0 {
 		t.unsupported = "hook path depends on an unresolved variable (" + strings.Join(left, ", ") + ")"
 		return t

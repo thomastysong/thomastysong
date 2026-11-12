@@ -130,6 +130,11 @@ type dirPolicy struct {
 	// managed hardens the directories between the system anchor and the
 	// file (see managedChain).
 	managed bool
+	// loads are repaired in the directories they name (see repairLoads),
+	// skipping the file named skip; problems collects what could not be.
+	loads    []loadSet
+	skip     string
+	problems *[]error
 }
 
 // openDirChain opens dir as an os.Root after walking every component from
@@ -230,6 +235,11 @@ func walkOnce(base string, comps []string, confine string, pol dirPolicy) (*os.R
 			return nil, "", fmt.Errorf("%s changed while it was being opened", next)
 		}
 		r, cur = sub, next
+		if len(pol.loads) > 0 && pol.problems != nil {
+			// The directory is pinned (and, being on the managed chain,
+			// already secured): take back what the agent loads from it.
+			*pol.problems = append(*pol.problems, repairLoads(r, cur, len(comps)-1-i, pol.loads, pol.skip)...)
+		}
 	}
 	return r, "", nil
 }
@@ -237,23 +247,19 @@ func walkOnce(base string, comps []string, confine string, pol dirPolicy) (*os.R
 // makeDir creates one directory with mode 0755 whatever the umask. A
 // directory that root creates inside somebody else's directory (a user's
 // home) is given to that owner, so the agent can keep managing its own
-// settings directory.
+// settings directory. Mode and owner are set through a descriptor (see
+// fixNewDir): the parent may be the user's, who can swap the new name.
 func makeDir(r *os.Root, name string, managed bool) error {
 	if err := r.Mkdir(name, 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
 		return err
 	}
-	if err := r.Chmod(name, 0o755); err != nil {
-		return err
-	}
-	if managed {
-		return nil
-	}
-	if parent, err := r.Stat("."); err == nil {
-		if uid, gid, ok := ownerIDs(parent); ok {
-			return giveTo(r, name, uid, gid)
+	uid, gid, give := 0, 0, false
+	if !managed {
+		if parent, err := r.Stat("."); err == nil {
+			uid, gid, give = ownerIDs(parent)
 		}
 	}
-	return nil
+	return fixNewDir(r, name, uid, gid, give)
 }
 
 // thirdOwner reports a file owned neither by root nor by the owner of the
@@ -267,4 +273,22 @@ func thirdOwner(file, dir os.FileInfo) (uid int, bad bool) {
 		return fu, false
 	}
 	return fu, true
+}
+
+// rootEditProblem explains why root must not edit a file found in a user's
+// directory, or returns "". A file of a third uid is not the user's to have
+// edited; a file with several hard links may be one the user linked there
+// from anywhere else on the file system (a link needs no rights on the
+// file it names on macOS, and only read or write access on Linux).
+func rootEditProblem(file, dir os.FileInfo) string {
+	if file == nil || dir == nil {
+		return ""
+	}
+	if uid, bad := thirdOwner(file, dir); bad {
+		return fmt.Sprintf("the hook file is owned by uid %d, not by the owner of its directory; spoor does not edit it as root", uid)
+	}
+	if linkCount(file) > 1 {
+		return "the hook file has more than one hard link; spoor does not edit it as root"
+	}
+	return ""
 }

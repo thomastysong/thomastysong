@@ -167,6 +167,18 @@ func TestSDDLProblem(t *testing.T) {
 		{"O:BAD:(A;;FA)", false},                          // short ACE
 		{"garbage", false},
 		{"O:BAG:SYD:PAI(A;;FA;;;SY)(A;;FA;;;BA)S:AI(AU;SA;FA;;;WD)", true}, // group and SACL sections
+		// A NULL DACL grants everyone full control; Windows writes it as
+		// NO_ACCESS_CONTROL, without parentheses.
+		{"O:BAD:NO_ACCESS_CONTROL", false},
+		{"O:SYG:SYD:NO_ACCESS_CONTROL", false},
+		{"O:BAD:PNO_ACCESS_CONTROL", false},
+		{"O:BAD:NO_ACCESS_CONTROLS:AI(AU;SA;FA;;;WD)", false},
+		{"O:BAD:", true},                                   // empty DACL, no flags
+		{"O:BAD:PAIAR(A;;FA;;;SY)", true},                  // every known flag
+		{"O:BAD:QQ(A;;FA;;;SY)", false},                    // unknown flag
+		{"O:BAD:(A;;FA;;;SY)junk(A;;FA;;;BA)", false},      // text between entries
+		{"O:BAD:(A;;FA;;;SY", false},                       // unterminated entry
+		{"O:BAD:(ZA;;FW;;;BU;(WIN://x))(A;;FA;;;BA)", false}, // callback object entry
 	}
 	for _, tc := range cases {
 		if got := sddlProblem(tc.sddl); (got == "") != tc.ok {

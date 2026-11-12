@@ -70,6 +70,7 @@ rules:
         - shell.destructive|contains_any: [disk_wipe, mkfs, shadow_copy_delete]
         - any_command:
             name|re: "mkfs(\\.[a-z0-9]+)?$"
+            args|any_startswith: ["/dev/"]
     evidence: [target.command, shell.destructive]
     remedy: Stop the agent and check which device was targeted.
     tests:
@@ -82,6 +83,9 @@ rules:
       - name: shadow copies
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "vssadmin delete shadows /all /quiet" } }
         expect: match
+      - name: filesystem created in an image file
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "truncate -s 16M vol.img && mkfs.ext4 -q -F vol.img" } }
+        expect: no_match
       - name: dd to an image file
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "dd if=/dev/zero of=./disk.img bs=1M count=10" } }
         expect: no_match
@@ -224,8 +228,10 @@ rules:
   - id: SPR-DESTR-006
     title: Recursive delete in a system directory
     description: >-
-      rm -r of a path under a system directory (/usr, /var, /etc, /opt,
-      C:\Windows ...) outside the workspace and outside temp directories.
+      rm -r of a path under a system directory (/usr, /etc, /var/lib,
+      /opt, C:\Windows ...). /run, /tmp and /var/tmp are runtime scratch and
+      are not listed: in the benign replay every hit of the system_dir path
+      class was a red-team scratch mount under /run.
     kind: activity
     class: finding
     severity: medium
@@ -241,12 +247,10 @@ rules:
     when:
       type: [tool.pre, process.exec]
     match:
-      shell.delete_classes: system_dir
+      shell.deletes|any_re: "(?i)^(/usr|/etc|/var/lib|/var/log|/opt|/bin|/sbin|/lib|/lib64|/boot|/srv|/System|/Library|/Applications|c:\\\\windows|c:\\\\program files)(/|\\\\|$)"
       any_command:
         name|in: [rm, rmdir, remove-item, rd]
         args|any_re: "^-(-recursive|[a-zA-Z]*[rR])"
-    allow:
-      shell.delete_classes|contains_any: [temp, sensor_files]
     dedup: [shell.deletes]
     evidence: [target.command, shell.deletes]
     remedy: Check what was removed and whether the user asked for it.
@@ -256,6 +260,9 @@ rules:
         expect: match
       - name: rm -rf under /tmp
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf /tmp/build-1234" } }
+        expect: no_match
+      - name: runtime scratch under /run
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf /run/test-mount" } }
         expect: no_match
       - name: delete in the workspace
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf ./out" } }
@@ -288,4 +295,44 @@ rules:
         expect: no_match
       - name: chmod +x
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "chmod +x run.sh" } }
+        expect: no_match
+
+  - id: SPR-DESTR-008
+    title: Personal files deleted
+    description: >-
+      A command deletes in the user's Pictures, Documents, Desktop, Music,
+      Movies, Videos or Downloads folder. Coding work rarely touches them;
+      an agent cleaning up "duplicates" deleted 15,000 family photos.
+    kind: activity
+    class: finding
+    severity: high
+    confidence: medium
+    maturity: experimental
+    category: impact
+    tags: [attack.t1485, atlas.aml.t0101, owasp.asi02]
+    references:
+      - "research/threats.md section 2 row 43: Cowork deleted 15k photos"
+      - "research/threats.md section 3 R40"
+    falsepositives:
+      - "Clearing old installers out of Downloads at the user's request"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      shell.deletes|any_re: "(?i)^(~|\\$HOME|\\$\\{HOME\\}|/root|/home/[^/]+|/Users/[^/]+|c:\\\\users\\\\[^\\\\]+)[/\\\\](Pictures|Photos|Documents|Desktop|Music|Movies|Videos|Downloads)([/\\\\]|$)"
+    dedup: [shell.deletes]
+    evidence: [target.command, shell.deletes]
+    escalate: true
+    remedy: Stop the agent and restore from backup; check what it was asked to clean up.
+    tests:
+      - name: find delete in Pictures
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "find ~/Pictures -name '*.jpg' -size -2M -delete" } }
+        expect: match
+      - name: rm in Documents
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf /Users/tester/Documents/old" } }
+        expect: match
+      - name: delete in the project
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf ./docs/pictures" } }
+        expect: no_match
+      - name: listing Pictures
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "ls ~/Pictures | wc -l" } }
         expect: no_match

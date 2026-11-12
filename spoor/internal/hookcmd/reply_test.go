@@ -12,7 +12,7 @@ import (
 func TestValidReply(t *testing.T) {
 	deep := strings.Repeat(`{"a":`, 2000) + "1" + strings.Repeat("}", 2000)
 	cases := []struct {
-		name, in string
+		name, in  string
 		ok, empty bool
 	}{
 		{"empty", "", true, true},

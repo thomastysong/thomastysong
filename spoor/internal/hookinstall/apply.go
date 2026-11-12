@@ -74,22 +74,25 @@ func applyOne(p *Plan, now time.Time) error {
 			return err
 		}
 	}
-	r, err := openDirChain(dir, p.root, dirPolicy{create: p.Action != ActionRemove, managed: managed})
+	pol := dirPolicy{create: p.Action != ActionRemove, managed: managed}
+	var repairs []error
+	if managed && p.Action != ActionRemove {
+		pol.loads, pol.skip, pol.problems = p.loads, name, &repairs
+	}
+	r, err := openDirChain(dir, p.root, pol)
 	if err != nil {
 		return err
 	}
 	defer r.Close()
 
-	cur, fi, err := readIn(r, name)
+	cur, fi, dirInfo, err := readIn(r, name)
 	if err != nil {
 		return err
 	}
 	exists := fi != nil
 	if exists && !managed && os.Geteuid() == 0 {
-		if di, err := r.Stat("."); err == nil {
-			if uid, bad := thirdOwner(fi, di); bad {
-				return fmt.Errorf("owned by uid %d, not by the owner of its directory", uid)
-			}
+		if why := rootEditProblem(fi, dirInfo); why != "" {
+			return errors.New(why)
 		}
 	}
 	switch {
@@ -115,32 +118,25 @@ func applyOne(p *Plan, now time.Time) error {
 	}
 
 	mode := os.FileMode(0o644)
-	var uid, gid int
-	owned := false
+	var own owner
 	if exists {
 		mode = fi.Mode().Perm()
-		uid, gid, owned = ownerIDs(fi)
-	} else if st, err := r.Stat("."); err == nil {
-		uid, gid, owned = ownerIDs(st)
+		own.uid, own.gid, own.set = ownerIDs(fi)
+	} else if dirInfo != nil {
+		own.uid, own.gid, own.set = ownerIDs(dirInfo)
 	}
 	if managed {
 		mode &^= 0o022
-		owned = false // root keeps managed files
+		own.set = false // root keeps managed files
 	}
 
-	tmp, err := writeTemp(r, name, p.After, mode)
+	tmp, err := writeNew(r, "."+name+"."+sensorName+"-", ".tmp", p.After, mode, own, true)
 	if err != nil {
-		return err
+		return fmt.Errorf("cannot write a temporary file (%s)", errClass(err))
 	}
 	cleanup := func() { _ = r.Remove(tmp) }
-	if owned {
-		if err := giveTo(r, tmp, uid, gid); err != nil {
-			cleanup()
-			return fmt.Errorf("cannot set the owner (%s)", errClass(err))
-		}
-	}
 	if exists {
-		if err := backup(r, name, cur, mode, owned, uid, gid, ts); err != nil {
+		if err := backup(r, name, cur, mode, own, ts); err != nil {
 			cleanup()
 			return err
 		}
@@ -151,43 +147,31 @@ func applyOne(p *Plan, now time.Time) error {
 		cleanup()
 		return fmt.Errorf("cannot replace the file (%s)", errClass(err))
 	}
+	var errs []error
 	if managed {
 		if err := hardenIn(r, name, false); err != nil {
-			return fmt.Errorf("written, but could not be secured (%s)", errClass(err))
+			errs = append(errs, fmt.Errorf("written, but could not be secured (%s)", errClass(err)))
 		}
 	}
 	syncDir(r)
-	return nil
+	errs = append(errs, repairs...)
+	return errors.Join(errs...)
 }
 
 // readIn reads name in r without following a link and without keeping the
-// handle. fi is nil when the file does not exist.
-func readIn(r *os.Root, name string) ([]byte, os.FileInfo, error) {
-	li, err := r.Lstat(name)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil, nil
-	}
-	if err != nil {
-		return nil, nil, fmt.Errorf("cannot inspect the file (%s)", errClass(err))
-	}
+// handle. fi is nil when the file does not exist; dir is r's own lstat.
+func readIn(r *os.Root, name string) (data []byte, fi, dir os.FileInfo, err error) {
+	st := readAt(r, name)
 	switch {
-	case li.Mode()&os.ModeSymlink != 0:
-		return nil, nil, ErrSymlink
-	case !li.Mode().IsRegular():
-		return nil, nil, errors.New("not a regular file")
-	case li.Size() > maxFileSize:
-		return nil, nil, errors.New("larger than 4 MiB")
+	case st.refused == refusedSymlink:
+		return nil, nil, st.dir, ErrSymlink
+	case st.refused != "":
+		return nil, nil, st.dir, errors.New(strings.TrimPrefix(st.refused, "is "))
+	case !st.exists:
+		dir, _ := r.Stat(".")
+		return nil, nil, dir, nil
 	}
-	f, err := r.OpenFile(name, readFlags, 0)
-	if err != nil {
-		return nil, nil, fmt.Errorf("cannot open the file (%s)", errClass(err))
-	}
-	defer f.Close()
-	st := readOpen(f, li, fileState{exists: true})
-	if st.refused != "" {
-		return nil, nil, errors.New(st.refused)
-	}
-	return st.data, li, nil
+	return st.data, st.info, st.dir, nil
 }
 
 // checkContent refuses to write bytes the agent could not load: Claude
@@ -224,63 +208,64 @@ func checkContent(name string, after, before []byte) error {
 	return nil
 }
 
-// writeTemp writes data to a new hidden file beside name and returns its
-// name. O_EXCL and a random suffix keep two installers from sharing it.
-func writeTemp(r *os.Root, name string, data []byte, mode os.FileMode) (string, error) {
+// owner is the uid and gid a new file is handed to, when set.
+type owner struct {
+	uid, gid int
+	set      bool
+}
+
+// writeNew creates a new file named prefix+<random>+suffix in r (O_EXCL, so
+// two installers never share one) and returns its name.
+func writeNew(r *os.Root, prefix, suffix string, data []byte, mode os.FileMode, own owner, sync bool) (string, error) {
 	var rnd [8]byte
 	if _, err := io.ReadFull(rand.Reader, rnd[:]); err != nil {
-		return "", errors.New("no randomness for a temporary name")
+		return "", errors.New("no randomness for a file name")
 	}
-	tmp := "." + name + "." + sensorName + "-" + hex.EncodeToString(rnd[:]) + ".tmp"
-	f, err := r.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	name := prefix + hex.EncodeToString(rnd[:]) + suffix
+	return name, createFile(r, name, data, mode, own, sync)
+}
+
+// createFile creates name in r, which must not exist (O_EXCL also refuses
+// to follow a link), and writes data. Mode and owner are set on the open
+// descriptor before it is closed: when root edits a user's file the
+// directory belongs to that user, who can replace any name in it by a hard
+// link to another file between two calls, and a change made by name would
+// then land on that file.
+func createFile(r *os.Root, name string, data []byte, mode os.FileMode, own owner, sync bool) error {
+	f, err := r.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 	if err != nil {
-		return "", fmt.Errorf("cannot create a temporary file (%s)", errClass(err))
+		return err
 	}
-	_, werr := f.Write(data)
-	serr := f.Sync()
-	cerr := f.Close()
+	// The umask may have narrowed the mode given to OpenFile.
+	werr := f.Chmod(mode)
 	if werr == nil {
-		werr = serr
+		_, werr = f.Write(data)
 	}
-	if werr == nil {
+	if werr == nil && sync {
+		werr = f.Sync()
+	}
+	if werr == nil && own.set {
+		werr = chownFile(f, own.uid, own.gid)
+	}
+	if cerr := f.Close(); werr == nil {
 		werr = cerr
 	}
-	if werr == nil {
-		// The umask may have narrowed the mode given to OpenFile.
-		werr = r.Chmod(tmp, mode)
-	}
 	if werr != nil {
-		_ = r.Remove(tmp)
-		return "", fmt.Errorf("cannot write a temporary file (%s)", errClass(werr))
+		_ = r.Remove(name)
 	}
-	return tmp, nil
+	return werr
 }
 
 // backup keeps the previous bytes beside the file. The suffix does not end
 // in .json, so drop-in directories that load every *.json (Claude Code
 // managed-settings.d, Copilot policy.d and hooks) ignore it.
-func backup(r *os.Root, name string, data []byte, mode os.FileMode, owned bool, uid, gid int, ts string) error {
+func backup(r *os.Root, name string, data []byte, mode os.FileMode, own owner, ts string) error {
 	bak, err := freeName(r, name+"."+sensorName+"-"+ts, ".bak")
+	if err == nil {
+		err = createFile(r, bak, data, mode, own, false)
+	}
 	if err != nil {
-		return err
-	}
-	f, err := r.OpenFile(bak, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
-	if err != nil {
-		return fmt.Errorf("cannot create the backup (%s)", errClass(err))
-	}
-	_, werr := f.Write(data)
-	if err := f.Close(); werr == nil {
-		werr = err
-	}
-	if werr == nil {
-		werr = r.Chmod(bak, mode)
-	}
-	if werr == nil && owned {
-		werr = giveTo(r, bak, uid, gid)
-	}
-	if werr != nil {
-		_ = r.Remove(bak)
-		return fmt.Errorf("cannot write the backup (%s)", errClass(werr))
+		return fmt.Errorf("cannot write the backup (%s)", errClass(err))
 	}
 	return nil
 }

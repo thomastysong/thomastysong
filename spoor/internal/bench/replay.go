@@ -101,11 +101,11 @@ type ReplayReport struct {
 	Rules        []ReplayRule `json:"rules"`
 	// ThreadsAny is the share of agent threads with at least one hit per
 	// class.
-	ThreadsAny map[string]Rate    `json:"threads_with_hit_by_class"`
-	Engine     map[string]uint64  `json:"engine,omitempty"`
-	Problems   []string           `json:"problems,omitempty"`
-	Limits     []string           `json:"limits"`
-	elapsed    time.Duration      `json:"-"`
+	ThreadsAny map[string]Rate        `json:"threads_with_hit_by_class"`
+	Engine     map[string]uint64      `json:"engine,omitempty"`
+	Problems   []string               `json:"problems,omitempty"`
+	Limits     []string               `json:"limits"`
+	elapsed    time.Duration          `json:"-"`
 	byID       map[string]*ReplayRule `json:"-"`
 }
 

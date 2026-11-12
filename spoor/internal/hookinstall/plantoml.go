@@ -90,7 +90,7 @@ func uninstallTOML(cur fileState) (action string, after []byte, note string) {
 // file: Codex keeps telemetry in config.toml, never in hooks.json, and the
 // managed tier is paired with the system config.toml (requirements may pin
 // an exporter, which is checked).
-func planCodexOTel(t target, o Options, m mode) *Plan {
+func planCodexOTel(t target, o Options, m mode, rel related) *Plan {
 	if m == modeInstall && o.OTel == "" {
 		return nil
 	}
@@ -132,12 +132,25 @@ func planCodexOTel(t target, o Options, m mode) *Plan {
 	if err != nil {
 		return refuse("invalid endpoint")
 	}
-	// Requirements beside the file may already pin an exporter.
-	req := readFile(filepath.Join(filepath.Dir(p.Path), "requirements.toml"))
-	if req.exists && req.refused == "" {
-		if td, err := parseTOML(req.data); err == nil && td.hasOTel {
+	// Requirements beside the file may already pin an exporter, and for
+	// the user tier so may the system layer: its requirements, or an
+	// [otel] in the system config.toml that a user-level one would
+	// override.
+	req := readFile(filepath.Join(filepath.Dir(p.Path), "requirements.toml"), o.Root)
+	if req.exists {
+		if req.refused != "" {
+			return refuse("requirements.toml " + req.refused + ", so whether it pins [otel] cannot be checked")
+		}
+		td, err := parseTOML(req.data)
+		switch {
+		case err != nil:
+			return refuse("requirements.toml is " + err.Error() + ", so whether it pins [otel] cannot be checked")
+		case td.hasOTel:
 			return refuse("requirements.toml already configures [otel]")
 		}
+	}
+	if rel.otelPinned != "" {
+		return refuse("a telemetry destination is already configured in " + rel.otelPinned)
 	}
 	nl := "\n"
 	if cur.exists {

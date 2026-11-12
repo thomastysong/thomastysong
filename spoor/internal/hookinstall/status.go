@@ -2,6 +2,7 @@ package hookinstall
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -65,17 +66,22 @@ func statusOf(t target, o Options) State {
 		}
 		return st
 	}
-	cur := readFile(t.path)
+	cur := readFile(t.path, o.Root)
 	switch {
 	case !cur.exists:
 		st.Status, st.Detail = StatusMissing, "no hook file"
 		return st
-	case cur.refused == "is a symbolic link" && managed:
+	case cur.refused == refusedSymlink && managed:
 		st.Status, st.Detail = StatusInsecure, "the managed hook file is a symbolic link: the agent follows it, so whoever can change the link target controls the hook"
 		return st
 	case cur.refused != "":
 		st.Status, st.Detail = StatusUnsupported, "the hook file "+cur.refused
 		return st
+	case !managed && os.Geteuid() == 0:
+		if why := rootEditProblem(cur.info, cur.dir); why != "" {
+			st.Status, st.Detail = StatusUnsupported, why
+			return st
+		}
 	}
 
 	var c check
@@ -113,7 +119,7 @@ func statusOf(t target, o Options) State {
 	// meaningful once spoor's registration is there.
 	if c.state == checkOK || c.state == checkModified {
 		rel := inspectRelated(t, o)
-		sh := shadowOf(t, o, rel)
+		sh := shadowOf(t, o, rel, hooksOffIn(t, cur.data))
 		if sh.shadowed && c.state == checkOK {
 			st.Status = StatusShadowed
 		}
@@ -121,7 +127,7 @@ func statusOf(t target, o Options) State {
 			detail = append(detail, d)
 		}
 		if managed {
-			if why := insecureManaged(t.path); why != "" {
+			if why := insecureManaged(t, o); why != "" {
 				st.Status = StatusInsecure
 				detail = append([]string{why}, detail...)
 			}
@@ -246,6 +252,32 @@ func checkTOML(t target, o Options, data []byte) check {
 		c.state = checkOK
 	}
 	return c
+}
+
+// hooksOffIn returns the file's own switch for every hook: Claude Code
+// disableAllHooks, or Gemini CLI hooksConfig.enabled negated. Nil when the
+// file does not set it as a boolean.
+func hooksOffIn(t target, data []byte) *bool {
+	if t.kind == kindTOML {
+		return nil
+	}
+	d, err := parseJSON(data)
+	if err != nil {
+		return nil
+	}
+	switch t.dialect {
+	case "claude":
+		if _, v := d.root.member("disableAllHooks"); v != nil && v.kind == kindBool {
+			b := v.b
+			return &b
+		}
+	case "gemini":
+		if on, ok := geminiHooksEnabled(d); ok {
+			off := !on
+			return &off
+		}
+	}
+	return nil
 }
 
 func joinNonEmpty(a, b string) string {

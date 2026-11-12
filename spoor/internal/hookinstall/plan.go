@@ -2,7 +2,6 @@ package hookinstall
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -98,11 +97,15 @@ func planTarget(t target, o Options, m mode) []Plan {
 				action, after, note = ActionUnsupported, nil, why
 			}
 		}
+		if action != ActionUnsupported && t.scope != event.ScopeUser {
+			p.loads = managedLoads(t, o.GOOS)
+			permNotes(managedProblems(t, o), n)
+		}
 		if action == ActionUnchanged && t.scope != event.ScopeUser {
 			// The content is right but a non-admin could change it: an
 			// install must leave managed files admin-only, so the same
 			// bytes are written again, which repairs owner and mode.
-			if why := insecureManaged(t.path); why != "" {
+			if why := insecureManaged(t, o); why != "" {
 				action, after = ActionMerge, cur.data
 				n.add("rewritten to repair permissions: " + why)
 			}
@@ -110,7 +113,7 @@ func planTarget(t target, o Options, m mode) []Plan {
 		if action != ActionUnsupported {
 			installNotes(t, o, rel, n)
 			if t.dialect == "codex" {
-				if op := planCodexOTel(t, o, m); op != nil {
+				if op := planCodexOTel(t, o, m, rel); op != nil {
 					extra = append(extra, *op)
 				}
 			}
@@ -122,7 +125,7 @@ func planTarget(t target, o Options, m mode) []Plan {
 			action, after, note = uninstallJSON(t, o, cur)
 		}
 		if t.dialect == "codex" {
-			if op := planCodexOTel(t, o, m); op != nil {
+			if op := planCodexOTel(t, o, m, rel); op != nil {
 				extra = append(extra, *op)
 			}
 		}
@@ -153,18 +156,16 @@ func readTarget(path string, o Options) (fileState, string) {
 	if why := checkChain(filepath.Dir(path), o.Root); why != "" {
 		return fileState{}, why
 	}
-	cur := readFile(path)
+	cur := readFile(path, o.Root)
 	if cur.exists && cur.refused == "" && o.Scope == event.ScopeUser && os.Geteuid() == 0 {
-		fi, err1 := os.Lstat(path)
-		di, err2 := os.Stat(filepath.Dir(path))
-		if err1 == nil && err2 == nil {
-			if uid, bad := thirdOwner(fi, di); bad {
-				return cur, fmt.Sprintf("the hook file is owned by uid %d, not by the owner of its directory; spoor does not edit it as root", uid)
-			}
+		if why := rootEditProblem(cur.info, cur.dir); why != "" {
+			// Not the user's file to have edited: its bytes are not
+			// carried in the plan either.
+			return fileState{exists: true}, why
 		}
 	}
 	switch {
-	case cur.refused == "is a symbolic link":
+	case cur.refused == refusedSymlink:
 		return cur, "the hook file is a symbolic link; spoor does not write through links (edit the file it points to, or replace the link with a regular file)"
 	case cur.refused != "":
 		return cur, "the hook file " + cur.refused

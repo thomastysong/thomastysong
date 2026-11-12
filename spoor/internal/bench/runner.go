@@ -69,6 +69,14 @@ func (r *Runner) factory(home, osName string) Factory {
 	return RulesFactory(RulesOptions{Set: r.set, Home: home, OS: osName})
 }
 
+// scenarioFactory leaves the engine's OS unset so each event's Host.OS
+// decides path semantics, as it does in the daemon, where every record is
+// stamped with its host: a Windows scenario gets Windows path rules (case
+// folding, trailing dots) in the same run as Linux ones.
+func (r *Runner) scenarioFactory() Factory {
+	return r.factory(r.o.Home, "")
+}
+
 // classOf returns the class of a hit: the detection's own class, else the
 // rule's (posture records carry none).
 func (r *Runner) classOf(h Hit) string {
@@ -104,7 +112,12 @@ func (r *Runner) run(f Factory, evs []built) ([]Hit, error) {
 	var hits []Hit
 	var last time.Time
 	for _, b := range evs {
-		applyFeat(b, r.o.Home, r.o.OS)
+		if b.ev.Host == nil {
+			b.ev.Host = &event.Host{OS: r.o.OS}
+		} else if b.ev.Host.OS == "" {
+			b.ev.Host.OS = r.o.OS
+		}
+		applyFeat(b, r.o.Home, b.ev.Host.OS)
 		hits = append(hits, hitsOf(ev.Eval(b.ev), b.ev.ID)...)
 		if b.ev.TS.Time.After(last) {
 			last = b.ev.TS.Time

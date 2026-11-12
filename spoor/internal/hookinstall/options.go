@@ -92,6 +92,9 @@ type Plan struct {
 	// root is Options.Root: Apply confines the write to it and follows no
 	// symbolic link below it.
 	root string
+	// loads are the files the agent loads beside a managed hook file;
+	// Apply takes back any of them a non-admin can change.
+	loads []loadSet
 }
 
 // State is the audit result for one agent and scope.

@@ -52,7 +52,13 @@ rules:
     title: Sensor files deleted or modified
     description: >-
       A command deletes or writes spoor's own configuration, state, spool
-      or binary. Whoever can change the sensor decides what it reports.
+      or binary at its installed locations (packaging/: /etc/spoor,
+      /var/lib/spoor, /usr/bin/spoor, the service unit, the per-user state
+      directory, the Windows and macOS equivalents). Whoever can change the
+      sensor decides what it reports. The path list is explicit because
+      the sensor_files path class also matches any file named after the
+      sensor, which in the benign replay meant this project's own source
+      tree, build output and test fixtures (8 false alerts before tuning).
     kind: activity
     class: alert
     severity: critical
@@ -69,10 +75,11 @@ rules:
       type: [tool.pre, process.exec]
     match:
       any:
-        - shell.defense_evasion: sensor_tamper
+        - shell.deletes|any_re: "(?i)^(/etc/spoor|/var/lib/spoor|/run/spoor|/usr/(local/)?bin/spoor|/usr/(lib|local/lib)/spoor|(/usr/lib|/etc)/systemd/system/spoor\\.service|/Library/Application Support/spoor|/Library/LaunchDaemons/com\\.github\\.thomastysong\\.spoor\\.plist|c:\\\\program files\\\\spoor|c:\\\\programdata\\\\spoor|(~|\\$HOME|/root|/home/[^/]+|/Users/[^/]+)/\\.local/state/spoor)(/|\\\\|$)"
+        - shell.writes|any_re: "(?i)^(/etc/spoor|/var/lib/spoor|/run/spoor|/usr/(local/)?bin/spoor|/usr/(lib|local/lib)/spoor|(/usr/lib|/etc)/systemd/system/spoor\\.service|/Library/Application Support/spoor|/Library/LaunchDaemons/com\\.github\\.thomastysong\\.spoor\\.plist|c:\\\\program files\\\\spoor|c:\\\\programdata\\\\spoor|(~|\\$HOME|/root|/home/[^/]+|/Users/[^/]+)/\\.local/state/spoor)(/|\\\\|$)"
         - all:
             - tool.kind|in: [file_write, file_edit]
-            - path.classes: sensor_files
+            - target.path|re: "(?i)^(/etc/spoor|/var/lib/spoor|/run/spoor|/usr/(local/)?bin/spoor|/usr/(lib|local/lib)/spoor|(/usr/lib|/etc)/systemd/system/spoor\\.service|/Library/Application Support/spoor|/Library/LaunchDaemons/com\\.github\\.thomastysong\\.spoor\\.plist|c:\\\\program files\\\\spoor|c:\\\\programdata\\\\spoor|(/root|/home/[^/]+|/Users/[^/]+)/\\.local/state/spoor)(/|\\\\|$)"
     response: ask
     dedup: [shell.deletes, target.path]
     evidence: [target.command, target.path, shell.deletes, shell.writes]
@@ -90,6 +97,12 @@ rules:
       - name: project build output removed
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf ./bin ./dist" } }
         expect: no_match
+      - name: sensor built in its own source tree
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "go build -o bin/spoor ./cmd/spoor && cp packaging/systemd/spoor.service /tmp/pkgroot/etc/systemd/system/" } }
+        expect: no_match
+      - name: user spool directory removed
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf ~/.local/state/spoor" } }
+        expect: match
 
   - id: SPR-EVADE-003
     title: Managed agent policy written or removed

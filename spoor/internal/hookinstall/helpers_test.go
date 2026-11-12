@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -192,3 +193,13 @@ func stateOf(t testing.TB, c *catalog.Catalog, o Options, agent string) State {
 }
 
 func contains(b []byte, s string) bool { return bytes.Contains(b, []byte(s)) }
+
+// allocDuring reports how many bytes f allocated.
+func allocDuring(f func()) uint64 {
+	var a, b runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&a)
+	f()
+	runtime.ReadMemStats(&b)
+	return b.TotalAlloc - a.TotalAlloc
+}

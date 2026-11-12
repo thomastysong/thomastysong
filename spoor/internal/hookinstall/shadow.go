@@ -1,7 +1,7 @@
 package hookinstall
 
 import (
-	"os"
+	"io/fs"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -48,32 +48,107 @@ func (s shadowReport) detail() string {
 	return strings.Join(parts, "; ")
 }
 
-// shadowOf inspects the sources that outrank t.
-func shadowOf(t target, o Options, rel related) shadowReport {
+// shadowOf inspects the sources that outrank t. selfOff is the file's own
+// switch for every hook (Claude Code disableAllHooks, Gemini CLI
+// hooksConfig.enabled negated), nil when the file does not set it.
+func shadowOf(t target, o Options, rel related, selfOff *bool) shadowReport {
 	var r shadowReport
 	switch {
 	case t.dialect == "claude" && t.scope == event.ScopeManaged:
 		claudeShadow(&r, o)
+		if !r.shadowed && rel.hooksOff != nil && *rel.hooksOff {
+			r.shadowed = true
+			r.why = "disableAllHooks in " + rel.hooksOffFile + " turns off every hook, managed ones included"
+		}
+		r.checked = append(r.checked, "disableAllHooks in the managed settings files")
 	case t.dialect == "claude" && t.scope == event.ScopeUser:
-		if rel.managedOnly != "" {
+		switch {
+		case rel.managedOnly != "":
 			r.shadowed = true
 			r.why = "allowManagedHooksOnly in " + rel.managedOnly + " makes Claude Code ignore user hooks"
+		case rel.hooksOff != nil && *rel.hooksOff:
+			r.shadowed = true
+			r.why = "disableAllHooks in " + rel.hooksOffFile + " turns off every hook"
+		case rel.hooksOff == nil && selfOff != nil && *selfOff:
+			r.shadowed = true
+			r.why = "disableAllHooks in this file turns off user hooks (a project's own settings can set it back to false)"
 		}
-		r.checked = append(r.checked, "allowManagedHooksOnly in the managed settings files")
-		r.blind = append(r.blind, "server-managed settings and MDM policy (not visible from these files)")
+		r.checked = append(r.checked, "allowManagedHooksOnly and disableAllHooks in the managed settings files and this file")
+		r.blind = append(r.blind, "server-managed settings and MDM policy (not visible from these files)", "project settings")
+	case t.dialect == "gemini":
+		// System settings outrank user and project settings.
+		switch {
+		case t.scope != event.ScopeUser && selfOff != nil && *selfOff:
+			r.shadowed = true
+			r.why = "hooksConfig.enabled is false in this file, which turns off every hook"
+		case t.scope == event.ScopeUser && rel.hooksOff != nil && *rel.hooksOff:
+			r.shadowed = true
+			r.why = "hooksConfig.enabled is false in " + rel.hooksOffFile + ", which outranks user settings"
+		case t.scope == event.ScopeUser && rel.hooksOff == nil && selfOff != nil && *selfOff:
+			r.shadowed = true
+			r.why = "hooksConfig.enabled is false in this file (a project's settings can turn hooks back on)"
+		}
+		r.checked = append(r.checked, "hooksConfig.enabled in the system settings")
+		r.blind = append(r.blind, "GEMINI_CLI_SYSTEM_SETTINGS_PATH, which can point Gemini CLI at another system file")
 	case t.dialect == "codex" && t.scope == event.ScopeUser:
 		if rel.managedOnly != "" {
 			r.shadowed = true
 			r.why = "allow_managed_hooks_only in " + rel.managedOnly + " makes Codex ignore user hooks"
 		}
 		r.checked = append(r.checked, "allow_managed_hooks_only in requirements.toml")
-		r.blind = append(r.blind, "cloud and MDM requirements (not visible from disk)", "whether the user trusted the hooks in /hooks")
-	case t.dialect == "codex" && t.scope == event.ScopeManaged:
+		codexMDM(&r, o, "it can set allow_managed_hooks_only")
+		r.blind = append(r.blind, "whether the user trusted the hooks in /hooks")
+	case t.dialect == "codex":
 		// codex-rs/config/src/config_requirements.rs: a higher requirements
 		// source that defines hooks replaces this one as a whole.
-		r.blind = append(r.blind, "cloud and MDM requirements, which replace the [hooks] of requirements.toml when they define hooks")
+		codexMDM(&r, o, "when its requirements define hooks, Codex uses them instead of these")
+	}
+	if len(rel.unread) > 0 {
+		r.blind = append(r.blind, rel.unread...)
 	}
 	return r
+}
+
+// codexMDM reports the requirements sources that outrank requirements.toml:
+// cloud requirements (never visible from disk) and, on macOS only, the MDM
+// managed-preferences domain com.openai.codex (requirements_toml_base64).
+// The profile's content is base64 TOML inside a property list and is not
+// parsed: its presence is reported, with what it can do.
+func codexMDM(r *shadowReport, o Options, effect string) {
+	r.blind = append(r.blind, "cloud requirements (not visible from disk)")
+	if o.GOOS != "darwin" {
+		r.checked = append(r.checked, "no MDM requirements source exists on this OS")
+		return
+	}
+	hits, desc := mdmProfiles(o, codexMDMDomain)
+	r.checked = append(r.checked, desc)
+	if len(hits) > 0 {
+		r.blind = append(r.blind, "the content of the MDM profile "+hits[0]+" ("+effect+")")
+	}
+}
+
+// codexMDMDomain is the macOS managed-preferences domain Codex reads its
+// MDM requirements and configuration from.
+const codexMDMDomain = "com.openai.codex"
+
+// mdmProfiles finds the managed-preferences plists of a domain, machine-wide
+// and per user, and describes what was looked at. The directory is reached
+// through the same confined walk as every other file.
+func mdmProfiles(o Options, domain string) (hits []string, checked string) {
+	base := hostPath(o.Root, "/Library/Managed Preferences", "darwin")
+	name := domain + ".plist"
+	look := func(p string) {
+		if fi, err := lstatIn(p, o.Root); err == nil && !fi.IsDir() {
+			hits = append(hits, p)
+		}
+	}
+	look(filepath.Join(base, name))
+	for _, e := range listDir(base, o.Root) {
+		if e.IsDir() && e.Type()&fs.ModeSymlink == 0 {
+			look(filepath.Join(base, e.Name(), name))
+		}
+	}
+	return hits, "/Library/Managed Preferences/" + name + " (machine and per user)"
 }
 
 func claudeShadow(r *shadowReport, o Options) {
@@ -86,19 +161,11 @@ func claudeShadow(r *shadowReport, o Options) {
 		// /Library/Managed Preferences, machine-wide or per user.
 		// UNVERIFIED: the per-user location for this domain; the machine
 		// one is where macOS puts any device-level configuration profile.
-		base := hostPath(o.Root, "/Library/Managed Preferences", "darwin")
-		name := claudeMDMDomain + ".plist"
-		hits := []string{filepath.Join(base, name)}
-		if m, err := filepath.Glob(filepath.Join(globEscape(base), "*", name)); err == nil {
-			hits = append(hits, m...)
-		}
-		r.checked = append(r.checked, "/Library/Managed Preferences/"+name)
-		for _, h := range hits {
-			if fi, err := os.Lstat(h); err == nil && !fi.IsDir() {
-				r.shadowed = true
-				r.why = "an MDM policy (" + h + `) outranks the managed settings files; Claude Code ignores this file unless that policy sets managedSourcesBehavior to "merge"`
-				break
-			}
+		hits, desc := mdmProfiles(o, claudeMDMDomain)
+		r.checked = append(r.checked, desc)
+		if len(hits) > 0 {
+			r.shadowed = true
+			r.why = "an MDM policy (" + hits[0] + `) outranks the managed settings files; Claude Code ignores this file unless that policy sets managedSourcesBehavior to "merge"`
 		}
 	case "windows":
 		if o.Root != "" || runtime.GOOS != "windows" {
@@ -120,14 +187,3 @@ func claudeShadow(r *shadowReport, o Options) {
 	}
 }
 
-// globEscape neutralises glob metacharacters in a directory name that is
-// used as the fixed part of a pattern.
-func globEscape(s string) string {
-	if runtime.GOOS == "windows" {
-		// Backslash is the separator there and cannot escape; Windows file
-		// names cannot contain * or ? anyway.
-		return s
-	}
-	r := strings.NewReplacer(`\`, `\\`, `*`, `\*`, `?`, `\?`, `[`, `\[`)
-	return r.Replace(s)
-}

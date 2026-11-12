@@ -72,6 +72,10 @@ rules:
       any:
         - path.sensitive_read: true
         - shell.cred_access|contains_any: [secret_file_read, ssh_key_read, keychain_dump, browser_cred, password_store, token_print, proc_environ_read, cloud_metadata]
+        - all:
+            - shell.read_classes|contains_any: [secret_env, ssh_private_key, cloud_credentials, kube_config, docker_config, git_credentials, netrc, npm_token, pypi_token, gpg_keyring, password_store, keychain, browser_data, crypto_wallet, token_file, cert_private_key, proc_environ]
+            - not:
+                shell.reads|any_re: "[*?\\[{]"
         - mcp.arg_path_classes|contains_any: [secret_env, ssh_private_key, cloud_credentials, kube_config, docker_config, git_credentials, netrc, npm_token, pypi_token, password_store, keychain, browser_data, crypto_wallet, token_file, cert_private_key]
     flags:
       set: [secret_read]
@@ -277,6 +281,57 @@ rules:
       - name: ordinary file elsewhere
         event: { type: tool.pre, tool: { kind: file_write, name: Write }, target: { path: /home/tester/other-repo/main.go } }
         expect: no_match
+
+
+  - id: SPR-FLOW-008
+    title: Credential source read (for the data-flow alert)
+    description: >-
+      Marker rule for SPR-EXFIL-001. A file tool read a credential-class
+      path, a command read a secret file, key, keychain, password store or a
+      process environment, printed a token, or an MCP call named a
+      credential path. Unlike SPR-FLOW-002 it ignores environment listings
+      and keeps the flag for 24 hours, because a captured value stays
+      dangerous after the read.
+    kind: activity
+    class: signal
+    severity: info
+    confidence: high
+    maturity: stable
+    category: credential_access
+    tags: [attack.t1552.001, atlas.aml.t0055]
+    references:
+      - "research/threats.md section 4 S1"
+    when:
+      type: [tool.pre, tool.post, process.exec]
+    match:
+      any:
+        - path.sensitive_read: true
+        - shell.cred_access|contains_any: [secret_file_read, ssh_key_read, keychain_dump, browser_cred, password_store, token_print, proc_environ_read, cloud_metadata]
+        - all:
+            - shell.read_classes|contains_any: [secret_env, ssh_private_key, cloud_credentials, kube_config, docker_config, git_credentials, netrc, npm_token, pypi_token, gpg_keyring, password_store, keychain, browser_data, crypto_wallet, token_file, cert_private_key, proc_environ]
+            - not:
+                shell.reads|any_re: "[*?\\[{]"
+        - mcp.arg_path_classes|contains_any: [secret_env, ssh_private_key, cloud_credentials, kube_config, docker_config, git_credentials, netrc, npm_token, pypi_token, password_store, keychain, browser_data, crypto_wallet, token_file, cert_private_key]
+    flags:
+      set: [credential_source_read]
+      ttl: 24h
+    emit: false
+    tests:
+      - name: dotenv read result
+        event: { type: tool.post, tool: { kind: file_read, name: Read }, target: { path: /home/tester/project/.env } }
+        expect: match
+      - name: token printed
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "gh auth token" } }
+        expect: match
+      - name: environment listing
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "env | sort" } }
+        expect: no_match
+      - name: grep over yaml files
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "grep -n token deploy/*.yaml" } }
+        expect: no_match
+      - name: token file without a parser-recognised credential command
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cat ~/.config/deploy/token" } }
+        expect: match
 
   - id: SPR-SEQ-001
     title: Untrusted input, credential read and egress in one thread

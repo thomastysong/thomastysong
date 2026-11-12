@@ -8,14 +8,11 @@ import (
 	"syscall"
 )
 
-// openNoFollow opens for reading. O_NOFOLLOW closes the window between the
-// lstat and the open in which the file could become a link; O_NONBLOCK keeps
-// a FIFO planted in its place from blocking the caller forever.
-func openNoFollow(path string) (*os.File, error) {
-	return os.OpenFile(path, readFlags, 0)
-}
-
 // readFlags are the flags for every read of a file another program owns.
+// O_NOFOLLOW and O_NONBLOCK (unix) keep a link or a FIFO planted in the
+// file's place from being followed or from blocking the caller forever;
+// the caller also compares the opened handle with its lstat result, which
+// catches a link swapped in between (Windows has no O_NOFOLLOW).
 const readFlags = os.O_RDONLY | syscall.O_NOFOLLOW | syscall.O_NONBLOCK
 
 func isNotDir(err error) bool { return errors.Is(err, syscall.ENOTDIR) }

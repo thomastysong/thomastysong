@@ -43,6 +43,10 @@ func TestOptionsValidation(t *testing.T) {
 		{"otel with credentials", func(o *Options) { o.OTel = "http://user:pw@127.0.0.1:4319" }},
 		{"otel not http", func(o *Options) { o.OTel = "file:///etc/passwd" }},
 		{"otel with query", func(o *Options) { o.OTel = "http://127.0.0.1:4319/?x=1" }},
+		// JSON and TOML would carry U+FFFD instead: a file that does not
+		// exist would be registered.
+		{"binary not utf-8", func(o *Options) { o.Binary = "/opt/sp\xffor/spoor" }},
+		{"otel not utf-8", func(o *Options) { o.OTel = "http://h\xff:4319" }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

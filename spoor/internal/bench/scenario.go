@@ -46,7 +46,12 @@ type Scenario struct {
 	Outcome     string // attempted | succeeded (attacks only)
 	Description string
 	Expect      []string // rule ids expected to fire (attacks)
-	ExpectNone  bool     // no finding or alert may fire (benign look-alikes)
+	// ExpectAny marks an attack the rule catalogue has no dedicated rule
+	// for (expect: [any]): it counts as detected when any finding or alert
+	// fires, so known gaps stay in the recall denominator instead of being
+	// left out of the corpus.
+	ExpectAny  bool
+	ExpectNone bool // no finding or alert may fire (benign look-alikes)
 	// Mutations names the operators applied to the attack's shell commands
 	// ("all" by default, "none" to opt out); see Operators.
 	Mutations []string
@@ -97,6 +102,9 @@ var (
 	techniqueRe = regexp.MustCompile(`^(attack\.t[0-9]{4}(\.[0-9]{3})?|atlas\.aml\.t[0-9]{4}(\.[0-9]{3})?|owasp\.(asi|mcp)[0-9]{2})$`)
 	ruleRefRe   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 )
+
+// ExpectAnyToken is the expect entry for attacks without a dedicated rule.
+const ExpectAnyToken = "any"
 
 // Surfaces an event can be observed on.
 const (
@@ -250,9 +258,19 @@ func compileScenario(file string, r *rawScenario) (Scenario, error) {
 		return s, errors.New("one of expect or expect_none is required")
 	}
 	for _, id := range s.Expect {
+		if id == ExpectAnyToken {
+			if len(s.Expect) != 1 {
+				return s, fmt.Errorf("expect: %q cannot be combined with rule ids", ExpectAnyToken)
+			}
+			s.ExpectAny = true
+			continue
+		}
 		if !ruleRefRe.MatchString(id) {
 			return s, fmt.Errorf("expect: %q is not a rule id", id)
 		}
+	}
+	if s.ExpectAny {
+		s.Expect = nil
 	}
 	for _, m := range s.Mutations {
 		if m != "all" && m != "none" && operatorByName(m) == nil {

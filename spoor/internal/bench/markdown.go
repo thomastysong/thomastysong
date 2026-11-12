@@ -109,7 +109,11 @@ func (rep *ScenarioReport) Markdown() string {
 		if s.Incident > 0 {
 			inc = fmt.Sprint(s.Incident)
 		}
-		w("| %s | %s | %s | %s | %s | %s | %s | %s | %s |\n", s.Name, s.Kind, inc, s.Technique, strings.Join(s.Expect, ", "),
+		exp := strings.Join(s.Expect, ", ")
+		if s.Kind == KindAttack && len(s.Expect) == 0 {
+			exp = "any (no dedicated rule)"
+		}
+		w("| %s | %s | %s | %s | %s | %s | %s | %s | %s |\n", s.Name, s.Kind, inc, s.Technique, exp,
 			strings.Join(s.Fired, ", "), cell(result), strings.Join(missed, ", "), strings.Join(surf, ", "))
 	}
 	return b.String()

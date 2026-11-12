@@ -192,8 +192,9 @@ rules:
       A command passes an option that makes an otherwise harmless program
       execute another command: git -c core.fsmonitor / core.sshCommand /
       alias !..., git --upload-pack, tar --checkpoint-action=exec, rg --pre,
-      ssh -o ProxyCommand. Each is a documented way to turn a read-only
-      looking call into code execution.
+      ssh -o ProxyCommand, a sed script with the e command or flag. Each is
+      a documented way to turn a read-only looking call into code execution
+      (CVE-2025-64755 used sed).
     kind: activity
     class: finding
     severity: medium
@@ -222,6 +223,9 @@ rules:
         - any_command:
             name|in: [ssh, scp, sftp]
             args|any_re: ["(?i)^(-o)?(proxycommand|localcommand)[= ]"]
+        - any_command:
+            name|in: [sed, gsed]
+            args|any_re: ["^([0-9]+|\\$)?(,([0-9]+|\\$))?e( |$)", "^s/[^/]*/[^/]*/[a-zA-Z0-9]*e[a-zA-Z0-9]*$"]
     dedup: [shell.commands]
     evidence: [target.command, shell.commands]
     remedy: Check the option value; run the inner command on its own if it is needed.
@@ -235,6 +239,12 @@ rules:
       - name: ssh proxy command
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "ssh -o ProxyCommand='sh -c id' x" } }
         expect: match
+      - name: sed e command
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "sed -n '1e id' README.md" } }
+        expect: match
+      - name: sed in-place substitution
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "sed -i -e 's/old/new/g' main.go" } }
+        expect: no_match
       - name: git with a harmless -c
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "git -c user.email=a@b.example -c core.pager=cat log -3" } }
         expect: no_match

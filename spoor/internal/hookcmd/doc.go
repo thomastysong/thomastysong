@@ -6,10 +6,16 @@
 //
 // # Contract
 //
-//   - The exit status is 0 in every case, including every crash of the
-//     code that does the work. Decisions are expressed only in the agent's
-//     JSON reply. Exit 2 means "block" to every supported agent and is also
-//     what the Go runtime exits with on a fatal error.
+//   - Run returns 0 in every case: on success, on every crash, hang or
+//     timeout of the worker that does the work, and for a guard block on
+//     every agent including Codex (whose block is sent as JSON, see below).
+//     Decisions are expressed only in the agent's JSON reply. Exit 2 means
+//     "block" to every supported agent and is also what the Go runtime
+//     exits with on a fatal error, so no code path uses it. Not covered: a
+//     signal from outside killing the supervisor itself (the agent's own
+//     hook timeout, the OOM killer, SIGPIPE when the agent has already
+//     closed the reply pipe); the supervisor's own code is kept small for
+//     that reason (no recursion, no shared maps, every goroutine recovers).
 //   - The hook never writes to stderr: agents show it to the user or the
 //     model, and Codex and Gemini read stderr as the block reason.
 //   - stdin is read with a cap (limits.max_hook_input_bytes, at most

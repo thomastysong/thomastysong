@@ -79,7 +79,7 @@ func installNotes(t target, o Options, rel related, n *notes) {
 			// document counts as present" and "Let an embedding host add
 			// policy".
 			n.add(`Claude Code treats this drop-in as an admin policy source: while it exists, the user-writable HKCU policy and settings passed by an embedding host are ignored unless parentSettingsBehavior is "merge"`)
-			if sh := shadowOf(t, o, rel); sh.shadowed {
+			if sh := shadowOf(t, o, rel, nil); sh.shadowed {
 				n.add("installed but shadowed: " + sh.why)
 			} else {
 				n.add(`not visible from disk: server-managed settings outrank this file under the default managedSourcesBehavior "first-wins"`)
@@ -90,7 +90,14 @@ func installNotes(t target, o Options, rel related, n *notes) {
 	case "codex":
 		switch t.scope {
 		case event.ScopeManaged:
-			n.add("a cloud or MDM requirements source that defines hooks replaces these (not visible from disk)")
+			if o.GOOS == "darwin" {
+				n.add("a cloud requirements source (not visible from disk) or the MDM profile com.openai.codex that defines hooks replaces these")
+				if hits, _ := mdmProfiles(o, codexMDMDomain); len(hits) > 0 {
+					n.add("an MDM profile for com.openai.codex is installed (" + hits[0] + "); its content was not parsed")
+				}
+			} else {
+				n.add("a cloud requirements source that defines hooks replaces these (not visible from disk)")
+			}
 		case event.ScopeSystem:
 			n.add("Codex loads hooks.json beside the system config.toml as a managed layer, without asking the user to trust it")
 		default:
@@ -114,6 +121,21 @@ func installNotes(t target, o Options, rel related, n *notes) {
 		}
 	case "cursor":
 		n.add("UNVERIFIED: the hooks.json fields timeout and failClosed could not be checked against Cursor documentation")
+	}
+}
+
+// permNotes tells the operator about files beside a managed hook file that
+// a non-admin could change. Install takes them back, but their content was
+// written by somebody who was not meant to set policy for every user.
+func permNotes(ps []permProblem, n *notes) {
+	for _, p := range ps {
+		switch {
+		case !p.sibling:
+		case p.fixable:
+			n.add(p.String() + ": the agent loads it for every user; install makes it admin-only, review its content")
+		default:
+			n.add(p.String() + ": the agent loads it for every user and spoor cannot secure it; remove it")
+		}
 	}
 }
 

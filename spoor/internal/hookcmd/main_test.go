@@ -264,7 +264,7 @@ const (
 	// matrix uses cfgGuardCrash, whose deadline it waits out on hangs.
 	cfgGuard      = "guard:\n  mode: advisory\n  max_response: block\n  deadline: 5s\nrules:\n  dirs: [$RULES]\n"
 	cfgGuardCrash = "guard:\n  mode: advisory\n  max_response: block\n  deadline: 1s\nrules:\n  dirs: [$RULES]\n"
-	cfgDetect  = "sources:\n  hooks:\n    detect_in_hook: true\nrules:\n  dirs: [$RULES]\nprivacy:\n  context_events: 2\n"
+	cfgDetect     = "sources:\n  hooks:\n    detect_in_hook: true\nrules:\n  dirs: [$RULES]\nprivacy:\n  context_events: 2\n"
 )
 
 // hookResult is one supervised invocation.

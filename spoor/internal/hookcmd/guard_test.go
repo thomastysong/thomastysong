@@ -184,7 +184,7 @@ func TestGuardAndDetectEnforced(t *testing.T) {
 		{"claude-code", "spoor-test-block x", "SPR-TEST-001", true},
 		{"claude-code", "spoor-test-ask x", "SPR-TEST-002", true},
 		{"codex", "spoor-test-block x", "SPR-TEST-001", true},
-		{"codex", "spoor-test-ask x", "SPR-TEST-002", false},  // a warning, not an ask
+		{"codex", "spoor-test-ask x", "SPR-TEST-002", false},      // a warning, not an ask
 		{"gemini-cli", "spoor-test-ask x", "SPR-TEST-002", false}, // likewise
 	} {
 		t.Run(c.agent+"/"+c.rule, func(t *testing.T) {

@@ -261,3 +261,12 @@ lists:
     - "project:hooks_disabled"
     - "project:hook_consent_bypassed"
     - "project:unsandboxed_commands_allowed"
+
+  # Destinations on this machine: data sent there has not left it.
+  local_hosts:
+    - localhost
+    - "*.localhost"
+    - 127.0.0.1
+    - "::1"
+    - 0.0.0.0
+    - host.docker.internal

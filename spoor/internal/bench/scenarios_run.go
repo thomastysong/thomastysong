@@ -151,7 +151,7 @@ func (r *Runner) RunScenarioSet(ctx context.Context, scs []Scenario) (*ScenarioR
 		BenignFP:     map[string]Rate{},
 		Limits:       scenarioLimits,
 	}
-	f := r.factory(r.o.Home, r.o.OS)
+	f := r.scenarioFactory()
 	files := map[string]bool{}
 	incidents := map[int]bool{}
 	unknown := map[string]bool{}
@@ -257,10 +257,10 @@ func (r *Runner) RunScenarioSet(ctx context.Context, scs []Scenario) (*ScenarioR
 				get(id).extra++
 			}
 		}
-		for _, h := range hits {
-			if r.classOf(h) != event.ClassSignal {
-				anyDet++
-				break
+		if r.anyFinding(hits) {
+			anyDet++
+			if s.ExpectAny {
+				res.Detected = true
 			}
 		}
 		if res.Detected {
@@ -278,7 +278,7 @@ func (r *Runner) RunScenarioSet(ctx context.Context, scs []Scenario) (*ScenarioR
 				return err
 			}
 			mf := firedSet(mh)
-			hit := false
+			hit := s.ExpectAny && r.anyFinding(mh)
 			for _, id := range s.Expect {
 				a := get(id)
 				a.rn++
@@ -354,7 +354,7 @@ func (r *Runner) RunScenarioSet(ctx context.Context, scs []Scenario) (*ScenarioR
 				return nil, err
 			}
 			af := firedSet(ah)
-			hit := false
+			hit := s.ExpectAny && r.anyFinding(ah)
 			for _, id := range s.Expect {
 				hit = hit || af[id]
 			}
@@ -418,6 +418,16 @@ var scenarioLimits = []string{
 	"Rates over fewer than 30 trials are marked insufficient. A rule whose recall rests on one or two scenarios has not been measured.",
 	"Mutations rewrite shell commands only; non-shell evasions are covered by hand-written variants where a scenario has them.",
 	"Ablations replay the same events per surface; they do not model what a surface loses in practice (hook payload fields, transcript truncation, process polling misses).",
+}
+
+// anyFinding reports whether a finding- or alert-class rule fired.
+func (r *Runner) anyFinding(hits []Hit) bool {
+	for _, h := range hits {
+		if r.classOf(h) != event.ClassSignal {
+			return true
+		}
+	}
+	return false
 }
 
 func buildAll(specs []EventSpec, source event.Source) ([]built, error) {

@@ -348,21 +348,10 @@ func replaceOnce(text string, m map[string]any) (string, bool) {
 	return strings.Replace(text, old, repl, 1), true
 }
 
-// Redaction of what the caller holds. Credentials are replaced by
+// Redaction of script facts. Credentials are replaced by
 // "[REDACTED:<kind>]": the marker form without a fingerprint, so nothing
-// held can be compared against a guessed value. Analysis and rules need
-// only the kinds (shell.secret_kinds).
-
-// redactText returns s with every credential classify.Redact finds
-// replaced, as valid UTF-8.
-func redactText(s string) string {
-	s = strings.ToValidUTF8(s, "�")
-	out, hits := classify.Redact(s)
-	if len(hits) == 0 && out == s {
-		return s
-	}
-	return unkeyMarkers(out)
-}
+// held can be compared against a guessed value. Rules need only the kinds
+// (shell.secret_kinds).
 
 // redactArgs returns a command's arguments with credentials replaced, the
 // way the evidence stage redacts a command line (structural rules for
@@ -439,31 +428,4 @@ func isLowerHex(s string) bool {
 		}
 	}
 	return true
-}
-
-// markerKinds returns the sorted kinds of the "[REDACTED:<kind>]" markers
-// in s that name a credential kind classify reports.
-func markerKinds(s string) []string {
-	if !strings.Contains(s, markerOpen) {
-		return nil
-	}
-	known := classify.SecretKinds()
-	var out []string
-	for {
-		i := strings.Index(s, markerOpen)
-		if i < 0 {
-			break
-		}
-		s = s[i+len(markerOpen):]
-		j := strings.IndexByte(s, ']')
-		if j < 0 {
-			break
-		}
-		kind, _, _ := strings.Cut(s[:j], ":")
-		if contains(known, kind) {
-			out = append(out, kind)
-		}
-		s = s[j+1:]
-	}
-	return sortedUniq(out)
 }

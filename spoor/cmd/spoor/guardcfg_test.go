@@ -160,9 +160,23 @@ func TestHooksInstallGuardManaged(t *testing.T) {
 		t.Fatalf("second run:\n%s", out)
 	}
 
-	// An existing file: only the value changes, mode kept.
-	writeTestFile(t, cfg, "# site config\ndata_dir: /var/lib/spoor\nguard:\n  mode: off # pilot\n  max_response: ask\n", 0o640)
+	// A file the developers' hooks cannot read: guard mode there would
+	// apply to no hook, so nothing is written and the fix is printed.
+	writeTestFile(t, cfg, "guard:\n  mode: off\n", 0o640)
 	if err := os.Chmod(cfg, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if code := ta.run(args...); code != exitError || !strings.Contains(ta.errb.String(), "other accounts cannot read it (mode 0640") ||
+		!strings.Contains(ta.errb.String(), "chmod o+r") {
+		t.Fatalf("unreadable config: exit %d\n%s", code, ta.errb.String())
+	}
+	if b, _ := os.ReadFile(cfg); string(b) != "guard:\n  mode: off\n" {
+		t.Fatalf("unreadable config changed: %s", b)
+	}
+
+	// An existing file: only the value changes, mode kept.
+	writeTestFile(t, cfg, "# site config\ndata_dir: /var/lib/spoor\nguard:\n  mode: off # pilot\n  max_response: ask\n", 0o604)
+	if err := os.Chmod(cfg, 0o604); err != nil {
 		t.Fatal(err)
 	}
 	var res planResult
@@ -174,7 +188,7 @@ func TestHooksInstallGuardManaged(t *testing.T) {
 	if string(b) != "# site config\ndata_dir: /var/lib/spoor\nguard:\n  mode: advisory # pilot\n  max_response: ask\n" {
 		t.Fatalf("edited config:\n%s", b)
 	}
-	if fi, _ := os.Stat(cfg); fi.Mode().Perm() != 0o640 {
+	if fi, _ := os.Stat(cfg); fi.Mode().Perm() != 0o604 {
 		t.Fatalf("mode changed: %v", fi.Mode())
 	}
 
@@ -214,9 +228,6 @@ func TestHooksInstallGuardManaged(t *testing.T) {
 	}
 }
 
-// A user-scope install registers the hooks but changes no machine
-// configuration: it says, on stderr, that guard mode is not on and exactly
-// what to change.
 // A user-scope --guard registers the hooks but cannot turn guard mode on
 // (that is the machine's configuration): it prints the change and exits 5,
 // so a script or CI job does not take the run for a guarded installation;

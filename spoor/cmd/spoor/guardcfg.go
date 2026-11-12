@@ -30,7 +30,10 @@ import (
 // Code always). `hooks install --guard` sets guard.mode: advisory in that
 // file for the managed (and Codex system) tier, which is the
 // administrator's; a user-scope install does not change the machine's
-// configuration for every account and prints the exact change instead.
+// configuration for every account: it prints the exact change and exits 5
+// (exitGuardOff) unless guard mode is already on. A file the developers'
+// hooks cannot read (mode bits, or on Windows the Users read grant) is
+// refused with the fix to apply: guard mode there would reach no hook.
 
 // Guard configuration actions.
 const (

@@ -166,23 +166,6 @@ func (s *ScriptFacts) markFragment(keep ScriptKeep) {
 	s.bound(keep)
 }
 
-// addSecretKinds records credential kinds the facts' text carries in a
-// form the analysis does not see (redaction markers of a held text).
-func (s *ScriptFacts) addSecretKinds(kinds []string, keep ScriptKeep) {
-	if s == nil || len(kinds) == 0 {
-		return
-	}
-	if s.Bools == nil {
-		s.Bools = map[string]bool{}
-	}
-	if s.Lists == nil {
-		s.Lists = map[string][]string{}
-	}
-	s.Bools["shell.has_secret"] = true
-	s.Lists["shell.secret_kinds"] = sortedUniq(append(append([]string(nil), s.Lists["shell.secret_kinds"]...), kinds...))
-	s.bound(keep)
-}
-
 func (s *ScriptFacts) addCut(k string) {
 	for _, x := range s.Cut {
 		if x == k {
@@ -688,25 +671,34 @@ func (s *ScriptFacts) Merge(o *ScriptFacts, keep ScriptKeep) {
 	s.bound(keep)
 }
 
-// Inert reports facts no rule can match: no command, install or list
-// value, and no boolean set but shell.parse_ok. A session's bounded script
-// memory gives up inert facts first (an inert fragment of a file nothing
-// else is known about included: forgetting it loses nothing).
+// Inert reports facts no rule can match: no install, no boolean set but
+// shell.parse_ok, no command but inert ones (export, echo, cd ...: source
+// such as "export const x = 1;" parses as shell) and no list value but
+// their names. A session's bounded script memory gives up inert facts
+// first (an inert fragment of a file nothing else is known about
+// included: forgetting it loses nothing).
 func (s *ScriptFacts) Inert() bool {
 	if s == nil {
 		return true
 	}
-	if len(s.Cmds) > 0 || len(s.Installs) > 0 {
+	if len(s.Installs) > 0 {
 		return false
+	}
+	for _, c := range s.Cmds {
+		if !inertCommand(c.Name) {
+			return false
+		}
 	}
 	for k, v := range s.Bools {
 		if v && k != "shell.parse_ok" {
 			return false
 		}
 	}
-	for _, l := range s.Lists {
-		if len(l) > 0 {
-			return false
+	for k, l := range s.Lists {
+		for _, v := range l {
+			if k != "shell.commands" || !inertCommand(v) {
+				return false
+			}
 		}
 	}
 	return true

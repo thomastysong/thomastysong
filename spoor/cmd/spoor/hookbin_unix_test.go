@@ -79,3 +79,19 @@ func TestBinaryProblemNeedsEveryAccount(t *testing.T) {
 		t.Errorf("root's 0750 binary for root: %q", got)
 	}
 }
+
+// A home whose owner the account database does not list still yields that
+// uid as the account a user-scope hook runs as.
+func TestAccessorForUnlistedHomeOwner(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs chown")
+	}
+	home := t.TempDir()
+	if err := os.Chown(home, 4243, 4243); err != nil {
+		t.Fatal(err)
+	}
+	a := accessorForHome("", home)
+	if a == nil || a.uid != 4243 || a.name != "uid 4243" || len(a.groups) != 0 {
+		t.Fatalf("accessor %+v", a)
+	}
+}

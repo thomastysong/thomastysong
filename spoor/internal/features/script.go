@@ -3,7 +3,9 @@ package features
 import (
 	"runtime"
 	"strings"
+	"unicode/utf8"
 
+	"github.com/thomastysong/spoor/internal/classify"
 	"github.com/thomastysong/spoor/internal/event"
 	"github.com/thomastysong/spoor/internal/shellx"
 )
@@ -137,8 +139,7 @@ type WrittenScript struct {
 	// file and carry Fragment.
 	Replace bool
 	// InContext is true for an edit applied to the text ScriptOptions.Prior
-	// returned. That text has its credentials redacted, so the caller
-	// keeps what it knew about the credentials the file sent.
+	// returned.
 	InContext bool
 	// Remove is true when the event deletes the file (a patch).
 	Remove bool
@@ -148,9 +149,9 @@ type WrittenScript struct {
 	// file). It lets the caller scan the script for remembered values;
 	// it is never stored.
 	Text string
-	// Keep is the whole new text of the file for the caller to hold, with
-	// credentials redacted, or "" when the whole text is not known or is
-	// longer than MaxScriptText.
+	// Keep is the whole new text of the file for the caller to hold, or
+	// "" when the whole text is not known, is longer than MaxScriptText,
+	// or holds a credential (session state never does).
 	Keep string
 }
 
@@ -216,8 +217,7 @@ func WrittenScripts(e *event.Event, ctx Context, o ScriptOptions) (out []Written
 	if kind == event.ToolFileWrite || isCreate(in) {
 		ws := WrittenScript{Path: path, Replace: true}
 		if text := writtenContent(e); text != "" {
-			ws.Facts, ws.Text = analyzeScript(path, text, ctx, o.Keep, b, known)
-			ws.Keep = keepText(text, ws.Facts)
+			ws.Facts, ws.Text, ws.Keep = analyzeScript(path, text, ctx, o.Keep, b, known)
 		}
 		return []WrittenScript{ws}
 	}
@@ -230,7 +230,7 @@ func WrittenScripts(e *event.Event, ctx Context, o ScriptOptions) (out []Written
 		}
 	}
 	if text := writtenContent(e); text != "" {
-		ws.Facts, ws.Text = analyzeScript(path, text, ctx, o.Keep, b, known)
+		ws.Facts, ws.Text, _ = analyzeScript(path, text, ctx, o.Keep, b, known)
 		ws.Facts.markFragment(o.Keep)
 	}
 	return []WrittenScript{ws}
@@ -257,14 +257,10 @@ func computedSecrets(e *event.Event) *knownSecrets {
 }
 
 // inContext analyses the whole text of a file after an edit applied to
-// the text the caller held. The held text has its credentials replaced by
-// redaction markers; the kinds those markers name are what the file still
-// carries, so they are counted as its secrets.
+// the text the caller held.
 func inContext(path, text string, ctx Context, o ScriptOptions, b *budget, known *knownSecrets) WrittenScript {
 	ws := WrittenScript{Path: path, Replace: true, InContext: true}
-	ws.Facts, ws.Text = analyzeScript(path, text, ctx, o.Keep, b, known)
-	ws.Keep = keepText(text, ws.Facts)
-	ws.Facts.addSecretKinds(markerKinds(text), o.Keep)
+	ws.Facts, ws.Text, ws.Keep = analyzeScript(path, text, ctx, o.Keep, b, known)
 	return ws
 }
 
@@ -276,8 +272,7 @@ func patchScript(pf patchFile, ctx Context, o ScriptOptions, b *budget, known *k
 		return ws
 	case pf.add:
 		if pf.text != "" {
-			ws.Facts, ws.Text = analyzeScript(pf.path, pf.text, ctx, o.Keep, b, known)
-			ws.Keep = keepText(pf.text, ws.Facts)
+			ws.Facts, ws.Text, ws.Keep = analyzeScript(pf.path, pf.text, ctx, o.Keep, b, known)
 		}
 		return ws
 	}
@@ -295,7 +290,7 @@ func patchScript(pf patchFile, ctx Context, o ScriptOptions, b *budget, known *k
 		}
 	}
 	if pf.text != "" {
-		ws.Facts, ws.Text = analyzeScript(pf.path, pf.text, ctx, o.Keep, b, known)
+		ws.Facts, ws.Text, _ = analyzeScript(pf.path, pf.text, ctx, o.Keep, b, known)
 		ws.Facts.markFragment(o.Keep)
 	}
 	return ws
@@ -307,19 +302,6 @@ func isCreate(in map[string]any) bool {
 	cmd, _ := in["command"].(string)
 	_, ok := in["file_text"].(string)
 	return ok && cmd == "create"
-}
-
-// keepText returns text for the caller to hold, or "" when it is not a
-// script (nothing to apply a later edit to) or too long.
-func keepText(text string, f *ScriptFacts) string {
-	if f == nil || len(text) > MaxScriptText {
-		return ""
-	}
-	k := redactText(text)
-	if len(k) > MaxScriptText {
-		return ""
-	}
-	return k
 }
 
 // scriptCtx fills ctx from the event like Compute does.
@@ -351,7 +333,8 @@ func scriptCtx(e *event.Event, ctx Context) Context {
 // so "bash x.py" is not a way around it. Facts is nil when the content is
 // not a script. o.Stop bounds the time spent (see ScriptOptions).
 func AnalyzeScript(name, content string, ctx Context, o ScriptOptions) (facts *ScriptFacts, text string) {
-	return analyzeScript(name, content, ctx, o.Keep, newBudget(o.Stop), nil)
+	facts, text, _ = analyzeScript(name, content, ctx, o.Keep, newBudget(o.Stop), nil)
+	return facts, text
 }
 
 // analyzeScript is AnalyzeScript within the budget b. The first piece of
@@ -360,19 +343,20 @@ func AnalyzeScript(name, content string, ctx Context, o ScriptOptions) (facts *S
 // a script or after the padding that pushed it out of view, so spending
 // the event's budget elsewhere (a large content scan) does not hide both
 // ends. The credential scan of the text is skipped once the budget is
-// spent (and recorded as incomplete), unless known has its result.
-func analyzeScript(name, content string, ctx Context, keep ScriptKeep, b *budget, known *knownSecrets) (facts *ScriptFacts, text string) {
+// spent (and recorded as incomplete), unless known has its result. hold
+// is the content for the caller to keep for a later edit (see holdable).
+func analyzeScript(name, content string, ctx Context, keep ScriptKeep, b *budget, known *knownSecrets) (facts *ScriptFacts, text, hold string) {
 	defer func() {
 		if recover() != nil {
-			facts, text = nil, ""
+			facts, text, hold = nil, "", ""
 		}
 	}()
 	if content == "" {
-		return nil, ""
+		return nil, "", ""
 	}
 	lang, mustParse := scriptLang(name, content)
 	if lang == "" {
-		return nil, ""
+		return nil, "", ""
 	}
 	if ctx.OS == "" {
 		ctx.OS = runtime.GOOS
@@ -403,12 +387,12 @@ func analyzeScript(name, content string, ctx Context, keep ScriptKeep, b *budget
 		if a.cut {
 			// Nothing was analysed before the budget ran out: the facts
 			// are unknown, which is not the same as clean.
-			return cutFacts(lang), text
+			return cutFacts(lang), text, ""
 		}
-		return nil, ""
+		return nil, "", ""
 	}
 	if mustParse && (!fx.ParseOK || len(fx.Commands) == 0) {
-		return nil, ""
+		return nil, "", ""
 	}
 	if a.cut {
 		c.f["content.truncated_scan"] = true
@@ -423,7 +407,43 @@ func analyzeScript(name, content string, ctx Context, keep ScriptKeep, b *budget
 	c.shellFacts(fx, text, fx.Truncated || len(parts) > 1)
 	c.network()
 	c.finish()
-	return scriptFromFeat(lang, c.f, keep), text
+	if holdable(content, fx, c) {
+		hold = content
+	}
+	return scriptFromFeat(lang, c.f, keep), text, hold
+}
+
+// holdable reports content the caller may keep so that a later edit is
+// applied to it: whole, at most MaxScriptText, valid UTF-8, analysed in
+// full, and with no credential in it, by pattern (shell.secret_kinds) or
+// in a position the evidence stage redacts (mysql -pPW, --token X, a
+// password in a URL). Session state never holds a credential, and a held
+// text is never redacted: an edit must apply to it as the tool applies it
+// to the file.
+func holdable(content string, fx *shellx.Facts, c *computer) bool {
+	if len(content) > MaxScriptText || !utf8.ValidString(content) || fx.Truncated || c.secretsSkipped {
+		return false
+	}
+	if k, _ := c.f["shell.secret_kinds"].([]string); len(k) > 0 {
+		return false
+	}
+	// Kinds given by the caller were found in a text this one derives
+	// from (an edit's content); the whole result is scanned once more.
+	if c.secrets != nil && len(classify.FindSecrets(content)) > 0 {
+		return false
+	}
+	for _, cm := range fx.Commands {
+		if len(cm.Args) == 0 {
+			continue
+		}
+		red := classify.RedactArgs(append([]string{cm.Name}, cm.Args...))
+		for i, a := range cm.Args {
+			if i+1 >= len(red) || red[i+1] != a {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // scriptAnalysis is one AnalyzeScript call: the pieces it hands to shellx
@@ -501,7 +521,7 @@ func foreignInterp(lang string) string {
 // command, the inline-code record, the heredoc and their opacity), so only
 // what the code does remains. A quoted heredoc hands shellx the code byte
 // for byte as one literal: the earlier one-liner form (python3 -c '<code>')
-// had to splice every single quote of the code as '\'', and shellx's cost
+// had to splice every single quote of the code as '\”, and shellx's cost
 // grew with the number of splices, to 80 ms for 32 KiB of an ordinary
 // Python table.
 func (a *scriptAnalysis) foreign(code string) *shellx.Facts {

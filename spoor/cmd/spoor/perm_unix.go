@@ -137,6 +137,11 @@ func modeOwner(fi os.FileInfo) string {
 // accessorForHome is the account a user-scope hook in home runs as: the
 // owner of the home directory, else the account called name; nil when
 // neither resolves (the caller then requires access for every account).
+// An owner the account database does not list (os/user without cgo reads
+// only /etc/passwd, which misses directory-service accounts on macOS) is
+// still known by uid: its own files by owner bits, others by other bits;
+// its groups are unknown, so group bits are not credited (this process's
+// own groups are, when it is that account).
 func accessorForHome(name, home string) *accessor {
 	if fi, err := os.Stat(home); err == nil {
 		if uid, _, ok := fileOwner(fi); ok {
@@ -145,6 +150,16 @@ func accessorForHome(name, home string) *accessor {
 					return a
 				}
 			}
+			a := &accessor{name: firstNonEmpty(name, "uid "+strconv.Itoa(uid)), uid: uid, groups: map[int]bool{}}
+			if uid == os.Geteuid() {
+				a.groups[os.Getegid()] = true
+				if gs, err := os.Getgroups(); err == nil {
+					for _, g := range gs {
+						a.groups[g] = true
+					}
+				}
+			}
+			return a
 		}
 	}
 	if name == "" {

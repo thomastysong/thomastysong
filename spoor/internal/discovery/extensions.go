@@ -83,7 +83,14 @@ func (s *scanner) scanVSCodeDir(dir, editor string, uc *userCtx) {
 	best := map[string]*extHit{}
 	n := 0
 	for _, e := range ents {
-		if e.kind != kindDir || strings.HasPrefix(e.name, ".") {
+		if strings.HasPrefix(e.name, ".") {
+			continue
+		}
+		if e.kind == kindSymlink {
+			s.skipLink(joinLogical(dir, e.name))
+			continue
+		}
+		if e.kind != kindDir {
 			continue
 		}
 		n++

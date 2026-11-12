@@ -85,3 +85,48 @@ func TestRelocatedStateDir(t *testing.T) {
 		t.Errorf("relocated settings not read: %v", a.RiskFlags)
 	}
 }
+
+// TestManagedHooksShadowedByMDM: with the default managedSourcesBehavior
+// "first-wins", Claude Code ignores the managed-settings.d drop-in when an
+// MDM policy (macOS managed preferences, Windows policy key) exists, so
+// spoor's entry there does not run: the hooks are not "managed".
+func TestManagedHooksShadowedByMDM(t *testing.T) {
+	f := newFixture(t)
+	f.dir("/home/alice/.claude")
+	f.file("/etc/claude-code/managed-settings.d/50-spoor.json",
+		`{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"/usr/bin/spoor","args":["hook","--agent","claude-code"]}]}]}}`, 0o644)
+	for _, mdm := range []bool{false, true} {
+		s, cancel, err := newScanner(context.Background(), f.opts(f.user("alice")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.scanManagedFacts()
+		i := s.byID["claude-code"]
+		if mdm {
+			// What the catalog's MDM probes record on macOS and Windows.
+			mf := s.managed["claude-code"]
+			if mf == nil {
+				mf = &managedFacts{insecure: map[string]bool{}}
+				s.managed["claude-code"] = mf
+			}
+			mf.flags = append(mf.flags, flagManagedPolicyPresent)
+		}
+		got := s.hookStatus(&s.products[i], s.userCtx(f.user("alice")), false)
+		want := hooksManaged
+		if mdm {
+			want = hooksModified
+		}
+		if got != want {
+			t.Errorf("mdm=%v: hooks = %s, want %s", mdm, got, want)
+		}
+		// Codex has no such precedence rule.
+		if ci, ok := s.byID["codex"]; ok && mdm {
+			s.managed["codex"] = &managedFacts{flags: []string{flagManagedPolicyPresent}}
+			if s.managedHooksShadowed(&s.products[ci]) {
+				t.Error("codex managed hooks reported shadowed")
+			}
+		}
+		s.g.close()
+		cancel()
+	}
+}

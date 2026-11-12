@@ -128,7 +128,14 @@ func (s *scanner) addClaudePlugin(key string, im, markets, enabled map[string]an
 	if installPath != "" && isAbsLogical(installPath) {
 		// The install path comes from a user-writable file: it is used only
 		// when it lies inside that user's home.
-		if _, ok := relLogical(uc.home, installPath, s.goos); ok && s.g.isDir(s.locFor(installPath, uc, "")) {
+		il := s.locFor(installPath, uc, "")
+		_, inHome := relLogical(uc.home, installPath, s.goos)
+		if inHome {
+			if m, err := s.g.stat(il); err == nil && m.kind == kindSymlink {
+				s.skipLink(installPath)
+			}
+		}
+		if inHome && s.g.isDir(il) {
 			a.Path = safeText(installPath, 1024)
 			if sum, _, reason := s.folderHash(installPath, uc, ""); reason == "" {
 				a.SHA256 = sum
@@ -167,7 +174,11 @@ func (s *scanner) scanPluginDir(dir, parent string, uc *userCtx) {
 	}
 	n := 0
 	for _, e := range ents {
-		if strings.HasPrefix(e.name, ".") || e.kind == kindSymlink || e.kind == kindOther {
+		if strings.HasPrefix(e.name, ".") || e.kind == kindOther {
+			continue
+		}
+		if e.kind == kindSymlink {
+			s.skipLink(joinLogical(dir, e.name))
 			continue
 		}
 		n++

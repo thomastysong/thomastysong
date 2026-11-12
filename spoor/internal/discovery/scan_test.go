@@ -442,14 +442,35 @@ func TestDifferential(t *testing.T) {
 	}
 	o.Full = false
 
-	// A settings change makes the agent "changed"; a deleted skill "removed".
+	// A settings change makes the agent "changed"; a deleted subagent
+	// "removed". The fixture's negative controls are links and a FIFO
+	// where configs would be: while they are present the scan has read
+	// gaps and reports no removal at all.
 	f.file("/home/alice/.claude/settings.json", `{"permissions":{"defaultMode":"default"}}`, 0o644)
 	if err := os.RemoveAll(f.real("/home/alice/.claude/agents/reviewer.md")); err != nil {
 		t.Fatal(err)
 	}
+	gappy, err := Scan(context.Background(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range gappy.Events {
+		if e.Asset.Change == event.ChangeRemoved {
+			t.Errorf("removal reported by a scan with skipped reads (ledger %+v)", gappy.Ledger)
+		}
+	}
+	for _, p := range []string{"/home/alice/.codeium/windsurf/mcp_config.json", "/home/alice/.copilot/mcp-config.json",
+		"/home/alice/.claude/agents/evil.md", "/home/alice/.claude/rules"} {
+		if err := os.Remove(f.real(p)); err != nil {
+			t.Fatal(err)
+		}
+	}
 	third, err := Scan(context.Background(), o)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if third.Ledger.Skipped+third.Ledger.Denied+third.Ledger.Errors != 0 || third.Ledger.Truncated {
+		t.Fatalf("fixture without its negative controls still has gaps: %+v", third.Ledger)
 	}
 	var changedAgent, removed bool
 	for _, e := range third.Events {
@@ -520,5 +541,238 @@ func TestAmbiguousNameNeedsSecondEvidence(t *testing.T) {
 func TestScanRequiresCatalog(t *testing.T) {
 	if _, err := Scan(context.Background(), Options{}); err == nil {
 		t.Error("nil catalog accepted")
+	}
+}
+
+// TestNoRemovalAfterSkippedRead: only a complete scan may conclude that
+// something is gone. A config that becomes a symbolic link (dotfile
+// managers), a config directory that becomes an absolute link inside the
+// home (refused by RESOLVE_BENEATH) or a skill directory that becomes a
+// link is not read, and what it declares is not reported removed.
+func TestNoRemovalAfterSkippedRead(t *testing.T) {
+	const h = "/home/alice"
+	cases := []struct {
+		name  string
+		kind  event.AssetKind
+		item  string
+		after func(f *fx)
+	}{
+		{"file becomes a symlink", event.AssetMCPServer, "srv", func(f *fx) {
+			f.file(h+"/dotfiles/mcp.json", `{"mcpServers":{"srv":{"command":"npx","args":["-y","srv-mcp"]}}}`, 0o644)
+			if err := os.Remove(f.real(h + "/.cursor/mcp.json")); err != nil {
+				f.t.Fatal(err)
+			}
+			f.symlink(h+"/.cursor/mcp.json", "../dotfiles/mcp.json")
+		}},
+		{"directory becomes an absolute symlink inside the home", event.AssetMCPServer, "srv", func(f *fx) {
+			if err := os.Rename(f.real(h+"/.cursor"), f.real(h+"/dotfiles-cursor")); err != nil {
+				f.t.Fatal(err)
+			}
+			f.symlink(h+"/.cursor", h+"/dotfiles-cursor")
+		}},
+		{"skill directory becomes a symlink", event.AssetSkill, "mine", func(f *fx) {
+			if err := os.Rename(f.real(h+"/.claude/skills/mine"), f.real(h+"/skills-repo-mine")); err != nil {
+				f.t.Fatal(err)
+			}
+			f.symlink(h+"/.claude/skills/mine", "../../skills-repo-mine")
+		}},
+		{"rules file becomes a symlink", event.AssetSubagent, "reviewer", func(f *fx) {
+			if err := os.Rename(f.real(h+"/.claude/agents/reviewer.md"), f.real(h+"/reviewer.md")); err != nil {
+				f.t.Fatal(err)
+			}
+			f.symlink(h+"/.claude/agents/reviewer.md", "../../reviewer.md")
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.file(h+"/.cursor/mcp.json", `{"mcpServers":{"srv":{"command":"npx","args":["-y","srv-mcp"]}}}`, 0o644)
+			f.file(h+"/.claude/skills/mine/SKILL.md", "---\nname: mine\n---\nx\n", 0o644)
+			f.file(h+"/.claude/agents/reviewer.md", "---\nname: reviewer\n---\nReview.\n", 0o644)
+			o := f.opts(f.user("alice"))
+			o.Projects = false
+			first, err := Scan(context.Background(), o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			prev := map[string]string{}
+			var id string
+			for _, e := range first.Events {
+				prev[e.Asset.ID] = e.Asset.SHA256
+				if e.Asset.Kind == tc.kind && e.Asset.Name == tc.item {
+					id = e.Asset.ID
+				}
+			}
+			if id == "" {
+				t.Fatalf("fixture: %s %q not found on the first scan", tc.kind, tc.item)
+			}
+			tc.after(f)
+			o.Prev = prev
+			second, err := Scan(context.Background(), o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, e := range second.Events {
+				if e.Asset.ID == id && e.Asset.Change == event.ChangeRemoved {
+					t.Errorf("%s reported removed although it still exists and was not read (ledger: %+v)", tc.item, second.Ledger)
+				}
+			}
+			if second.Ledger.Skipped+second.Ledger.Denied == 0 {
+				t.Errorf("the unread item was not counted: %+v", second.Ledger)
+			}
+		})
+	}
+}
+
+// TestNoRemovalAfterProjectCap: projects past MaxProjects are not scanned;
+// their assets are not gone.
+func TestNoRemovalAfterProjectCap(t *testing.T) {
+	f := newFixture(t)
+	h := "/home/alice"
+	f.file(h+"/.claude.json", `{"projects":{"/srv/a":{},"/srv/b":{}}}`, 0o600)
+	f.file("/srv/a/.mcp.json", `{"mcpServers":{"a-srv":{"command":"x"}}}`, 0o644)
+	f.file("/srv/b/.mcp.json", `{"mcpServers":{"b-srv":{"command":"x"}}}`, 0o644)
+	o := f.opts(f.user("alice"))
+	first, err := Scan(context.Background(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prev := map[string]string{}
+	ids := map[string]string{}
+	for _, e := range first.Events {
+		prev[e.Asset.ID] = e.Asset.SHA256
+		ids[e.Asset.ID] = e.Asset.Name
+	}
+	o.Prev = prev
+	o.MaxProjects = 1
+	second, err := Scan(context.Background(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range second.Events {
+		if e.Asset.Change == event.ChangeRemoved && strings.HasSuffix(ids[e.Asset.ID], "-srv") {
+			t.Errorf("%s reported removed: its project was only past the MaxProjects cut (ledger %+v)", ids[e.Asset.ID], second.Ledger)
+		}
+	}
+	if second.Ledger.Skipped == 0 {
+		t.Errorf("the project cut was not counted: %+v", second.Ledger)
+	}
+}
+
+// TestMaxProjectsKeepsMostRecent: MaxProjects keeps the most recently used
+// projects. Every key of ~/.claude.json's projects map shares that file's
+// mtime (Claude Code rewrites it constantly), so recency must come from
+// each project's own transcripts.
+func TestMaxProjectsKeepsMostRecent(t *testing.T) {
+	f := newFixture(t)
+	h := "/home/alice"
+	f.file(h+"/.claude.json", `{"projects":{"/srv/a":{},"/srv/z":{},"/srv/m":{}}}`, 0o600)
+	f.file(h+"/.claude/projects/-srv-a/1.jsonl", `{"cwd":"/srv/a"}`+"\n", 0o600)
+	f.file(h+"/.claude/projects/-srv-z/1.jsonl", `{"cwd":"/srv/z"}`+"\n", 0o600)
+	f.file(h+"/.claude/projects/-srv-z/0.jsonl", `{"cwd":"/srv/z"}`+"\n", 0o600)
+	for _, p := range []string{"/srv/a", "/srv/z", "/srv/m"} {
+		f.file(p+"/.mcp.json", `{"mcpServers":{"`+baseName(p)+`-srv":{"command":"x"}}}`, 0o644)
+	}
+	now := time.Now()
+	old := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	for p, mt := range map[string]time.Time{
+		h + "/.claude/projects/-srv-a/1.jsonl": old,
+		h + "/.claude/projects/-srv-z/1.jsonl": now.Add(-time.Minute),
+		h + "/.claude/projects/-srv-z/0.jsonl": old,
+		h + "/.claude/projects/-srv-a":         now, // a directory's own mtime is not its use
+		h + "/.claude.json":                    now,
+	} {
+		if err := os.Chtimes(f.real(p), mt, mt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	o := f.opts(f.user("alice"))
+	o.MaxProjects = 1
+	res, err := Scan(context.Background(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	x := fixtureIndex{events: res.Events}
+	if len(x.find(event.AssetMCPServer, "z-srv")) == 0 {
+		t.Errorf("most recently used project /srv/z not scanned under MaxProjects=1 (a-srv %v, m-srv %v)",
+			len(x.find(event.AssetMCPServer, "a-srv")) > 0, len(x.find(event.AssetMCPServer, "m-srv")) > 0)
+	}
+	o.MaxProjects = 2
+	res, err = Scan(context.Background(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	x = fixtureIndex{events: res.Events}
+	if len(x.find(event.AssetMCPServer, "a-srv")) == 0 || len(x.find(event.AssetMCPServer, "m-srv")) != 0 {
+		t.Error("a project with transcripts did not rank above one known only from the registry")
+	}
+}
+
+// TestScanProjectHomeIsUserScope: a session started in the home makes
+// ScanProject see ~/.claude/settings.json, ~/.claude/skills ... at project
+// paths. They are the user's own configuration (Scan reports them as user
+// scope), so they are not reported again as project scope.
+func TestScanProjectHomeIsUserScope(t *testing.T) {
+	f := newFixture(t)
+	h := "/home/alice"
+	f.file(h+"/.claude/settings.json", `{"permissions":{"defaultMode":"bypassPermissions"},"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/usr/bin/notify"}]}]}}`, 0o644)
+	f.file(h+"/.claude/skills/mine/SKILL.md", "---\nname: mine\n---\nx\n", 0o644)
+	for _, dir := range []string{h, "/home", "/"} {
+		res, err := ScanProject(context.Background(), dir, f.user("alice"), f.opts())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range res.Events {
+			t.Errorf("ScanProject(%s): user file reported as %s %s %q (%s)", dir, e.Asset.Scope, e.Asset.Kind, e.Asset.Name, e.Asset.Path)
+		}
+	}
+	// A project below the home is still a project.
+	f.file(h+"/src/app/.mcp.json", `{"mcpServers":{"app-srv":{"command":"x"}}}`, 0o644)
+	res, err := ScanProject(context.Background(), h+"/src/app", f.user("alice"), f.opts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a := (fixtureIndex{events: res.Events}).one(t, event.AssetMCPServer, "app-srv"); a.Scope != event.ScopeProject {
+		t.Errorf("app-srv scope = %s", a.Scope)
+	}
+}
+
+// TestWorkflowWithYAMLAnchors: GitHub Actions accepts YAML anchors and
+// aliases, so a workflow using one must still be read: otherwise one
+// harmless anchor hides an agent action on an untrusted trigger.
+func TestWorkflowWithYAMLAnchors(t *testing.T) {
+	f := newFixture(t)
+	p := "/home/alice/src/repo"
+	f.file(p+"/.github/workflows/agent.yml", `on:
+  issue_comment:
+    types: [created]
+env: &common
+  LOG: "1"
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env: *common
+    steps:
+      - &checkout
+        uses: actions/checkout@v4
+      - uses: anthropics/claude-code-action@v1
+  again:
+    runs-on: ubuntu-latest
+    steps:
+      - *checkout
+`, 0o644)
+	res, err := ScanProject(context.Background(), p, f.user("alice"), f.opts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := (fixtureIndex{events: res.Events}).find(event.AssetCIAgent, "claude-code-action")
+	if len(l) == 0 {
+		t.Fatalf("workflow running claude-code-action on issue_comment not reported (ledger %+v)", res.Ledger)
+	}
+	if !has(l[0].RiskFlags, flagCIUntrustedTrigger) {
+		t.Errorf("risk flags = %v", l[0].RiskFlags)
+	}
+	if res.Ledger.Errors != 0 {
+		t.Errorf("errors: %+v", res.Ledger)
 	}
 }

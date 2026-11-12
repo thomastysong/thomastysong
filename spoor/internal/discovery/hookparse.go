@@ -122,36 +122,65 @@ func handlerOf(ev, matcher string, h map[string]any, counts map[string]int) (hoo
 	if out.typ == "" {
 		out.typ = "command"
 	}
+	// sp collects whether every way this handler can run is spoor's own
+	// invocation (for one agent). A handler that also runs anything else is
+	// not spoor's, whatever else it carries.
+	sp := spoorCheck{}
 	var parts []string
-	switch c := h["command"].(type) {
-	case string:
-		parts = append(parts, c)
-	case []any:
-		// opencode-style argv list
-		for _, x := range c {
-			if s, ok := x.(string); ok {
-				out.argv = append(out.argv, s)
-			}
+	var args []string
+	argsOK := true
+	argList, hasArgs := h["args"].([]any)
+	for _, x := range argList {
+		if s, ok := x.(string); ok {
+			args = append(args, s)
+		} else {
+			argsOK = false
 		}
-		parts = append(parts, joinArgv(out.argv))
 	}
-	if args, ok := h["args"].([]any); ok {
-		for _, x := range args {
-			if s, ok := x.(string); ok {
-				out.argv = append(out.argv, s)
+	// "command" (and Copilot's "exec") is a shell string, or with "args"
+	// the executable of an exec form; opencode writes an argv list.
+	for _, k := range []string{"command", "exec"} {
+		switch c := h[k].(type) {
+		case string:
+			if hasArgs {
+				out.argv = append(out.argv, args...)
+				parts = append(parts, strings.TrimSpace(c+" "+joinArgv(args)))
+				sp.add(spoorArgv(append([]string{c}, args...)))
+				if !argsOK {
+					sp.fail()
+				}
+			} else {
+				parts = append(parts, c)
+				sp.add(spoorHook(c))
 			}
-		}
-		if len(parts) > 0 {
-			parts[0] = strings.TrimSpace(parts[0] + " " + joinArgv(out.argv))
+		case []any:
+			var argv []string
+			ok := true
+			for _, x := range c {
+				if s, isStr := x.(string); isStr {
+					argv = append(argv, s)
+				} else {
+					ok = false
+				}
+			}
+			argv = append(argv, args...)
+			out.argv = append(out.argv, argv...)
+			parts = append(parts, joinArgv(argv))
+			sp.add(spoorArgv(argv))
+			if !ok || !argsOK {
+				sp.fail()
+			}
 		}
 	}
 	for _, k := range []string{"bash", "powershell", "commandWindows", "windows", "linux", "osx"} {
 		if s, ok := h[k].(string); ok && s != "" {
 			parts = append(parts, s)
+			sp.add(spoorHook(s))
 		}
 	}
 	if s, ok := h["url"].(string); ok {
 		out.url = s
+		sp.fail()
 	}
 	if b, ok := asBool(h["async"]); ok {
 		out.async = b
@@ -159,6 +188,7 @@ func handlerOf(ev, matcher string, h map[string]any, counts map[string]int) (hoo
 	if then, ok := asMap(h["then"]); ok { // Kiro: {"then": {"type": "runCommand", "command": ...}}
 		if s, ok := then["command"].(string); ok {
 			parts = append(parts, s)
+			sp.add(spoorHook(s))
 		}
 	}
 	out.command = strings.Join(parts, "\n")
@@ -175,29 +205,225 @@ func handlerOf(ev, matcher string, h map[string]any, counts map[string]int) (hoo
 	key := out.event + "\x00" + out.matcher
 	out.index = counts[key]
 	counts[key]++
-	out.spoor, out.spoorAgent = spoorHook(out.command)
+	out.spoor, out.spoorAgent = sp.result()
 	return out, true
 }
 
-// spoorHook recognises spoor's own registration: every entry spoor
-// installs runs "<binary> hook --agent <id>", as a command line or in the
-// exec form (command plus args), so the joined text contains the marker.
+// spoorCheck accumulates spoor recognition over a handler's commands.
+type spoorCheck struct {
+	seen, bad bool
+	agent     string
+}
+
+// fail records a way to run the handler that is not spoor's.
+func (c *spoorCheck) fail() { c.seen, c.bad = true, true }
+
+func (c *spoorCheck) add(ok bool, agent string) {
+	c.seen = true
+	switch {
+	case !ok:
+		c.bad = true
+	case c.agent == "":
+		c.agent = agent
+	case c.agent != agent:
+		c.bad = true
+	}
+}
+
+func (c *spoorCheck) result() (bool, string) {
+	if !c.seen || c.bad || c.agent == "" {
+		return false, ""
+	}
+	return true, c.agent
+}
+
+// spoorBinaries are the file names of the spoor executable. A hook is
+// spoor's own only when it runs one of them, with exactly the arguments
+// hookinstall registers.
+var spoorBinaries = []string{"spoor", "spoor.exe"}
+
+func isSpoorBinary(p string) bool {
+	if p == "" || len(p) > 4096 || strings.ContainsAny(p, "\x00\n") {
+		return false
+	}
+	base := p
+	if i := strings.LastIndexAny(p, `/\`); i >= 0 {
+		base = p[i+1:]
+	}
+	for _, b := range spoorBinaries {
+		if strings.EqualFold(base, b) {
+			return true
+		}
+	}
+	return false
+}
+
+// validAgentID is the shape of an agent id hookinstall puts in a command
+// line: lower-case letters and digits, then also '.', '_' and '-'.
+func validAgentID(id string) bool {
+	if id == "" || len(id) > 64 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
+		case (c == '.' || c == '_' || c == '-') && i > 0:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// spoorArgv recognises the exec form: the spoor binary, then exactly
+// "hook", "--agent", <id>.
+func spoorArgv(argv []string) (bool, string) {
+	if len(argv) != 4 || !isSpoorBinary(argv[0]) || argv[1] != "hook" || argv[2] != "--agent" || !validAgentID(argv[3]) {
+		return false, ""
+	}
+	return true, argv[3]
+}
+
+// spoorHook recognises spoor's own registration in shell text. Every
+// non-blank line must be one spoor invocation, "<spoor binary> hook
+// --agent <id>", in one of the shapes hookinstall writes: a POSIX
+// single-quoted path ('/opt/O'\”Brien/spoor'), a double-quoted path, the
+// PowerShell call operator (& 'C:\x\spoor.exe'), or a bare path. Hook
+// scripts (one file per event) may add a shebang, comments and a leading
+// "exec". Words such as " hook --agent " elsewhere in a command prove
+// nothing: anything can carry them.
 func spoorHook(cmd string) (bool, string) {
-	const marker = " hook --agent "
+	c := spoorCheck{}
 	for _, line := range strings.Split(cmd, "\n") {
-		norm := strings.ReplaceAll(strings.ReplaceAll(line, `"`, " "), "'", " ")
-		norm = " " + strings.Join(strings.Fields(norm), " ") + " "
-		i := strings.Index(norm, marker)
-		if i < 0 {
+		line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		rest := strings.Fields(norm[i+len(marker):])
-		if len(rest) == 0 {
-			return true, ""
-		}
-		return true, safeText(rest[0], 64)
+		c.add(spoorLine(line))
 	}
-	return false, ""
+	return c.result()
+}
+
+func spoorLine(line string) (bool, string) {
+	line = strings.TrimSpace(line)
+	if rest, ok := strings.CutPrefix(line, "exec "); ok {
+		line = strings.TrimSpace(rest)
+	}
+	var exe, rest string
+	var ok bool
+	switch {
+	case strings.HasPrefix(line, "& "):
+		exe, rest, ok = pwshQuoted(strings.TrimSpace(line[2:]))
+	case strings.HasPrefix(line, "'"), strings.HasPrefix(line, `"`):
+		exe, rest, ok = posixWord(line)
+	default:
+		exe, rest, _ = strings.Cut(line, " ")
+		ok = plainPath(exe)
+	}
+	if !ok {
+		return false, ""
+	}
+	return spoorArgv(append([]string{exe}, strings.Fields(rest)...))
+}
+
+// plainPath accepts an unquoted path that no shell would expand or split.
+func plainPath(p string) bool {
+	if p == "" {
+		return false
+	}
+	for i := 0; i < len(p); i++ {
+		c := p[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '/' || c == '\\' || c == ':' || c == '.' || c == '_' || c == '-' || c == '+' || c == '@':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// posixWord reads one quoted shell word (single quotes, double quotes
+// without expansions, backslash escapes between them) and returns it and
+// the text after it. A word that would expand anything is refused.
+func posixWord(s string) (word, rest string, ok bool) {
+	var b strings.Builder
+	i := 0
+	for i < len(s) {
+		c := s[i]
+		switch {
+		case c == ' ' || c == '\t':
+			return b.String(), s[i:], b.Len() > 0
+		case c == '\'':
+			j := strings.IndexByte(s[i+1:], '\'')
+			if j < 0 {
+				return "", "", false
+			}
+			b.WriteString(s[i+1 : i+1+j])
+			i += j + 2
+		case c == '"':
+			i++
+			for {
+				if i >= len(s) {
+					return "", "", false
+				}
+				d := s[i]
+				if d == '"' {
+					i++
+					break
+				}
+				if d == '$' || d == '`' {
+					return "", "", false
+				}
+				if d == '\\' && i+1 < len(s) && strings.IndexByte("\"\\$`", s[i+1]) >= 0 {
+					i++
+					d = s[i]
+				}
+				b.WriteByte(d)
+				i++
+			}
+		case c == '\\' && i+1 < len(s):
+			b.WriteByte(s[i+1])
+			i += 2
+		case plainPath(string(c)):
+			b.WriteByte(c)
+			i++
+		default:
+			return "", "", false
+		}
+	}
+	return b.String(), "", b.Len() > 0
+}
+
+// pwshQuoted reads a PowerShell single-quoted string (a quote character is
+// written twice to stand for itself; PowerShell treats the typographic
+// single quotes as delimiters too) and returns it and the text after it.
+func pwshQuoted(s string) (word, rest string, ok bool) {
+	isQ := func(r rune) bool {
+		return r == '\'' || r == '\u2018' || r == '\u2019' || r == '\u201a' || r == '\u201b'
+	}
+	rs := []rune(s)
+	if len(rs) < 2 || !isQ(rs[0]) {
+		return "", "", false
+	}
+	var b strings.Builder
+	for i := 1; i < len(rs); i++ {
+		if isQ(rs[i]) {
+			if i+1 < len(rs) && isQ(rs[i+1]) {
+				b.WriteRune(rs[i])
+				i++
+				continue
+			}
+			rest = string(rs[i+1:])
+			if rest != "" && rest[0] != ' ' && rest[0] != '\t' {
+				return "", "", false
+			}
+			return b.String(), rest, true
+		}
+		b.WriteRune(rs[i])
+	}
+	return "", "", false
 }
 
 func joinArgv(a []string) string {

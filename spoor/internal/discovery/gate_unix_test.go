@@ -228,3 +228,40 @@ func TestMultiUserOwnership(t *testing.T) {
 		}
 	}
 }
+
+// TestGateScopeBudgets: each scope (the machine-wide pass, a home, a
+// project) spends its own directory-entry budget; exhausting one leaves the
+// next untouched, and the enclosing scope's remainder is restored.
+func TestGateScopeBudgets(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < 20; i++ {
+		if err := os.WriteFile(filepath.Join(root, "f"+strings.Repeat("x", i)), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	g, err := newGate(context.Background(), newLedger(), "", false, "linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.close()
+	l := loc{root: filepath.ToSlash(root)}
+	restoreOuter := g.scope("home a", 30, 0)
+	if _, err := g.readDir(l); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.readDir(l); !errors.Is(err, errBudget) {
+		t.Fatalf("second listing within a 30-entry budget: %v", err)
+	}
+	restore := g.scope("project b", 30, 0)
+	if _, err := g.readDir(l); err != nil {
+		t.Errorf("a fresh scope inherited an exhausted budget: %v", err)
+	}
+	restore()
+	if _, err := g.readDir(l); !errors.Is(err, errBudget) {
+		t.Errorf("restored scope regained budget: %v", err)
+	}
+	restoreOuter()
+	if _, err := g.readDir(l); err != nil {
+		t.Errorf("the machine-wide budget was spent by a home: %v", err)
+	}
+}

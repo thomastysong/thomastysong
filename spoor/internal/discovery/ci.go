@@ -33,7 +33,14 @@ func (s *scanner) scanWorkflows(uc *userCtx, dir string) {
 	n := 0
 	for _, e := range ents {
 		low := strings.ToLower(e.name)
-		if e.kind != kindRegular || !(strings.HasSuffix(low, ".yml") || strings.HasSuffix(low, ".yaml")) {
+		if !(strings.HasSuffix(low, ".yml") || strings.HasSuffix(low, ".yaml")) {
+			continue
+		}
+		if e.kind == kindSymlink {
+			s.skipLink(joinLogical(wdir, e.name))
+			continue
+		}
+		if e.kind != kindRegular {
 			continue
 		}
 		n++

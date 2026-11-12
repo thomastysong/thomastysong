@@ -3,6 +3,7 @@ package discovery
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/thomastysong/spoor/internal/event"
@@ -183,5 +184,93 @@ func TestProcessAttributionSharedUID(t *testing.T) {
 	}
 	if a := byOwner[""]; a == nil || !a.Running || a.PID != 43 || a.Scope != event.ScopeSystem {
 		t.Errorf("unattributable process: machine-wide asset = %+v", a)
+	}
+}
+
+// TestScanProjectForeignListings: a privileged scan lists a directory in a
+// user's tree only when that user owns it, and reports a skill only once
+// its SKILL.md was read through the owner check. Otherwise another user's
+// skill names and paths would be reported as this user's assets.
+func TestScanProjectForeignListings(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root to create files owned by another user")
+	}
+	chown := func(f *fx, uid int, paths ...string) {
+		t.Helper()
+		for _, p := range paths {
+			if err := os.Lchown(f.real(p), uid, uid); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	alice := func(f *fx) platform.UserHome {
+		u := f.user("alice")
+		u.UID = "1000"
+		return u
+	}
+	// Bob's whole repository.
+	f := newFixture(t)
+	repo := "/home/bob/repo"
+	f.file(repo+"/.claude/skills/acquisition-plan/SKILL.md", "---\nname: acquisition-plan\n---\nsecret\n", 0o644)
+	chown(f, 1001, "/home/bob", repo, repo+"/.claude", repo+"/.claude/skills",
+		repo+"/.claude/skills/acquisition-plan", repo+"/.claude/skills/acquisition-plan/SKILL.md")
+	res, err := ScanProject(context.Background(), repo, alice(f), f.opts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range res.Events {
+		t.Errorf("alice's scan of bob's repository reported %s %q at %s", e.Asset.Kind, e.Asset.Name, e.Asset.Path)
+	}
+	if res.Ledger.Denied == 0 {
+		t.Errorf("refused listing not counted: %+v", res.Ledger)
+	}
+	// Alice's repository with bob's entries planted inside (a shared
+	// group-writable checkout): bob's directory is not listed, bob's
+	// skill is not reported, alice's own skill is.
+	f = newFixture(t)
+	repo = "/srv/shared/app"
+	f.file(repo+"/.claude/skills/mine/SKILL.md", "---\nname: mine\n---\nx\n", 0o644)
+	f.file(repo+"/.claude/skills/bobs-skill/SKILL.md", "---\nname: bobs-skill\n---\nx\n", 0o644)
+	f.file(repo+"/.claude/commands/bobs-command.md", "x\n", 0o644)
+	chown(f, 1000, repo, repo+"/.claude", repo+"/.claude/skills", repo+"/.claude/skills/mine", repo+"/.claude/skills/mine/SKILL.md")
+	chown(f, 1001, repo+"/.claude/skills/bobs-skill", repo+"/.claude/skills/bobs-skill/SKILL.md",
+		repo+"/.claude/commands", repo+"/.claude/commands/bobs-command.md")
+	res, err = ScanProject(context.Background(), repo, alice(f), f.opts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	x := fixtureIndex{events: res.Events}
+	if len(x.find(event.AssetSkill, "mine")) != 1 {
+		t.Errorf("alice's own skill not reported: %+v", res.Ledger)
+	}
+	for _, e := range res.Events {
+		if strings.HasPrefix(e.Asset.Name, "bobs") {
+			t.Errorf("bob's %s %q reported as alice's", e.Asset.Kind, e.Asset.Name)
+		}
+	}
+	// Directories in alice's home that bob owns (an Options.Env relocation
+	// or a planted tree): entries named only by a listing, a plugin per
+	// entry and an editor extension per directory name, are not hers.
+	f = newFixture(t)
+	h := "/home/alice"
+	f.dir(h + "/.openclaw/extensions/bobs-plugin")
+	f.file(h+"/.vscode/extensions/github.copilot-chat-0.30.0/package.json", `{"publisher":"GitHub","name":"copilot-chat","version":"0.30.0"}`, 0o644)
+	f.dir(h + "/.openclaw/own")
+	chown(f, 1000, h, h+"/.openclaw", h+"/.vscode")
+	chown(f, 1001, h+"/.openclaw/extensions", h+"/.openclaw/extensions/bobs-plugin", h+"/.vscode/extensions",
+		h+"/.vscode/extensions/github.copilot-chat-0.30.0", h+"/.vscode/extensions/github.copilot-chat-0.30.0/package.json")
+	o := f.opts(alice(f))
+	o.Projects = false
+	full, err := Scan(context.Background(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range full.Events {
+		if e.Asset.Kind == event.AssetPlugin || e.Asset.Kind == event.AssetIDEExtension {
+			t.Errorf("listing of bob's directory reported %s %q for alice", e.Asset.Kind, e.Asset.Name)
+		}
+	}
+	if full.Ledger.Denied < 2 {
+		t.Errorf("refused listings not counted: %+v", full.Ledger)
 	}
 }

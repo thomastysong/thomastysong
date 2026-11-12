@@ -3,6 +3,7 @@ package discovery
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -23,6 +24,10 @@ func TestHostileTrees(t *testing.T) {
 	// Pathological nesting in every syntax.
 	f.file(h+"/.claude.json", strings.Repeat(`{"a":`, 100000)+strings.Repeat("}", 100000), 0o644)
 	f.file(h+"/.codex/config.toml", "x = "+strings.Repeat("[", 50000)+strings.Repeat("]", 50000)+"\n", 0o644)
+	// TOML nesting hidden behind a multi-line string, and a dotted key whose
+	// parts make the TOML decoder's memory quadratic.
+	f.file("/etc/codex/requirements.toml", hiddenTOMLNesting(100_000), 0o644)
+	f.file(h+"/.kimi-code/config.toml", strings.Repeat("k.", 4000)+"k = 1\n", 0o644)
 	f.file(h+"/.config/goose/config.yaml", strings.Repeat("- ", 50000)+"x\n", 0o644)
 	// Invalid UTF-8, control characters and a credential in names.
 	tok := f.canary("github")
@@ -90,6 +95,15 @@ func TestHostileTrees(t *testing.T) {
 	}
 	if res.Ledger.Errors == 0 || res.Ledger.Skipped == 0 {
 		t.Errorf("ledger did not record the hostile input: %+v", res.Ledger)
+	}
+	for _, want := range []string{"could not parse /etc/codex/requirements.toml", "could not parse /home/alice/.kimi-code/config.toml"} {
+		found := false
+		for _, n := range res.Ledger.Notes {
+			found = found || strings.HasPrefix(n, want)
+		}
+		if !found {
+			t.Errorf("no ledger note %q in %v", want, res.Ledger.Notes)
+		}
 	}
 }
 
@@ -223,5 +237,89 @@ func TestFolderHashCaps(t *testing.T) {
 	g.hashLeft = 0
 	if _, _, reason := s.folderHash(dir, uc, ""); reason != "hash_budget_exhausted" {
 		t.Errorf("budget: %q", reason)
+	}
+}
+
+// TestRepoCodexConfigCannotKillScan: a repository that ships a 4 MB
+// .codex/config.toml (under the 20 MiB cap) whose nesting hides behind a
+// multi-line string once killed the scanning process with "fatal error:
+// stack overflow", which no recover can catch. The scan runs in a child
+// process so a regression is reported instead of killing the test binary.
+func TestRepoCodexConfigCannotKillScan(t *testing.T) {
+	if os.Getenv("SPOOR_DISCOVERY_CHILD") == "codex-config" {
+		dir := t.TempDir()
+		if err := os.MkdirAll(dir+"/.codex", 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(dir+"/.codex/config.toml", []byte(hiddenTOMLNesting(2_000_000)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		u := platform.UserHome{Name: "u", UID: strconv.Itoa(os.Geteuid()), Home: t.TempDir()}
+		o := Options{Catalog: testCatalog(t), Host: &event.Host{ID: "h"}, Deadline: time.Minute}
+		res, err := ScanProject(context.Background(), dir, u, o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Ledger.Errors == 0 {
+			t.Errorf("the refused config was not counted: %+v", res.Ledger)
+		}
+		return
+	}
+	if testing.Short() {
+		t.Skip("spawns a child scan")
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestRepoCodexConfigCannotKillScan$", "-test.count=1")
+	cmd.Env = append(os.Environ(), "SPOOR_DISCOVERY_CHILD=codex-config")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := string(out)
+		if i := strings.Index(msg, "fatal error"); i >= 0 {
+			msg = msg[i:]
+		}
+		if len(msg) > 600 {
+			msg = msg[:600]
+		}
+		t.Fatalf("ScanProject on a repository with a crafted .codex/config.toml failed: %v\n%s", err, msg)
+	}
+}
+
+// TestEntryBudgetPerHome: the directory-entry budget belongs to each home,
+// so one user cannot spend it for everybody scanned after them. Mallory's
+// ~/.claude/projects holds empty directories whose names decode into a
+// 4999-entry directory she owns; decoding them lists it again and again.
+func TestEntryBudgetPerHome(t *testing.T) {
+	f := newFixture(t)
+	m := "/home/mallory"
+	for i := 0; i < maxChildren-1; i++ {
+		if err := os.MkdirAll(f.real(m+"/big/d"+strconv.Itoa(i)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 45; i++ {
+		f.dir(m + "/.claude/projects/-home-mallory-big-zzz" + strconv.Itoa(i))
+	}
+	f.file("/home/victim/.claude/skills/victim-skill/SKILL.md", "---\nname: victim-skill\n---\nx\n", 0o644)
+	o := f.opts(f.user("mallory"), f.user("victim"))
+	res, err := Scan(context.Background(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len((fixtureIndex{events: res.Events}).find(event.AssetSkill, "victim-skill")) == 0 {
+		t.Errorf("victim's skill not inventoried after mallory's home spent its budget (ledger %+v)", res.Ledger)
+	}
+	// The decodes share listings: the big directory is listed once.
+	s, cancel, err := newScanner(context.Background(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancel()
+	defer s.g.close()
+	uc := s.userCtx(f.user("mallory"))
+	ps := &projSet{s: s, uc: uc, m: map[string]*projCand{}, decodesLeft: maxUserDecodes}
+	for i := 0; i < 45; i++ {
+		s.decodeClaudeDir(ps, "-home-mallory-big-zzz"+strconv.Itoa(i))
+	}
+	if used := maxUserDecodes - ps.decodesLeft; used > 8 {
+		t.Errorf("45 decodes into one directory made %d uncached listings", used)
 	}
 }

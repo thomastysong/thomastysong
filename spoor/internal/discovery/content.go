@@ -100,12 +100,19 @@ func (s *scanner) scanSkillsDir(dir, parent string, scope event.Scope, uc *userC
 		return
 	}
 	for _, e := range ents {
+		sdir := joinLogical(dir, e.name)
+		if e.kind == kindSymlink {
+			s.skipLink(sdir)
+			continue
+		}
 		if e.kind != kindDir {
 			continue
 		}
-		sdir := joinLogical(dir, e.name)
 		skillMD := s.findChild(sdir, "SKILL.md", uc, project)
 		if skillMD == "" {
+			if m, err := s.g.stat(s.locFor(joinLogical(sdir, "SKILL.md"), uc, project)); err == nil && m.kind == kindSymlink {
+				s.skipLink(joinLogical(sdir, "SKILL.md"))
+			}
 			continue
 		}
 		// A skill is reported only once its SKILL.md has been opened through
@@ -182,7 +189,9 @@ func (s *scanner) scanTextSite(p string, kind event.AssetKind, parent string, sc
 		count := 0
 		var walk func(dir, prefix string, depth int)
 		walk = func(dir, prefix string, depth int) {
-			if depth > 4 || count >= maxContentFiles {
+			// Past the file cap the walk has already been counted as
+			// capped; the depth bound is part of what a rules directory is.
+			if depth > 4 || count > maxContentFiles {
 				return
 			}
 			ents, err := s.g.readDir(s.locFor(dir, uc, project))
@@ -198,6 +207,8 @@ func (s *scanner) scanTextSite(p string, kind event.AssetKind, parent string, sc
 				switch {
 				case e.kind == kindDir:
 					walk(child, rel, depth+1)
+				case e.kind == kindSymlink:
+					s.skipLink(child)
 				case e.kind == kindRegular && isMarkdownLike(e.name):
 					count++
 					if count > maxContentFiles {
@@ -210,7 +221,7 @@ func (s *scanner) scanTextSite(p string, kind event.AssetKind, parent string, sc
 		}
 		walk(p, "", 0)
 	case kindSymlink:
-		s.led.skipped()
+		s.skipLink(p)
 	}
 }
 

@@ -28,7 +28,16 @@
 //     the managed file or the user file, does it name another agent, is the
 //     managed file writable by non-administrators, is a hooks kill switch
 //     set); transcript found | none | relocated; native OTel enabled |
-//     disabled | unsupported.
+//     disabled | unsupported. A hook entry is spoor's only when every
+//     command of the handler runs a spoor binary (spoor, spoor.exe) with
+//     exactly "hook --agent <id>", in the exec form or one of the quoted
+//     shapes hookinstall writes; the words alone prove nothing. For Claude
+//     Code, spoor's entry in the managed-settings.d drop-in is reported
+//     "modified" (Detail hooks_shadowed_by=mdm_policy) when an MDM policy
+//     is present: with the default managedSourcesBehavior first-wins the
+//     agent then ignores the file tier. A macOS profile that sets
+//     managedSourcesBehavior to merge is honoured; the Windows policy value
+//     is not read, and server-managed policy cannot be seen from disk.
 //   - Settings posture: the catalog's Setting probes on managed, user and
 //     project settings files, macOS managed preferences and Windows policy
 //     keys. Hits add their flag to the agent's RiskFlags; hits in a project
@@ -57,7 +66,12 @@
 //     agents' own state: ~/.claude.json and transcript cwds, Codex
 //     [projects] and rollout cwds, VS Code-family workspaceStorage,
 //     Copilot session-state, the Gemini project registry. The disk is never
-//     crawled.
+//     crawled. MaxProjects keeps the most recently used projects, ranked by
+//     per-project evidence only (newest transcript or rollout, the
+//     workspace's state database, the Gemini marker); a registry key has no
+//     time of its own, since the agent rewrites the whole file. The home
+//     (or a directory above it) is never scanned as a project, by Scan or
+//     ScanProject: its files are the user's own configuration.
 //
 // # Differential inventory
 //
@@ -65,9 +79,19 @@
 // Change new or changed; unchanged assets are returned only with
 // Options.Full. Assets of Prev that a complete scan did not see are
 // returned with Change removed (only the id is known, so Asset.Kind is
-// empty: downstream joins on the id). A scan that hit the
-// deadline, a read error or an unreadable home reports no removals, since
-// absence then proves nothing. SHA256 is the content or definition hash of
+// empty: downstream joins on the id). A scan is complete only when the
+// ledger shows no error, refusal or skip and it was not truncated: a
+// deadline or exhausted budget, an unreadable home, a parse error, a
+// config or item directory that became a symbolic link (dotfile and skill
+// managers), a path that resolves outside its root, a file over its cap,
+// another user's file, and every cap that cut an enumeration short
+// (MaxProjects, the transcript and rollout samples, truncated listings and
+// globs) all count. Prev holds ids only, so a gap cannot be matched to the
+// assets it declared last time: any gap suppresses every removal, and the
+// ledger says why. Absence that proves nothing is never reported as
+// removal; on hosts that always have a gap (a symlinked config, more than
+// MaxProjects projects), downstream reconciles from the Options.Full
+// snapshot instead. SHA256 is the content or definition hash of
 // declared items; for catalogued products it is a digest of the
 // observation (version, path, evidence, risk flags, telemetry): binaries
 // are not hashed.
@@ -88,13 +112,28 @@
 // named like a config cannot hang the scan), only regular files are read,
 // config files are capped at 20 MiB, and when privileged a file in a home
 // or project must belong to that user (a root-owned file in a user's home
-// is refused: it may be a hard link). Personal directories (Documents,
-// Desktop, Pictures, Mail, Messages, browser profiles, .ssh ...) are refused
-// unless the catalog or an agent's project list points inside them (a
-// project under ~/Documents is common; only its control files are read).
+// is refused: it may be a hard link), and so must a directory before it is
+// listed (checked on the open descriptor): another user's skill, plugin or
+// extension names are not this user's assets. A skill is reported only
+// after its SKILL.md was opened through that check. Personal directories
+// (Documents, Desktop, Pictures, Mail, Messages, browser profiles, .ssh
+// ...) are refused unless the catalog or an agent's project list points
+// inside them (a project under ~/Documents is common; only its control
+// files are read).
 // Directory listings, ** walks, hashed bytes and the whole scan
-// (Options.Deadline) are bounded. Everything refused or skipped is counted
-// in the Ledger. Names, versions and paths read from files are sanitized
+// (Options.Deadline) are bounded; the listing and hashing budgets belong to
+// each scope (the machine-wide pass, each home, each project), so one
+// hostile home cannot starve the users scanned after it, and decoding
+// Claude Code project names shares one cache of system listings and has a
+// per-user listing budget. Decoders are measured before they run: TOML by
+// a scanner that follows TOML's string and comment rules (nesting depth,
+// dotted-key parts, value count: the TOML decoder recurses without a limit
+// and its memory is quadratic in key parts), JSON on its comment-free text,
+// YAML after parsing by its size, height and scalar bytes once aliases are
+// followed (anchors are ordinary YAML and are read, expansion is bounded),
+// binary plists by the string bytes each reference decodes to (shared
+// objects are decoded once). Everything refused or skipped is counted in
+// the Ledger. Names, versions and paths read from files are sanitized
 // and credential-shaped text is redacted before it is emitted; config
 // values are never emitted, only key names. Nothing found is ever executed:
 // the package does not import os/exec (an import-graph test enforces it).

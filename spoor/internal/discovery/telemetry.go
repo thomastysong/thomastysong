@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/thomastysong/spoor/internal/catalog"
@@ -204,6 +205,11 @@ func (s *scanner) hookStatus(p *catalog.Product, uc *userCtx, disabled bool) str
 			}
 		}
 	}
+	if managed && s.managedHooksShadowed(p) {
+		// spoor's entry is in a managed file the agent does not read: a
+		// higher-precedence managed source wins outright.
+		modified = true
+	}
 	switch {
 	case managed && !modified:
 		// Managed hooks survive the user-level kill switches of Claude Code
@@ -220,6 +226,42 @@ func (s *scanner) hookStatus(p *catalog.Product, uc *userCtx, disabled bool) str
 		return hooksUser
 	}
 	return hooksMissing
+}
+
+// managedHooksShadowed reports a Claude Code managed-settings file drop
+// that the agent ignores. Claude Code reads managed sources in precedence
+// order (server-managed, then MDM: the macOS managed preferences domain
+// com.anthropic.claudecode or the Windows policy key
+// HKLM\SOFTWARE\Policies\ClaudeCode, then managed-settings.json with
+// managed-settings.d), and with the default managedSourcesBehavior
+// "first-wins" only the first source present applies. The catalog's
+// managed_policy_present probes detect the MDM sources; a macOS profile
+// that sets managedSourcesBehavior to "merge" is honoured, the Windows
+// policy value is not read (only its presence) and counts as shadowing.
+// Server-managed policy cannot be seen from disk and is not considered.
+func (s *scanner) managedHooksShadowed(p *catalog.Product) bool {
+	if p.Hooks == nil || p.Hooks.Dialect != catalog.DialectClaude {
+		return false
+	}
+	mf := s.managed[p.ID]
+	if mf == nil || !slices.Contains(mf.flags, flagManagedPolicyPresent) {
+		return false
+	}
+	for _, st := range p.Settings {
+		if st.Format != "plist" || st.Flag != flagManagedPolicyPresent || s.goos != "darwin" {
+			continue
+		}
+		for _, f := range st.File.For(s.goos) {
+			e, ok := s.expand(f, nil)
+			if !ok {
+				continue
+			}
+			if d := s.doc(systemLoc(e), "", "plist"); d.err == nil && strings.EqualFold(getString(d.doc, "managedSourcesBehavior"), "merge") {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // Telemetry.Transcript values.

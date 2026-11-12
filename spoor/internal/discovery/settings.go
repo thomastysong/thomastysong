@@ -11,6 +11,9 @@ import (
 const (
 	flagManagedMissing       = "managed_policy_missing"
 	flagManagedWorldWritable = "managed_policy_world_writable"
+	// flagManagedPolicyPresent is the catalog's flag for an MDM-delivered
+	// managed policy (macOS managed preferences, Windows policy keys).
+	flagManagedPolicyPresent = "managed_policy_present"
 )
 
 // managedFacts are machine-wide posture facts for one product, attached to

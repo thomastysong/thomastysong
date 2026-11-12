@@ -1,7 +1,6 @@
 package discovery
 
 import (
-	"sort"
 	"strings"
 
 	"github.com/thomastysong/spoor/internal/event"
@@ -304,7 +303,6 @@ func (ps *pcSet) cursorRules() {
 	count := 0
 	walk = func(d string, depth int) {
 		if depth > 4 || count > maxContentFiles {
-			ps.s.led.capped("cursor rules not all read: " + root)
 			return
 		}
 		ents, err := ps.s.g.readDir(ps.loc(d))
@@ -316,8 +314,14 @@ func (ps *pcSet) cursorRules() {
 			switch {
 			case e.kind == kindDir:
 				walk(p, depth+1)
+			case e.kind == kindSymlink:
+				ps.s.skipLink(p)
 			case e.kind == kindRegular && strings.HasSuffix(strings.ToLower(e.name), ".mdc"):
 				count++
+				if count > maxContentFiles {
+					ps.s.led.capped("cursor rules not all read: " + root)
+					return
+				}
 				l := ps.loc(p)
 				data, _, err := ps.s.g.readFile(l, ownerFor(l, ps.uc), 1<<20)
 				if err == nil && alwaysApply(string(data)) {
@@ -499,8 +503,309 @@ func (ps *pcSet) workspaces() {
 // gitExecKeys returns the exec-sink keys set in a git config: settings that
 // make git run a program the repository chose (core.fsmonitor runs on every
 // status). Only canonical key names are returned.
+//
+// The file is read the way git reads it (see parseGitConfig): quotes and
+// escapes are resolved and inline comments dropped, so core.fsmonitor is
+// flagged only when git would take its value for a hook command rather
+// than a boolean. A file git could not parse is also scanned line by line,
+// leniently, so a parser difference can only add keys, never hide one.
 func gitExecKeys(text string) []string {
 	keys := map[string]bool{}
+	entries, ok := parseGitConfig(text)
+	for _, e := range entries {
+		gitExecKey(keys, e)
+	}
+	if !ok {
+		for _, e := range lenientGitEntries(text) {
+			gitExecKey(keys, e)
+		}
+	}
+	return sortedKeys(keys)
+}
+
+// gitEntry is one key of a git config file. hasValue is false for a bare
+// key ("[core]\n\tbare"), which git reads as boolean true.
+type gitEntry struct {
+	section, sub, key, value string
+	hasValue                 bool
+}
+
+func gitExecKey(keys map[string]bool, e gitEntry) {
+	k, v := e.key, e.value
+	switch e.section {
+	case "core":
+		switch k {
+		case "fsmonitor":
+			if !gitBool(v, e.hasValue) {
+				keys["core.fsmonitor"] = true
+			}
+		case "sshcommand", "hookspath", "pager", "editor", "gitproxy", "askpass":
+			keys["core."+k] = true
+		}
+	case "alias":
+		if strings.HasPrefix(strings.TrimSpace(v), "!") {
+			keys["alias.*"] = true
+		}
+	case "filter":
+		if k == "clean" || k == "smudge" || k == "process" {
+			keys["filter.*."+k] = true
+		}
+	case "diff":
+		if e.sub != "" && (k == "textconv" || k == "command") {
+			keys["diff.*."+k] = true
+		}
+	case "merge":
+		if e.sub != "" && k == "driver" {
+			keys["merge.*.driver"] = true
+		}
+	case "credential":
+		if k == "helper" && strings.HasPrefix(strings.TrimSpace(v), "!") {
+			keys["credential.helper"] = true
+		}
+	case "include":
+		if k == "path" {
+			keys["include.path"] = true
+		}
+	case "includeif":
+		if k == "path" {
+			keys["includeIf.*.path"] = true
+		}
+	case "sequence":
+		if k == "editor" {
+			keys["sequence.editor"] = true
+		}
+	}
+}
+
+// gitBool reports whether git reads a value as a boolean: a bare key,
+// true/yes/on, false/no/off, the empty string (case-insensitive), or an
+// integer (C strtoimax base 0, with an optional k/m/g unit).
+func gitBool(v string, hasValue bool) bool {
+	if !hasValue {
+		return true
+	}
+	switch strings.ToLower(v) {
+	case "", "true", "yes", "on", "false", "no", "off":
+		return true
+	}
+	return gitInt(v)
+}
+
+func gitInt(v string) bool {
+	if v == "" {
+		return false
+	}
+	if u := v[len(v)-1]; u == 'k' || u == 'K' || u == 'm' || u == 'M' || u == 'g' || u == 'G' {
+		v = v[:len(v)-1]
+	}
+	if v != "" && (v[0] == '+' || v[0] == '-') {
+		v = v[1:]
+	}
+	digits := "0123456789"
+	switch {
+	case len(v) > 2 && (v[:2] == "0x" || v[:2] == "0X"):
+		v, digits = v[2:], "0123456789abcdefABCDEF"
+	case len(v) > 1 && v[0] == '0':
+		v, digits = v[1:], "01234567"
+	}
+	if v == "" || len(v) > 20 {
+		return false
+	}
+	for i := 0; i < len(v); i++ {
+		if strings.IndexByte(digits, v[i]) < 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// parseGitConfig reads a git config file the way git's config parser does
+// (config.c: git_parse_source, get_base_var, get_value, parse_value):
+// "#" and ";" start comments outside quotes, section and key names are
+// case-insensitive, "[section \"sub\"]" keeps the subsection's case and the
+// legacy "[section.sub]" folds it, a key without "=" is boolean true, and a
+// value has its quotes removed, \" \\ \n \t \b resolved, a backslash before
+// a newline joining lines, and unquoted trailing space trimmed. ok is
+// false when git would reject the file; the entries read up to that point
+// are returned.
+func parseGitConfig(text string) (entries []gitEntry, ok bool) {
+	s := strings.ReplaceAll(text, "\r\n", "\n")
+	n := len(s)
+	section, sub := "", ""
+	i := 0
+	isSpace := func(c byte) bool { return c == ' ' || c == '\t' || c == '\v' || c == '\f' || c == '\r' }
+	isAlnum := func(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' }
+	for i < n {
+		c := s[i]
+		switch {
+		case c == '\n' || isSpace(c):
+			i++
+		case c == '#' || c == ';':
+			for i < n && s[i] != '\n' {
+				i++
+			}
+		case c == '[':
+			i++
+			start := i
+			for i < n && (isAlnum(s[i]) || s[i] == '-' || s[i] == '.') {
+				i++
+			}
+			if i >= n {
+				return entries, false
+			}
+			name := strings.ToLower(s[start:i])
+			sub = ""
+			if isSpace(s[i]) {
+				for i < n && isSpace(s[i]) {
+					i++
+				}
+				if i >= n || s[i] != '"' {
+					return entries, false
+				}
+				i++
+				var b strings.Builder
+				for {
+					if i >= n || s[i] == '\n' {
+						return entries, false
+					}
+					if s[i] == '"' {
+						i++
+						break
+					}
+					if s[i] == '\\' {
+						i++
+						if i >= n || s[i] == '\n' {
+							return entries, false
+						}
+					}
+					b.WriteByte(s[i])
+					i++
+				}
+				sub = b.String()
+			} else if j := strings.IndexByte(name, '.'); j >= 0 {
+				name, sub = name[:j], name[j+1:]
+			}
+			if i >= n || s[i] != ']' || name == "" {
+				return entries, false
+			}
+			i++
+			section = name
+		case c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z':
+			start := i
+			for i < n && (isAlnum(s[i]) || s[i] == '-') {
+				i++
+			}
+			e := gitEntry{section: section, sub: sub, key: strings.ToLower(s[start:i])}
+			for i < n && isSpace(s[i]) {
+				i++
+			}
+			if i >= n || s[i] == '\n' || s[i] == '#' || s[i] == ';' {
+				// No "=": boolean true. A comment may follow the name.
+				for i < n && s[i] != '\n' {
+					i++
+				}
+				entries = append(entries, e)
+				continue
+			}
+			if s[i] != '=' {
+				return entries, false
+			}
+			i++
+			v, next, vok := gitValue(s, i)
+			if !vok {
+				return entries, false
+			}
+			e.value, e.hasValue = v, true
+			entries = append(entries, e)
+			i = next
+		default:
+			return entries, false
+		}
+		if len(entries) > 100_000 {
+			return entries, false
+		}
+	}
+	return entries, true
+}
+
+// gitValue parses a value starting at s[i] (after "="), as git's
+// parse_value does, and returns it with the index after its line.
+func gitValue(s string, i int) (string, int, bool) {
+	var b strings.Builder
+	quote, comment := false, false
+	trim := -1 // length of the value before unquoted trailing space
+	for {
+		if i >= len(s) {
+			if quote {
+				return "", i, false
+			}
+			break
+		}
+		c := s[i]
+		i++
+		if c == '\n' {
+			if quote {
+				return "", i, false
+			}
+			break
+		}
+		if comment {
+			continue
+		}
+		if (c == ' ' || c == '\t' || c == '\v' || c == '\f' || c == '\r') && !quote {
+			if trim < 0 {
+				trim = b.Len()
+			}
+			if b.Len() > 0 {
+				b.WriteByte(c)
+			}
+			continue
+		}
+		if !quote && (c == ';' || c == '#') {
+			comment = true
+			continue
+		}
+		trim = -1
+		if c == '\\' {
+			if i >= len(s) {
+				return "", i, false
+			}
+			d := s[i]
+			i++
+			switch d {
+			case '\n':
+				continue
+			case 't':
+				d = '\t'
+			case 'b':
+				d = '\b'
+			case 'n':
+				d = '\n'
+			case '\\', '"':
+			default:
+				return "", i, false
+			}
+			b.WriteByte(d)
+			continue
+		}
+		if c == '"' {
+			quote = !quote
+			continue
+		}
+		b.WriteByte(c)
+	}
+	v := b.String()
+	if trim >= 0 && trim <= len(v) {
+		v = v[:trim]
+	}
+	return v, i, true
+}
+
+// lenientGitEntries is a line-by-line reading for files git would reject:
+// it takes every "key = value" under the last section header and keeps the
+// value as written (quotes stripped), so it errs towards flagging.
+func lenientGitEntries(text string) []gitEntry {
+	var out []gitEntry
 	section, sub := "", ""
 	for _, raw := range strings.Split(text, "\n") {
 		line := strings.TrimSpace(raw)
@@ -527,57 +832,13 @@ func gitExecKeys(text string) []string {
 			}
 		}
 		k, v, hasV := strings.Cut(line, "=")
-		k = strings.ToLower(strings.TrimSpace(k))
-		v = strings.Trim(strings.TrimSpace(v), `"`)
-		if !hasV {
-			v = "true"
-		}
-		switch section {
-		case "core":
-			switch k {
-			case "fsmonitor":
-				if lv := strings.ToLower(v); lv != "true" && lv != "false" && lv != "" && lv != "0" && lv != "1" {
-					keys["core.fsmonitor"] = true
-				}
-			case "sshcommand", "hookspath", "pager", "editor", "gitproxy", "askpass":
-				keys["core."+k] = true
-			}
-		case "alias":
-			if strings.HasPrefix(v, "!") {
-				keys["alias.*"] = true
-			}
-		case "filter":
-			if k == "clean" || k == "smudge" || k == "process" {
-				keys["filter.*."+k] = true
-			}
-		case "diff":
-			if sub != "" && (k == "textconv" || k == "command") {
-				keys["diff.*."+k] = true
-			}
-		case "merge":
-			if sub != "" && k == "driver" {
-				keys["merge.*.driver"] = true
-			}
-		case "credential":
-			if k == "helper" && strings.HasPrefix(v, "!") {
-				keys["credential.helper"] = true
-			}
-		case "include":
-			if k == "path" {
-				keys["include.path"] = true
-			}
-		case "includeif":
-			if k == "path" {
-				keys["includeIf.*.path"] = true
-			}
-		case "sequence":
-			if k == "editor" {
-				keys["sequence.editor"] = true
-			}
+		e := gitEntry{section: section, sub: sub, key: strings.ToLower(strings.TrimSpace(k)), hasValue: hasV}
+		e.value = strings.Trim(strings.TrimSpace(v), `"`)
+		out = append(out, e)
+		if len(out) > 100_000 {
+			break
 		}
 	}
-	out := sortedKeys(keys)
-	sort.Strings(out)
 	return out
 }
 

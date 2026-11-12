@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/url"
 	"sort"
@@ -310,11 +311,9 @@ func (s *scanner) decodeClaudeDir(ps *projSet, name string) string {
 			return ""
 		}
 		listings++
-		ents, ok := s.decodeList(ps, dir)
+		ents, ok, spent := s.decodeList(ps, dir)
 		if !ok {
-			if ps.decodesLeft <= 0 {
-				capped = true
-			}
+			capped = capped || spent
 			return ""
 		}
 		for _, e := range ents {
@@ -342,29 +341,34 @@ func (s *scanner) decodeClaudeDir(ps *projSet, name string) string {
 }
 
 // decodeList lists a system directory for decodeClaudeDir, from the scan's
-// cache when it can.
-func (s *scanner) decodeList(ps *projSet, dir string) ([]dentry, bool) {
-	if ents, ok := s.listCache[dir]; ok {
-		return ents, ents != nil
+// cache when it can. spent reports that the user's listing budget, not the
+// directory, is why there is no listing.
+func (s *scanner) decodeList(ps *projSet, dir string) (ents []dentry, ok, spent bool) {
+	if cached, hit := s.listCache[dir]; hit {
+		return cached, cached != nil, false
 	}
 	if ps.decodesLeft <= 0 {
-		return nil, false
+		return nil, false, true
 	}
 	ps.decodesLeft--
 	ents, err := s.g.readDir(systemLoc(dir))
-	if s.listCacheSize+len(ents) <= maxDecodeCache {
+	// A listing refused for the current scope's budget or the deadline
+	// says nothing about the directory: it is not cached for other users.
+	transient := errors.Is(err, errBudget) || errors.Is(err, errDeadline)
+	if !transient && s.listCacheSize+len(ents) <= maxDecodeCache {
 		if s.listCache == nil {
 			s.listCache = map[string][]dentry{}
 		}
+		c := ents
 		if err != nil {
-			ents = nil
-		} else if ents == nil {
-			ents = []dentry{}
+			c = nil
+		} else if c == nil {
+			c = []dentry{}
 		}
-		s.listCache[dir] = ents
-		s.listCacheSize += len(ents) + 1
+		s.listCache[dir] = c
+		s.listCacheSize += len(c) + 1
 	}
-	return ents, err == nil
+	return ents, err == nil, false
 }
 
 func encodeClaude(p string) string {

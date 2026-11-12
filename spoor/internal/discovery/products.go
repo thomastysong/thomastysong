@@ -801,6 +801,12 @@ func (s *scanner) addProduct(i int, e *evidence, uc *userCtx) {
 			disabled = disabled || f == "hooks_disabled"
 		}
 		a.Telemetry = s.telemetry(i, uc, disabled)
+		if a.Telemetry != nil && a.Telemetry.Hooks == hooksModified && s.managedHooksShadowed(p) {
+			if a.Detail == nil {
+				a.Detail = map[string]string{}
+			}
+			a.Detail["hooks_shadowed_by"] = "mdm_policy"
+		}
 	}
 	a.RiskFlags = flags.list()
 	s.recs = append(s.recs, &record{a: a, uc: uc})

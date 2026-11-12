@@ -328,6 +328,17 @@ func (s *scanner) scanProject(uc *userCtx, dir string) {
 	s.scanWorkflows(uc, dir)
 }
 
+// skipLink counts a symbolic link met in a listing where a declared item
+// (a skill, a rules file, a plugin, a workflow ...) would be. Links are
+// never followed, but a link is not an absence either: dotfile and skill
+// managers replace files and directories with links, and the item behind
+// one may still be in use. Counting it keeps the scan from claiming its
+// removal.
+func (s *scanner) skipLink(p string) {
+	s.led.skipped()
+	s.led.note("skipped (symbolic link not followed): " + p)
+}
+
 // add records a declared item once per (kind, path, identity, owner).
 func (s *scanner) add(r *record) {
 	owner := ""

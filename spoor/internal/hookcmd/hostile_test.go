@@ -54,7 +54,7 @@ func TestHostileStdin(t *testing.T) {
 				if _, ok := validReply(r.stdout, MaxReply); !ok {
 					t.Fatalf("guard=%v %s %s: reply %q", guard, d.agent, name, r.stdout)
 				}
-				if r.dur > limit+time.Second {
+				if r.dur > (limit+time.Second)*raceSlowdown {
 					t.Fatalf("guard=%v %s %s: %v", guard, d.agent, name, r.dur)
 				}
 				if l := s.lines(t); len(l) == 0 {
@@ -88,7 +88,7 @@ func FuzzWorker(f *testing.F) {
 				if _, ok := validReply(r.stdout, MaxReply); !ok {
 					t.Fatalf("%s: reply %q", d.agent, r.stdout)
 				}
-				if r.dur > 2*time.Second {
+				if r.dur > 2*time.Second*raceSlowdown {
 					t.Fatalf("%s: %v", d.agent, r.dur)
 				}
 			}

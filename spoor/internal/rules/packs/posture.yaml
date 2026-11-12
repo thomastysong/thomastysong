@@ -1,0 +1,757 @@
+# Posture: inventory rules over the risk flags discovery computes at scan
+# time (internal/discovery, internal/mcpconf, catalog setting probes).
+# They produce posture.check failures, not detections, and need no agent
+# cooperation: this is how planted launchers and poisoned configuration are
+# found before anything runs (research/threats.md section 5).
+pack: posture
+version: "2026.11.0"
+description: Planted launchers, risky agent and MCP configuration, vulnerable versions and writable policy.
+rules:
+  - id: SPR-POST-001
+    title: Agent hook fetches or decodes code
+    description: >-
+      A hook declared in an agent configuration downloads and runs code or
+      decodes an encoded payload (curl | sh, bunx, base64 -d, an encoded
+      PowerShell command). Hooks run on every matching event with the
+      user's privileges.
+    kind: inventory
+    class: finding
+    severity: high
+    confidence: high
+    maturity: stable
+    category: persistence
+    tags: [atlas.aml.t0081, attack.t1546, owasp.asi05]
+    references:
+      - "research/threats.md section 2 row 29: Miasma; row 30: ChainDrop"
+      - "research/threats.md section 3 R05"
+    falsepositives:
+      - "Hooks that fetch a linter at run time"
+    when:
+      type: inventory.asset
+    match:
+      asset.kind: hook
+      asset.risk_flags|contains_any: [hook_remote_fetch_exec, hook_encoded]
+    evidence: [asset.path, asset.scope, asset.risk_flags]
+    remedy: Replace the hook with a pinned, reviewed script from the repository or remove it.
+    tests:
+      - name: hook pipes a download into sh
+        event: { type: inventory.asset, asset: { id: h1, kind: hook, name: SessionStart, scope: project, path: /home/tester/project/.claude/settings.json, risk_flags: [hook_remote_fetch_exec] } }
+        expect: match
+      - name: formatter hook
+        event: { type: inventory.asset, asset: { id: h2, kind: hook, name: PostToolUse, scope: user, path: /home/tester/.claude/settings.json } }
+        expect: no_match
+      - name: MCP server with the same flag name space
+        event: { type: inventory.asset, asset: { id: m1, kind: mcp_server, name: x, risk_flags: [remote_fetch_exec] } }
+        expect: no_match
+
+  - id: SPR-POST-002
+    title: Project hook runs a script from the repository
+    description: >-
+      A project-scope hook runs a script that lives in the repository or
+      calls a network tool. Opening the repository with the agent runs
+      whatever the last commit put there (Miasma's SessionStart: node
+      .github/setup.js).
+    kind: inventory
+    class: finding
+    severity: high
+    confidence: medium
+    maturity: stable
+    category: persistence
+    tags: [atlas.aml.t0081, attack.t1546, owasp.asi04, owasp.asi05]
+    references:
+      - "research/threats.md section 2 row 29: Miasma"
+      - "research/threats.md section 3 R04, R05"
+    falsepositives:
+      - "Teams that commit formatter hooks (baseline the approved hash)"
+    when:
+      type: inventory.asset
+    match:
+      asset.kind: hook
+      asset.scope: project
+      asset.risk_flags|contains_any: [hook_runs_repo_script, hook_network_tool]
+    evidence: [asset.path, asset.risk_flags]
+    remedy: Review the script and the commit that added the hook.
+    tests:
+      - name: project hook runs .github/setup.js
+        event: { type: inventory.asset, asset: { id: h3, kind: hook, name: SessionStart, scope: project, risk_flags: [hook_runs_repo_script] } }
+        expect: match
+      - name: user hook runs a home script
+        event: { type: inventory.asset, asset: { id: h4, kind: hook, name: Stop, scope: user, risk_flags: [hook_runs_repo_script] } }
+        expect: no_match
+      - name: project hook without flags
+        event: { type: inventory.asset, asset: { id: h5, kind: hook, name: PreToolUse, scope: project } }
+        expect: no_match
+
+  - id: SPR-POST-003
+    title: Repository auto-run launcher
+    description: >-
+      A repository control file makes an agent or IDE run something when
+      the folder is opened: a hook, an always-applied rule or a folder-open
+      task. This is the dominant 2026 worm plant (Mini Shai-Hulud, Miasma,
+      ChainDrop, Tensorlake), and it never passes through a tool-call hook.
+    kind: inventory
+    class: finding
+    severity: high
+    confidence: high
+    maturity: stable
+    category: persistence
+    tags: [atlas.aml.t0081, attack.t1546, owasp.asi04]
+    references:
+      - "research/threats.md section 2 rows 28 to 30"
+      - "research/threats.md section 3 R04"
+    falsepositives:
+      - "Teams that commit hooks or tasks on purpose (baseline by hash)"
+    when:
+      type: inventory.asset
+    match:
+      asset.kind: project_config
+      asset.risk_flags|contains_any: [autorun_hook, autorun_task, autorun_rule]
+    evidence: [asset.path, asset.risk_flags]
+    remedy: Check the commit that added the launcher; remove it unless the team approved it.
+    tests:
+      - name: folder-open task
+        event: { type: inventory.asset, asset: { id: p1, kind: project_config, name: tasks.json, scope: project, path: /home/tester/project/.vscode/tasks.json, risk_flags: [autorun_task] } }
+        expect: match
+      - name: project settings without launchers
+        event: { type: inventory.asset, asset: { id: p2, kind: project_config, name: settings.json, scope: project } }
+        expect: no_match
+      - name: rules file is another rule
+        event: { type: inventory.asset, asset: { id: r1, kind: rules_file, name: CLAUDE.md, risk_flags: [hidden_unicode] } }
+        expect: no_match
+
+  - id: SPR-POST-004
+    title: Configuration escalates agent permissions
+    description: >-
+      A settings file approves tools without asking (bypassPermissions as
+      the default mode, enableAllProjectMcpServers, chat.tools.autoApprove,
+      Codex approval_policy never) or does so from the project scope, where
+      the repository rather than the user chose it.
+    kind: inventory
+    class: finding
+    severity: high
+    confidence: high
+    maturity: stable
+    category: privilege_escalation
+    tags: [atlas.aml.t0081, owasp.asi03, owasp.asi05]
+    references:
+      - "research/threats.md section 2 row 7: CVE-2026-33068; row 21: CVE-2025-53773"
+      - "research/threats.md section 3 R08"
+    falsepositives:
+      - "Personal sandboxes"
+    when:
+      type: inventory.asset
+    match:
+      asset.risk_flags|any_in_list: escalation_risk_flags
+    evidence: [asset.path, asset.scope, asset.risk_flags]
+    remedy: Remove the setting from the project; unattended modes belong in managed policy.
+    tests:
+      - name: project bypass default
+        event: { type: inventory.asset, asset: { id: p3, kind: project_config, name: settings.json, scope: project, risk_flags: [settings_escalate_permissions] } }
+        expect: match
+      - name: project-scope catalog probe
+        event: { type: inventory.asset, asset: { id: a1, kind: agent, name: Claude Code, catalog_id: claude-code, risk_flags: ["project:bypass_permissions_default"] } }
+        expect: match
+      - name: managed policy present
+        event: { type: inventory.asset, asset: { id: a2, kind: agent, name: Claude Code, catalog_id: claude-code, risk_flags: [managed_policy_present] } }
+        expect: no_match
+
+  - id: SPR-POST-005
+    title: Model endpoint overridden in configuration
+    description: >-
+      Agent configuration sends the model traffic (and the API key) to a
+      base URL other than the vendor's: ANTHROPIC_BASE_URL in settings, a
+      provider base_url, OPENAI_BASE_URL in a project .env.
+    kind: inventory
+    class: finding
+    severity: high
+    confidence: high
+    maturity: stable
+    category: credential_access
+    tags: [atlas.aml.t0083, owasp.asi03]
+    references:
+      - "research/threats.md section 2 row 8: CVE-2026-21852; row 34: Apex Accelerator; row 48: LLM routers"
+      - "research/threats.md section 3 R07"
+    falsepositives:
+      - "Corporate LLM gateways and loopback model servers"
+    when:
+      type: inventory.asset
+    match:
+      asset.risk_flags|contains_any: [base_url_override, api_base_url_override, "project:api_base_url_override"]
+    evidence: [asset.path, asset.scope, asset.risk_flags]
+    remedy: Confirm the endpoint is the organisation's gateway.
+    tests:
+      - name: project base URL override
+        event: { type: inventory.asset, asset: { id: p4, kind: project_config, name: settings.json, scope: project, risk_flags: [base_url_override] } }
+        expect: match
+      - name: user setting probe
+        event: { type: inventory.asset, asset: { id: a3, kind: agent, name: Codex, catalog_id: codex, risk_flags: [api_base_url_override] } }
+        expect: match
+      - name: no override
+        event: { type: inventory.asset, asset: { id: a4, kind: agent, name: Codex, catalog_id: codex } }
+        expect: no_match
+
+  - id: SPR-POST-006
+    title: IDE executable path points into the workspace
+    description: >-
+      A workspace setting names an executable inside the workspace or a
+      temp directory (php.validate.executablePath, git.path, an interpreter
+      path). The IDE runs it when the folder opens (IDEsaster).
+    kind: inventory
+    class: finding
+    severity: medium
+    confidence: medium
+    maturity: stable
+    category: execution
+    tags: [atlas.aml.t0081, owasp.asi05]
+    references:
+      - "research/threats.md section 2 row 6: IDEsaster"
+      - "research/threats.md section 3 R09"
+    falsepositives:
+      - "Virtual-environment interpreters (.venv/bin/python)"
+    when:
+      type: inventory.asset
+    match:
+      asset.risk_flags: ide_exec_path_in_workspace
+    evidence: [asset.path, asset.risk_flags]
+    remedy: Point the setting at a system or managed executable.
+    tests:
+      - name: executable path in workspace
+        event: { type: inventory.asset, asset: { id: p5, kind: project_config, name: settings.json, risk_flags: [ide_exec_path_in_workspace] } }
+        expect: match
+      - name: auto-approve is another rule
+        event: { type: inventory.asset, asset: { id: p6, kind: project_config, name: settings.json, risk_flags: [autorun_task] } }
+        expect: no_match
+      - name: clean settings
+        event: { type: inventory.asset, asset: { id: p7, kind: project_config, name: settings.json } }
+        expect: no_match
+
+  - id: SPR-POST-007
+    title: Command-running key in a repository git config
+    description: >-
+      A repository's .git/config sets core.fsmonitor, core.sshCommand, a !
+      alias or a diff, filter or merge driver. The agent's or IDE's
+      background git status runs it before any trust prompt (GitSpawn).
+    kind: inventory
+    class: finding
+    severity: high
+    confidence: high
+    maturity: stable
+    category: execution
+    tags: [attack.t1574, atlas.aml.t0081, owasp.asi05]
+    references:
+      - "research/threats.md section 2 row 15: GitSpawn"
+      - "research/threats.md section 3 R14"
+    falsepositives:
+      - "git-lfs filters, core.hooksPath=.husky"
+    when:
+      type: inventory.asset
+    match:
+      asset.risk_flags: git_exec_key
+    evidence: [asset.path, asset.risk_flags]
+    remedy: Remove the key from .git/config; check how it got there.
+    tests:
+      - name: fsmonitor in repo config
+        event: { type: inventory.asset, asset: { id: p8, kind: project_config, name: config, path: /home/tester/project/.git/config, risk_flags: [git_exec_key] } }
+        expect: match
+      - name: clean repo config
+        event: { type: inventory.asset, asset: { id: p9, kind: project_config, name: config, path: /home/tester/project/.git/config } }
+        expect: no_match
+      - name: other flag
+        event: { type: inventory.asset, asset: { id: p10, kind: project_config, name: settings.json, risk_flags: [ide_auto_approve] } }
+        expect: no_match
+
+  - id: SPR-POST-008
+    title: MCP server launched from an untrusted location
+    description: >-
+      A declared MCP server runs a script from a temp, Downloads or hidden
+      directory, or another location the user (or a package) can
+      overwrite: SANDWORM_MODE's ~/.dev-utils/, Deadbugz's
+      ~/.config/.cache/.sys/.
+    kind: inventory
+    class: finding
+    severity: medium
+    confidence: medium
+    maturity: stable
+    category: persistence
+    tags: [atlas.aml.t0110, owasp.mcp09, owasp.asi04]
+    references:
+      - "research/threats.md section 2 row 27: SANDWORM_MODE; row 36: Deadbugz"
+      - "research/threats.md section 3 R49"
+    falsepositives:
+      - "Local development servers run from a checkout"
+    when:
+      type: inventory.asset
+    match:
+      asset.kind: mcp_server
+      asset.risk_flags|contains_any: [untrusted_location, local_script]
+    evidence: [asset.path, asset.mcp.command, asset.risk_flags]
+    remedy: Check who wrote the server script; remove the entry if the user did not add it.
+    tests:
+      - name: server in a hidden directory
+        event: { type: inventory.asset, asset: { id: m2, kind: mcp_server, name: devutils, mcp: { command: node, transport: stdio, pinned: false }, risk_flags: [untrusted_location] } }
+        expect: match
+      - name: pinned registry package
+        event: { type: inventory.asset, asset: { id: m3, kind: mcp_server, name: fs, mcp: { command: npx, runner: npx, transport: stdio, pinned: true }, risk_flags: [remote_fetch_exec] } }
+        expect: no_match
+      - name: hook with a local script
+        event: { type: inventory.asset, asset: { id: h6, kind: hook, name: Stop, risk_flags: [hook_runs_repo_script] } }
+        expect: no_match
+
+  - id: SPR-POST-009
+    title: Credential written inline in an MCP declaration
+    description: >-
+      An MCP server declaration carries a credential in its arguments,
+      environment, headers or URL. Every process of the user can read it and
+      it is often committed with the project.
+    kind: inventory
+    class: finding
+    severity: medium
+    confidence: high
+    maturity: stable
+    category: credential_access
+    tags: [attack.t1552.001, atlas.aml.t0083, owasp.mcp01]
+    references:
+      - "research/threats.md section 3 R53"
+    falsepositives:
+      - "Placeholders shaped like keys"
+    when:
+      type: inventory.asset
+    match:
+      asset.kind: mcp_server
+      asset.risk_flags|contains_any: [inline_secret, token_in_url]
+    evidence: [asset.path, asset.mcp.env_keys, asset.risk_flags]
+    remedy: Move the credential to the environment or a secret store and rotate it.
+    tests:
+      - name: inline secret
+        event: { type: inventory.asset, asset: { id: m4, kind: mcp_server, name: gh, mcp: { env_keys: [GITHUB_TOKEN], has_inline_secret: true, pinned: true }, risk_flags: [inline_secret] } }
+        expect: match
+      - name: env reference
+        event: { type: inventory.asset, asset: { id: m5, kind: mcp_server, name: gh, mcp: { env_keys: [GITHUB_TOKEN], pinned: true } } }
+        expect: no_match
+      - name: plaintext transport is another rule
+        event: { type: inventory.asset, asset: { id: m6, kind: mcp_server, name: x, risk_flags: [plaintext_transport] } }
+        expect: no_match
+
+  - id: SPR-POST-010
+    title: MCP server fetched and run unpinned at every launch
+    description: >-
+      The server is an npx/uvx/bunx package or a :latest image resolved at
+      every launch: whatever was published last runs (postmark-mcp turned
+      malicious in its 16th release). This is the ecosystem default, so a
+      signal.
+    kind: inventory
+    class: signal
+    severity: low
+    confidence: high
+    maturity: stable
+    category: supply_chain
+    tags: [atlas.aml.t0109, owasp.mcp04, owasp.asi04]
+    references:
+      - "research/threats.md section 2 row 35: postmark-mcp"
+      - "research/threats.md section 6 (npx -y servers are the default)"
+    when:
+      type: inventory.asset
+    match:
+      asset.kind: mcp_server
+      asset.risk_flags|contains_all: [unpinned_package, remote_fetch_exec]
+    evidence: [asset.mcp.package, asset.mcp.runner]
+    remedy: Pin an exact version or image digest.
+    tests:
+      - name: npx latest
+        event: { type: inventory.asset, asset: { id: m7, kind: mcp_server, name: fs, mcp: { runner: npx, package: "@modelcontextprotocol/server-filesystem", pinned: false }, risk_flags: [unpinned_package, remote_fetch_exec] } }
+        expect: match
+      - name: pinned npx
+        event: { type: inventory.asset, asset: { id: m8, kind: mcp_server, name: fs, mcp: { runner: npx, pinned: true }, risk_flags: [remote_fetch_exec] } }
+        expect: no_match
+      - name: local binary
+        event: { type: inventory.asset, asset: { id: m9, kind: mcp_server, name: local, mcp: { runner: binary, pinned: false } } }
+        expect: no_match
+
+  - id: SPR-POST-011
+    title: MCP server reached over plaintext HTTP
+    description: An MCP server is declared at an http:// or ws:// URL of another host; its traffic, tokens included, crosses the network unencrypted.
+    kind: inventory
+    class: finding
+    severity: low
+    confidence: high
+    maturity: stable
+    category: credential_access
+    tags: [owasp.mcp07]
+    references:
+      - "research/threats.md section 1 (ADR Discovery plaintext/SSE transport check)"
+    when:
+      type: inventory.asset
+    match:
+      asset.kind: mcp_server
+      asset.risk_flags: plaintext_transport
+    evidence: [asset.mcp.url_host, asset.risk_flags]
+    remedy: Use https or a loopback address.
+    tests:
+      - name: http to a LAN host
+        event: { type: inventory.asset, asset: { id: m10, kind: mcp_server, name: wiki, mcp: { transport: http, url_host: 10.0.0.5, pinned: false }, risk_flags: [plaintext_transport] } }
+        expect: match
+      - name: https
+        event: { type: inventory.asset, asset: { id: m11, kind: mcp_server, name: wiki, mcp: { transport: http, url_host: wiki.example, pinned: false } } }
+        expect: no_match
+      - name: deprecated SSE only
+        event: { type: inventory.asset, asset: { id: m12, kind: mcp_server, name: wiki, risk_flags: [deprecated_transport] } }
+        expect: no_match
+
+  - id: SPR-POST-012
+    title: MCP server container with host privileges
+    description: An MCP server runs in a container started --privileged or with the container runtime socket mounted, which gives the server the host.
+    kind: inventory
+    class: finding
+    severity: medium
+    confidence: high
+    maturity: stable
+    category: privilege_escalation
+    tags: [attack.t1611, owasp.mcp02]
+    references:
+      - "research/threats.md section 2 row 22: sandbox escapes (Docker socket)"
+    when:
+      type: inventory.asset
+    match:
+      asset.kind: mcp_server
+      asset.risk_flags|contains_any: [docker_privileged, docker_socket]
+    evidence: [asset.mcp.package, asset.risk_flags]
+    remedy: Drop --privileged and the socket mount.
+    tests:
+      - name: docker socket mounted
+        event: { type: inventory.asset, asset: { id: m13, kind: mcp_server, name: dkr, mcp: { runner: docker, pinned: false }, risk_flags: [docker_socket] } }
+        expect: match
+      - name: plain container
+        event: { type: inventory.asset, asset: { id: m14, kind: mcp_server, name: dkr, mcp: { runner: docker, pinned: true } } }
+        expect: no_match
+      - name: unrelated flag
+        event: { type: inventory.asset, asset: { id: m15, kind: mcp_server, name: dkr, risk_flags: [shell_wrapper] } }
+        expect: no_match
+
+  - id: SPR-POST-013
+    title: Managed agent policy writable by non-administrators
+    description: >-
+      A managed-settings file or directory can be written by ordinary
+      users. Whoever writes it decides the hooks and permissions of every
+      session on the machine (CVE-2026-35603).
+    kind: inventory
+    class: finding
+    severity: critical
+    confidence: high
+    maturity: stable
+    category: privilege_escalation
+    tags: [atlas.aml.t0081, attack.t1222.002, owasp.asi03]
+    references:
+      - "research/threats.md section 2 row 11: CVE-2026-35603"
+      - "research/threats.md section 3 R52"
+    when:
+      type: inventory.asset
+    match:
+      asset.risk_flags: managed_policy_world_writable
+    evidence: [asset.catalog_id, asset.risk_flags]
+    remedy: Make the managed policy root-owned and not group- or world-writable.
+    tests:
+      - name: writable managed policy
+        event: { type: inventory.asset, asset: { id: a5, kind: agent, name: Claude Code, catalog_id: claude-code, risk_flags: [managed_policy_world_writable] } }
+        expect: match
+      - name: managed policy present
+        event: { type: inventory.asset, asset: { id: a6, kind: agent, name: Claude Code, catalog_id: claude-code, risk_flags: [managed_policy_present] } }
+        expect: no_match
+      - name: no managed policy
+        event: { type: inventory.asset, asset: { id: a7, kind: agent, name: Claude Code, catalog_id: claude-code, risk_flags: [managed_policy_missing] } }
+        expect: no_match
+
+  - id: SPR-POST-014
+    title: Invisible Unicode in an instruction, skill or command file
+    description: >-
+      A rules file, skill, command, subagent or plugin file the agent reads
+      contains tag-block, zero-width or bidi characters (Rules File Backdoor,
+      TrapDoor).
+    kind: inventory
+    class: finding
+    severity: high
+    confidence: high
+    maturity: stable
+    category: persistence
+    tags: [attack.t1027.018, atlas.aml.t0068, owasp.asi06]
+    references:
+      - "research/threats.md section 2 rows 28 and 39"
+      - "research/threats.md section 3 R18"
+    falsepositives:
+      - "Right-to-left text or emoji sequences"
+    when:
+      type: inventory.asset
+    match:
+      asset.kind|in: [rules_file, skill, command, subagent, plugin]
+      asset.risk_flags: hidden_unicode
+    evidence: [asset.path, asset.kind]
+    remedy: Show the file with invisible characters made visible and remove them.
+    tests:
+      - name: CLAUDE.md with hidden text
+        event: { type: inventory.asset, asset: { id: r2, kind: rules_file, name: CLAUDE.md, risk_flags: [hidden_unicode] } }
+        expect: match
+      - name: clean skill
+        event: { type: inventory.asset, asset: { id: s1, kind: skill, name: deploy } }
+        expect: no_match
+      - name: hidden unicode flag on an agent record
+        event: { type: inventory.asset, asset: { id: a8, kind: agent, name: x, risk_flags: [hidden_unicode] } }
+        expect: no_match
+
+  - id: SPR-POST-015
+    title: Instruction or skill file carries a dropper or injection text
+    description: >-
+      An instruction, skill or command file contains a pipe-to-shell or
+      encoded one-liner, a password-protected archive link, or instruction
+      overrides. Malicious skills shipped fake "Prerequisites" exactly like
+      this (ClawHavoc).
+    kind: inventory
+    class: finding
+    severity: high
+    confidence: medium
+    maturity: stable
+    category: execution
+    tags: [atlas.aml.t0011.002, atlas.aml.t0110, owasp.asi04]
+    references:
+      - "research/threats.md section 2 row 38: malicious skills"
+      - "research/threats.md section 3 R17"
+    falsepositives:
+      - "Install documentation for real tools"
+    when:
+      type: inventory.asset
+    match:
+      asset.kind|in: [rules_file, skill, command, subagent, plugin]
+      asset.risk_flags|contains_any: [dropper_text, injection_markers]
+    evidence: [asset.path, asset.kind, asset.risk_flags]
+    remedy: Read the file; remove the skill if it asks the agent to run downloaded code.
+    tests:
+      - name: skill with a dropper
+        event: { type: inventory.asset, asset: { id: s2, kind: skill, name: helper, risk_flags: [dropper_text] } }
+        expect: match
+      - name: skill without flags
+        event: { type: inventory.asset, asset: { id: s3, kind: skill, name: helper } }
+        expect: no_match
+      - name: project config with a dropper flag name
+        event: { type: inventory.asset, asset: { id: p11, kind: project_config, name: x, risk_flags: [dropper_text] } }
+        expect: no_match
+
+  - id: SPR-POST-016
+    title: Instruction file downloaded from the internet
+    description: An instruction or skill file carries a quarantine or Mark-of-the-Web attribute; a browser saved it, and the agent will obey it.
+    kind: inventory
+    class: finding
+    severity: medium
+    confidence: high
+    maturity: stable
+    category: initial_access
+    tags: [atlas.aml.t0051.001, atlas.aml.t0100, owasp.asi01]
+    references:
+      - "research/threats.md section 2 row 33"
+      - "research/threats.md section 3 R19"
+    when:
+      type: inventory.asset
+    match:
+      asset.risk_flags: quarantined
+    evidence: [asset.path, asset.kind]
+    remedy: Review the file before opening the folder with an agent.
+    tests:
+      - name: quarantined AGENTS.md
+        event: { type: inventory.asset, asset: { id: r3, kind: rules_file, name: AGENTS.md, risk_flags: [quarantined] } }
+        expect: match
+      - name: local AGENTS.md
+        event: { type: inventory.asset, asset: { id: r4, kind: rules_file, name: AGENTS.md } }
+        expect: no_match
+      - name: other flag
+        event: { type: inventory.asset, asset: { id: r5, kind: rules_file, name: AGENTS.md, risk_flags: [hidden_unicode] } }
+        expect: no_match
+
+  - id: SPR-POST-017
+    title: CI workflow runs an AI agent on untrusted triggers
+    description: >-
+      A workflow runs an AI agent action on pull_request_target, issue or
+      comment triggers with secrets in scope. Issue text then steers a
+      privileged agent (Clinejection, Comment and Control, the Claude Code
+      Action /proc/self/environ leak).
+    kind: inventory
+    class: finding
+    severity: high
+    confidence: high
+    maturity: stable
+    category: initial_access
+    tags: [attack.t1677, atlas.aml.t0051.001, owasp.asi03]
+    references:
+      - "research/threats.md section 2 row 42"
+      - "research/threats.md section 5 (CI workflow audit)"
+    falsepositives:
+      - "Workflows that only label or comment and hold no secrets"
+    when:
+      type: inventory.asset
+    match:
+      asset.kind: ci_agent
+      asset.risk_flags: ci_untrusted_trigger
+    evidence: [asset.path, asset.name]
+    remedy: Run the agent on pull_request with read-only tokens, or gate it behind a maintainer label.
+    tests:
+      - name: agent on issue_comment
+        event: { type: inventory.asset, asset: { id: c1, kind: ci_agent, name: claude-code-action, risk_flags: [ci_untrusted_trigger] } }
+        expect: match
+      - name: agent on push
+        event: { type: inventory.asset, asset: { id: c2, kind: ci_agent, name: claude-code-action } }
+        expect: no_match
+      - name: flag on another kind
+        event: { type: inventory.asset, asset: { id: c3, kind: agent, name: x, risk_flags: [ci_untrusted_trigger] } }
+        expect: no_match
+
+  - id: SPR-POST-018
+    title: Approvals off by default in agent settings
+    description: >-
+      User or managed settings make the agent skip approvals by default
+      (bypassPermissions default, auto-approve all tools, approvals or the
+      sandbox disabled). Personal choice in many cases; recorded so a fleet
+      owner can see it.
+    kind: inventory
+    class: finding
+    severity: low
+    confidence: high
+    maturity: stable
+    category: defense_evasion
+    tags: [owasp.asi10]
+    references:
+      - "research/threats.md section 3 R02, R36"
+    when:
+      type: inventory.asset
+    match:
+      asset.risk_flags|contains_any: [bypass_permissions_default, auto_approve_default, auto_approve_all_tools, approvals_disabled, allow_all_tools_env, sandbox_disabled, hook_consent_bypassed, unsandboxed_commands_allowed]
+    evidence: [asset.catalog_id, asset.risk_flags]
+    remedy: Set the default in managed policy and lock it.
+    tests:
+      - name: auto approve all tools
+        event: { type: inventory.asset, asset: { id: a9, kind: agent, name: Copilot CLI, catalog_id: copilot-cli, risk_flags: [auto_approve_all_tools] } }
+        expect: match
+      - name: managed policy present
+        event: { type: inventory.asset, asset: { id: a10, kind: agent, name: x, risk_flags: [managed_policy_present] } }
+        expect: no_match
+      - name: no flags
+        event: { type: inventory.asset, asset: { id: a11, kind: agent, name: x } }
+        expect: no_match
+
+  - id: SPR-POST-019
+    title: Agent version with a known execution or exfiltration fix missing
+    description: >-
+      The installed version is older than the fix for a published CVE:
+      Claude Code before 2.1.179 (Plugin4Shell, CVE-2026-86063), Gemini CLI
+      before 0.39.1 (CVE-2026-12537), Cursor before 3.0 (DuneSlide), Kiro
+      before 0.11 (CVE-2026-10591). This list is a seed for a GHSA/OSV-fed
+      bundle.
+    kind: inventory
+    class: finding
+    severity: high
+    confidence: high
+    maturity: stable
+    category: initial_access
+    tags: [atlas.aml.t0109, owasp.asi04]
+    references:
+      - "research/threats.md section 2 row 13: CVE-2026-86063"
+      - "research/threats.md section 2 row 16: CVE-2026-50548, CVE-2026-50549"
+      - "research/threats.md section 2 row 19: CVE-2026-12537"
+      - "research/threats.md section 2 row 20: CVE-2026-10591"
+      - "research/threats.md section 3 R51"
+    when:
+      type: inventory.asset
+    match:
+      any:
+        - all:
+            - asset.catalog_id: claude-code
+            - asset.version|re: "^([01]\\.|2\\.0\\.|2\\.1\\.([0-9]|[1-9][0-9]|1[0-6][0-9]|17[0-8])([^0-9]|$))"
+        - all:
+            - asset.catalog_id: gemini-cli
+            - asset.version|re: "^0\\.(([0-9]|[12][0-9]|3[0-8])\\.|39\\.0([^0-9]|$))"
+        - all:
+            - asset.catalog_id: cursor
+            - asset.version|re: "^[0-2]\\."
+        - all:
+            - asset.catalog_id: kiro
+            - asset.version|re: "^0\\.([0-9]|10)(\\.|$)"
+    evidence: [asset.catalog_id, asset.version]
+    remedy: Update the agent.
+    tests:
+      - name: Claude Code 2.1.178
+        event: { type: inventory.asset, asset: { id: a12, kind: agent, name: Claude Code, catalog_id: claude-code, version: "2.1.178" } }
+        expect: match
+      - name: Gemini CLI 0.39.0
+        event: { type: inventory.asset, asset: { id: a13, kind: agent, name: Gemini CLI, catalog_id: gemini-cli, version: "0.39.0" } }
+        expect: match
+      - name: Claude Code 2.1.179
+        event: { type: inventory.asset, asset: { id: a14, kind: agent, name: Claude Code, catalog_id: claude-code, version: "2.1.179" } }
+        expect: no_match
+      - name: Claude Code 2.1.1790 is not 2.1.179x
+        event: { type: inventory.asset, asset: { id: a15, kind: agent, name: Claude Code, catalog_id: claude-code, version: "2.1.287" } }
+        expect: no_match
+      - name: Gemini CLI 0.40.2
+        event: { type: inventory.asset, asset: { id: a16, kind: agent, name: Gemini CLI, catalog_id: gemini-cli, version: "0.40.2" } }
+        expect: no_match
+
+  - id: SPR-POST-020
+    title: MCP server or skill definition changed
+    description: >-
+      A declared MCP server's definition hash or a skill's content changed
+      since the last scan. Normal updates do this; so do rug pulls and
+      swapped entries in shared repositories (MCPoison), which is why it is
+      recorded as a signal for review rather than ignored.
+    kind: inventory
+    class: signal
+    severity: low
+    confidence: high
+    maturity: stable
+    category: supply_chain
+    tags: [atlas.aml.t0109, owasp.mcp04]
+    references:
+      - "research/threats.md section 2 row 4: MCPoison CVE-2025-54136; row 36: rug pulls"
+      - "research/threats.md section 3 R10, R16; section 4 S5"
+    when:
+      type: inventory.asset
+    match:
+      asset.kind|in: [mcp_server, skill, plugin]
+      asset.change: changed
+    evidence: [asset.path, asset.kind, asset.sha256]
+    remedy: No action on its own; compare the old and new definition.
+    tests:
+      - name: MCP entry changed
+        event: { type: inventory.asset, asset: { id: m16, kind: mcp_server, name: fs, change: changed } }
+        expect: match
+      - name: new MCP entry
+        event: { type: inventory.asset, asset: { id: m17, kind: mcp_server, name: fs, change: new } }
+        expect: no_match
+      - name: agent changed
+        event: { type: inventory.asset, asset: { id: a17, kind: agent, name: x, change: changed } }
+        expect: no_match
+
+  - id: SPR-POST-021
+    title: Agent service listens beyond loopback
+    description: An agent or model runtime is configured to listen on a non-loopback address or a changed port; its control plane is then reachable from the network.
+    kind: inventory
+    class: finding
+    severity: medium
+    confidence: medium
+    maturity: experimental
+    category: initial_access
+    tags: [owasp.mcp07]
+    references:
+      - "research/threats.md section 2 row 22: unauthenticated localhost control planes"
+      - "research/threats.md section 3 R50"
+    falsepositives:
+      - "Intentional LAN use of a model server"
+    when:
+      type: inventory.asset
+    match:
+      asset.risk_flags: listen_address_overridden
+    evidence: [asset.catalog_id, asset.risk_flags]
+    remedy: Bind to 127.0.0.1 or put authentication in front.
+    tests:
+      - name: listen address overridden
+        event: { type: inventory.asset, asset: { id: rt1, kind: model_runtime, name: Ollama, catalog_id: ollama, risk_flags: [listen_address_overridden] } }
+        expect: match
+      - name: port only
+        event: { type: inventory.asset, asset: { id: rt2, kind: model_runtime, name: Ollama, catalog_id: ollama, risk_flags: [listen_port_overridden] } }
+        expect: no_match
+      - name: default
+        event: { type: inventory.asset, asset: { id: rt3, kind: model_runtime, name: Ollama, catalog_id: ollama } }
+        expect: no_match

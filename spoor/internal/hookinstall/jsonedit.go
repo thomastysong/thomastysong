@@ -222,6 +222,24 @@ func (d *jsonDoc) insert(c *node, text func(indent string, m renderMode) string)
 	st := d.style()
 	n := c.children()
 	if n == 0 {
+		inner := string(d.src[c.start+1 : c.end-1])
+		if hasComment([]byte(inner)) {
+			// An empty container that holds only a comment (JSONC, edited
+			// under Force): the comment stays in front of the new child
+			// and the blanks that closed the container keep closing it, so
+			// dropping the child again gives the same bytes back.
+			p := lastNonBlank(inner)
+			pre, trail := inner[:p], inner[p:]
+			if st.tight {
+				return d.splice(c.start+1, c.end-1, pre+text("", modeTight)+trail)
+			}
+			closing := d.lineIndent(c.start)
+			child := closing + st.unit
+			if !strings.Contains(trail, "\n") {
+				trail = st.nl + closing
+			}
+			return d.splice(c.start+1, c.end-1, pre+st.nl+child+text(child, modePretty)+trail)
+		}
 		if st.tight {
 			return d.splice(c.start+1, c.end-1, text("", modeTight))
 		}
@@ -265,53 +283,147 @@ func (d *jsonDoc) addElem(arr *node, v any) []byte {
 
 // drop removes child i of container c together with the separator that
 // insert would have written in front of it, so dropping what insert added
-// gives the original bytes back. Comments in the separator (JSONC, only
+// gives the original bytes back. Comments in the separators (JSONC, only
 // edited under Force) stay where they are: a comment after the previous
 // member's comma belongs to that member, one before the next member to
-// that member.
+// that member, and one inside a container that loses its last child stays
+// inside it.
 func (d *jsonDoc) drop(c *node, i int) []byte {
+	m := d.model(c, nil)
+	m.drop(i)
+	return d.splice(c.start, c.end, m.render())
+}
+
+// holdsComment reports whether a comment sits in the separators of c
+// itself (not inside one of its children).
+func (d *jsonDoc) holdsComment(c *node) bool {
+	return d.model(c, nil).holdsComment()
+}
+
+// cmodel is a container as a sequence of separators and children, so that
+// several children can be removed with the rules of drop without parsing
+// the document again after each one. segs has one more element than kids:
+// segs[0] runs from the opening bracket to the first child, segs[k] from
+// child k-1 to child k, the last one to the closing bracket. An object
+// member's text starts at its key.
+type cmodel struct {
+	open, close byte
+	segs        []string
+	kids        []string
+}
+
+// model builds the model of c. repl, when set, supplies new text for
+// children that were edited themselves.
+func (d *jsonDoc) model(c *node, repl map[int]string) *cmodel {
 	n := c.children()
-	start, end := c.span(i)
-	if n == 1 {
-		return d.splice(c.start+1, c.end-1, "")
+	m := &cmodel{open: d.src[c.start], close: d.src[c.end-1], kids: make([]string, n), segs: make([]string, n+1)}
+	prev := c.start + 1
+	for k := 0; k < n; k++ {
+		s, e := c.span(k)
+		m.segs[k] = string(d.src[prev:s])
+		if t, ok := repl[k]; ok {
+			m.kids[k] = t
+		} else {
+			m.kids[k] = string(d.src[s:e])
+		}
+		prev = e
 	}
-	var before []byte // separator in front of the child, if any
-	prevEnd := -1
+	m.segs[n] = string(d.src[prev : c.end-1])
+	return m
+}
+
+func (m *cmodel) render() string {
+	var b strings.Builder
+	b.WriteByte(m.open)
+	for k, kid := range m.kids {
+		b.WriteString(m.segs[k])
+		b.WriteString(kid)
+	}
+	b.WriteString(m.segs[len(m.kids)])
+	b.WriteByte(m.close)
+	return b.String()
+}
+
+func (m *cmodel) holdsComment() bool {
+	for _, s := range m.segs {
+		if hasComment([]byte(s)) {
+			return true
+		}
+	}
+	return false
+}
+
+// drop removes child i with the separator insert writes in front of a
+// child (see jsonDoc.drop).
+func (m *cmodel) drop(i int) {
+	n := len(m.kids)
+	if n == 1 {
+		if m.holdsComment() {
+			// Keep the comments; take the child and the blanks in front of
+			// it, and the comma of a trailing-comma document after it.
+			first := m.segs[0]
+			last := m.segs[1]
+			if c := separatorComma([]byte(last)); c >= 0 {
+				last = last[:c] + last[c+1:]
+			}
+			m.segs = []string{first[:lastNonBlank(first)] + last}
+		} else {
+			m.segs = []string{""}
+		}
+		m.kids = nil
+		return
+	}
+	before := ""
 	if i > 0 {
-		_, prevEnd = c.span(i - 1)
-		before = d.src[prevEnd:start]
+		before = m.segs[i]
 	}
 	if i < n-1 {
-		nextStart, _ := c.span(i + 1)
-		after := d.src[end:nextStart]
-		if hasComment(after) || hasComment(before) {
-			// Remove the child, its own comma and the blanks after it;
-			// comments on either side stay.
-			if comma := separatorComma(after); comma >= 0 {
-				j := end + comma + 1
-				for j < nextStart && isBlank(d.src[j]) {
+		after := m.segs[i+1]
+		if hasComment([]byte(after)) || hasComment([]byte(before)) {
+			if comma := separatorComma([]byte(after)); comma >= 0 {
+				// Remove the child, its own comma and the blanks after
+				// it; comments on either side stay.
+				j := comma + 1
+				for j < len(after) && isBlank(after[j]) {
 					j++
 				}
-				return d.splice(start, j, "")
+				merged := m.segs[i] + after[j:]
+				m.segs = append(append(m.segs[:i:i], merged), m.segs[i+2:]...)
+				m.kids = append(m.kids[:i:i], m.kids[i+1:]...)
+				return
 			}
 		}
 		if i > 0 {
-			return d.splice(prevEnd, end, "")
+			// The separator in front of the child goes with it.
+			m.segs = append(m.segs[:i:i], m.segs[i+1:]...)
+		} else {
+			// The first child takes the separator after it.
+			m.segs = append(m.segs[:1:1], m.segs[2:]...)
 		}
-		return d.splice(start, nextStart, "")
+		m.kids = append(m.kids[:i:i], m.kids[i+1:]...)
+		return
 	}
 	// The last child: insert put ",<newline><indent>" in front of it.
-	if hasComment(before) {
-		comma := separatorComma(before)
-		nl := bytes.LastIndexByte(before, '\n')
-		if comma >= 0 && nl > comma && blank(before[nl+1:]) {
-			out := make([]byte, 0, len(d.src))
-			out = append(out, d.src[:prevEnd+comma]...)
-			out = append(out, d.src[prevEnd+comma+1:prevEnd+nl]...)
-			return append(out, d.src[end:]...)
+	if hasComment([]byte(before)) {
+		comma := separatorComma([]byte(before))
+		nl := strings.LastIndexByte(before, '\n')
+		if comma >= 0 && nl > comma && blank([]byte(before[nl+1:])) {
+			m.segs = append(m.segs[:i:i], before[:comma]+before[comma+1:nl]+m.segs[n])
+			m.kids = m.kids[:i:i]
+			return
 		}
 	}
-	return d.splice(prevEnd, end, "")
+	m.segs = append(m.segs[:i:i], m.segs[n])
+	m.kids = m.kids[:i:i]
+}
+
+// lastNonBlank returns the length of s without its trailing blanks.
+func lastNonBlank(s string) int {
+	p := len(s)
+	for p > 0 && isBlank(s[p-1]) {
+		p--
+	}
+	return p
 }
 
 func isBlank(c byte) bool { return c == ' ' || c == '\t' || c == '\r' || c == '\n' }

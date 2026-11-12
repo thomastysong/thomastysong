@@ -286,7 +286,7 @@ func TestKillSwitchAndDisabled(t *testing.T) {
 			if code != 0 || out.Len() != 0 || errb.Len() != 0 {
 				t.Fatalf("exit %d out %q err %q", code, out.String(), errb.String())
 			}
-			if d := time.Since(start); d > 200*time.Millisecond {
+			if d := time.Since(start); d > 200*time.Millisecond*raceSlowdown {
 				t.Fatalf("took %v", d)
 			}
 			if l := s.lines(t); len(l) != 0 {
@@ -368,6 +368,12 @@ func TestReadBounded(t *testing.T) {
 // Many hooks at once: every line parses and sequence numbers are unique
 // and gapless per stream.
 func TestConcurrentHooks(t *testing.T) {
+	// Nothing here should hang, so a long deadline only keeps a loaded
+	// (or race-instrumented) machine from turning slow workers into
+	// timeouts.
+	saved := observeDeadline
+	observeDeadline = 10 * time.Second
+	defer func() { observeDeadline = saved }()
 	s := newSandbox(t, cfgObserve)
 	t.Setenv(envRole, "hook")
 	t.Setenv(envFault, "")

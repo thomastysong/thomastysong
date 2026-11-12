@@ -7,6 +7,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/thomastysong/spoor/internal/event"
 )
@@ -189,6 +190,10 @@ func validBinary(bin, goos string) error {
 		return errors.New("hookinstall: Binary path is too long")
 	case hasControl(bin):
 		return errors.New("hookinstall: Binary path contains control characters")
+	case !utf8.ValidString(bin):
+		// JSON and TOML carry Unicode text: an invalid byte would be
+		// written as U+FFFD, naming a file that does not exist.
+		return errors.New("hookinstall: Binary path is not valid UTF-8")
 	case !absFor(bin, goos):
 		return fmt.Errorf("hookinstall: Binary must be an absolute %s path", goos)
 	case strings.ContainsAny(bin, "$`"):
@@ -250,7 +255,7 @@ type otelEndpoint struct {
 // that every local user can read.
 func parseOTelEndpoint(s string) (otelEndpoint, error) {
 	var ep otelEndpoint
-	if len(s) > maxPathLen || hasControl(s) || strings.ContainsAny(s, " \"'\\") {
+	if len(s) > maxPathLen || hasControl(s) || !utf8.ValidString(s) || strings.ContainsAny(s, " \"'\\") {
 		return ep, errors.New("hookinstall: OTel must be an http(s) URL")
 	}
 	u, err := url.Parse(s)

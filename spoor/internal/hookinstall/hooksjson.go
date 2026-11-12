@@ -24,6 +24,10 @@ type handlerRef struct {
 	lines  []string
 	spoor  bool
 	sensor string
+	// shadowed marks a handler under an event key that occurs again later
+	// in the same "hooks" object. Every agent keeps the last duplicate
+	// (JSON.parse, serde maps), so the agent never runs it.
+	shadowed bool
 }
 
 // hookScan is the hook content of one document.
@@ -53,16 +57,21 @@ func scanHooks(d *jsonDoc, kind fileKind) hookScan {
 		sc.malformed = `"hooks" is not an object`
 		return sc
 	}
+	last := make(map[string]int, len(hooks.members))
+	for ei, ev := range hooks.members {
+		last[ev.key] = ei
+	}
 	for ei, ev := range hooks.members {
 		if ev.val.kind != kindArray {
 			continue
 		}
+		shadowed := last[ev.key] != ei
 		for gi, g := range ev.val.elems {
 			if g.kind != kindObject {
 				continue
 			}
 			if kind == kindFlat {
-				sc.add(handlerRef{event: ev.key, evIdx: ei, grpIdx: gi, hIdx: -1, evArr: ev.val, group: g, node: g})
+				sc.add(handlerRef{event: ev.key, evIdx: ei, grpIdx: gi, hIdx: -1, evArr: ev.val, group: g, node: g, shadowed: shadowed})
 				continue
 			}
 			_, inner := g.member("hooks")
@@ -73,7 +82,7 @@ func scanHooks(d *jsonDoc, kind fileKind) hookScan {
 				if h.kind != kindObject {
 					continue
 				}
-				sc.add(handlerRef{event: ev.key, evIdx: ei, grpIdx: gi, hIdx: hi, evArr: ev.val, group: g, inner: inner, node: h})
+				sc.add(handlerRef{event: ev.key, evIdx: ei, grpIdx: gi, hIdx: hi, evArr: ev.val, group: g, inner: inner, node: h, shadowed: shadowed})
 			}
 		}
 	}
@@ -111,7 +120,20 @@ func commandLines(h *node) []string {
 	return out
 }
 
+// spoorHandlers returns the spoor handlers the agent runs.
 func (sc hookScan) spoorHandlers() []handlerRef {
+	var out []handlerRef
+	for _, h := range sc.handlers {
+		if h.spoor && !h.shadowed {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// spoorAll returns every spoor handler, including those under a shadowed
+// duplicate event key: uninstall removes them all.
+func (sc hookScan) spoorAll() []handlerRef {
 	var out []handlerRef
 	for _, h := range sc.handlers {
 		if h.spoor {
@@ -121,12 +143,12 @@ func (sc hookScan) spoorHandlers() []handlerRef {
 	return out
 }
 
-// foreign counts handlers that are not spoor's and names the other sensors
-// among them.
+// foreign counts the handlers the agent runs that are not spoor's and names
+// the other sensors among them.
 func (sc hookScan) foreign() (n int, sensors []string) {
 	seen := map[string]bool{}
 	for _, h := range sc.handlers {
-		if h.spoor {
+		if h.spoor || h.shadowed {
 			continue
 		}
 		n++
@@ -142,7 +164,7 @@ func (sc hookScan) foreign() (n int, sensors []string) {
 // binary returns the executable of the first spoor handler, so a caller
 // that does not know the installed path can still compare everything else.
 func (sc hookScan) binary() string {
-	for _, h := range sc.spoorHandlers() {
+	for _, h := range append(sc.spoorHandlers(), sc.spoorAll()...) {
 		if c := h.node.text("command"); c != "" && len(h.node.strings("args")) > 0 {
 			return c
 		}
@@ -168,15 +190,22 @@ const (
 // matcher), because a matcher added to our group silently narrows what the
 // sensor sees.
 func (sc hookScan) compare(want []entry, kind fileKind) (contentState, string) {
-	mine := sc.spoorHandlers()
-	if len(mine) == 0 {
+	if len(sc.spoorAll()) == 0 {
 		return contentNone, ""
 	}
+	mine := sc.spoorHandlers()
 	byEvent := map[string][]handlerRef{}
 	for _, h := range mine {
 		byEvent[h.event] = append(byEvent[h.event], h)
 	}
 	var diffs []string
+	ignored := map[string]bool{}
+	for _, h := range sc.spoorAll() {
+		if h.shadowed && !ignored[h.event] {
+			ignored[h.event] = true
+			diffs = append(diffs, "spoor entries under a repeated "+safeName(h.event)+" key, which the agent ignores (the last one wins)")
+		}
+	}
 	wanted := map[string]bool{}
 	for _, w := range want {
 		wanted[w.event] = true
@@ -247,41 +276,139 @@ func safeName(s string) string {
 	return b.String()
 }
 
-// maxEdits bounds the parse-edit loop: every pass removes or adds one entry.
-const maxEdits = maxHandlers + 64
-
-var errTooManyEdits = errors.New("too many hook entries to edit")
-
-// removeSpoor deletes every spoor handler from the document. A container
-// that only held spoor entries goes with them (the group, then the event
-// array, then "hooks" itself), so a file that had no hooks before install
-// has none after uninstall.
+// removeSpoor deletes every spoor handler from the document, including
+// those under a shadowed duplicate event key. A container that only held
+// spoor entries goes with them (the group, then the event array, then
+// "hooks" itself), so a file that had no hooks before install has none
+// after uninstall; a container that holds a comment (JSONC, edited under
+// Force) is kept, emptied, with its comment.
+//
+// The document is parsed once and every removal is applied to a model of
+// the containers involved, with the same rules as removing the entries one
+// at a time (drop), so the cost is linear in the size of the file whatever
+// number of entries it holds.
 func removeSpoor(src []byte, kind fileKind) ([]byte, int, error) {
-	removed := 0
-	for i := 0; i < maxEdits; i++ {
-		d, err := parseJSON(src)
-		if err != nil {
-			return nil, removed, err
-		}
-		sc := scanHooks(d, kind)
-		mine := sc.spoorHandlers()
-		if len(mine) == 0 {
-			return src, removed, nil
-		}
-		h := mine[0]
-		switch {
-		case h.inner != nil && len(h.inner.elems) > 1:
-			src = d.drop(h.inner, h.hIdx)
-		case len(h.evArr.elems) > 1:
-			src = d.drop(h.evArr, h.grpIdx)
-		case len(sc.hooks.members) > 1:
-			src = d.drop(sc.hooks, h.evIdx)
-		default:
-			src = d.drop(d.root, sc.hooksIdx)
-		}
-		removed++
+	d, err := parseJSON(src)
+	if err != nil {
+		return nil, 0, err
 	}
-	return nil, removed, errTooManyEdits
+	sc := scanHooks(d, kind)
+	mine := sc.spoorAll()
+	if len(mine) == 0 {
+		return src, 0, nil
+	}
+
+	// Which children go, per container. Handlers are visited in document
+	// order, so each set is filled in ascending order.
+	gone := map[*node][]int{}
+	mark := func(c *node, i int) {
+		l := gone[c]
+		if len(l) == 0 || l[len(l)-1] != i {
+			gone[c] = append(l, i)
+		}
+	}
+	for _, h := range mine {
+		if h.inner != nil {
+			mark(h.inner, h.hIdx)
+		} else {
+			mark(h.evArr, h.grpIdx)
+		}
+	}
+
+	// shrink applies the removals to container c, whose children may have
+	// new text in repl. It returns c's new text, or vanish when every child
+	// went and nothing (no comment, and the caller allows it) keeps c.
+	shrink := func(c *node, idx []int, repl map[int]string, keepEmpty bool) (text string, vanish bool) {
+		m := d.model(c, repl)
+		removed := 0
+		for _, i := range idx {
+			j := i - removed
+			if len(m.kids) == 1 && !keepEmpty && !m.holdsComment() {
+				return "", true
+			}
+			m.drop(j)
+			removed++
+		}
+		return m.render(), false
+	}
+	memberText := func(c *node, i int, val string) string {
+		mb := c.members[i]
+		return string(d.src[mb.keyStart:mb.val.start]) + val
+	}
+
+	// Handlers inside groups (grouped layouts).
+	groupGone := map[*node]bool{}  // group vanishes from its event array
+	groupText := map[*node]string{} // group with an edited "hooks" array
+	if kind != kindFlat {
+		for _, h := range mine {
+			g, inner := h.group, h.inner
+			if _, done := groupText[g]; done || groupGone[g] {
+				continue
+			}
+			keep := d.holdsComment(g)
+			text, vanish := shrink(inner, gone[inner], nil, keep)
+			if vanish {
+				groupGone[g] = true
+				continue
+			}
+			gi, _ := g.member("hooks")
+			mm := d.model(g, map[int]string{gi: memberText(g, gi, text)})
+			groupText[g] = mm.render()
+		}
+		for _, h := range mine {
+			if groupGone[h.group] {
+				mark(h.evArr, h.grpIdx)
+			}
+		}
+	}
+
+	// Event arrays.
+	evGone := map[int]bool{}
+	evText := map[int]string{}
+	for _, h := range mine {
+		ev := h.evArr
+		if _, done := evText[h.evIdx]; done || evGone[h.evIdx] {
+			continue
+		}
+		repl := map[int]string{}
+		for gi, g := range ev.elems {
+			if t, ok := groupText[g]; ok {
+				repl[gi] = t
+			}
+		}
+		text, vanish := shrink(ev, gone[ev], repl, false)
+		if vanish {
+			evGone[h.evIdx] = true
+			continue
+		}
+		evText[h.evIdx] = text
+	}
+
+	// The "hooks" object.
+	hooks := sc.hooks
+	var hidx []int
+	repl := map[int]string{}
+	for i := range hooks.members {
+		if evGone[i] {
+			hidx = append(hidx, i)
+		} else if t, ok := evText[i]; ok {
+			repl[i] = memberText(hooks, i, t)
+		}
+	}
+	text, vanish := shrink(hooks, hidx, repl, false)
+
+	// The root.
+	root := d.model(d.root, nil)
+	if vanish {
+		root.drop(sc.hooksIdx)
+	} else {
+		root.kids[sc.hooksIdx] = memberText(d.root, sc.hooksIdx, text)
+	}
+	out := make([]byte, 0, len(src))
+	out = append(out, src[:d.root.start]...)
+	out = append(out, root.render()...)
+	out = append(out, src[d.root.end:]...)
+	return out, len(mine), nil
 }
 
 // addEntries appends the wanted registrations, creating "hooks" and the

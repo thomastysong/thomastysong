@@ -245,3 +245,19 @@ lists:
     - open
     - explorer.exe
     - rundll32.exe
+
+  # Inventory risk flags that mean "tools run without asking" when a
+  # repository chose them (project: prefix from discovery's catalog
+  # probes) or that discovery computes for project files directly.
+  escalation_risk_flags:
+    - settings_escalate_permissions
+    - ide_auto_approve
+    - "project:bypass_permissions_default"
+    - "project:auto_approve_default"
+    - "project:auto_approve_all_tools"
+    - "project:approvals_disabled"
+    - "project:allow_all_tools_env"
+    - "project:sandbox_disabled"
+    - "project:hooks_disabled"
+    - "project:hook_consent_bypassed"
+    - "project:unsandboxed_commands_allowed"

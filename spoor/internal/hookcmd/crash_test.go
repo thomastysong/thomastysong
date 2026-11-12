@@ -91,7 +91,7 @@ func TestCrashSafetyPerDialect(t *testing.T) {
 						t.Fatalf("stderr written: %q", r.stderr)
 					}
 					assertFallback(t, d, m.guard, r.stdout)
-					if r.dur > m.limit+1500*time.Millisecond {
+					if r.dur > (m.limit+1500*time.Millisecond)*raceSlowdown {
 						t.Fatalf("took %v, deadline %v", r.dur, m.limit)
 					}
 					// On a loaded machine any crash can lose the race with

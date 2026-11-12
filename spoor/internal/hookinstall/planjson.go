@@ -126,7 +126,7 @@ func uninstallJSON(t target, o Options, cur fileState) (action string, after []b
 		// were written by spoor, whatever the endpoint was.
 		spec, haveSpec = jsonOTel(t.dialect, otelEndpoint{})
 	}
-	if len(sc.spoorHandlers()) == 0 && !haveSpec {
+	if len(sc.spoorAll()) == 0 && !haveSpec {
 		return ActionUnchanged, nil, leftOTel(t, d)
 	}
 	if (d.comments || d.trailingCommas) && !o.Force {
@@ -137,8 +137,12 @@ func uninstallJSON(t target, o Options, cur fileState) (action string, after []b
 		return ActionUnsupported, nil, err.Error()
 	}
 	if haveSpec {
-		if src, err = spec.remove(src, t.owned); err != nil {
+		var kept []string
+		if src, kept, err = spec.remove(src, t.owned); err != nil {
 			return ActionUnsupported, nil, err.Error()
+		}
+		if len(kept) > 0 {
+			note = spec.key + "." + strings.Join(kept, ", "+spec.key+".") + " left in place: other telemetry settings in " + spec.key + " still use it"
 		}
 	} else if d2, err := parseJSON(src); err == nil {
 		note = leftOTel(t, d2)

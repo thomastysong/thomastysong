@@ -176,7 +176,7 @@ func checkJSON(t target, o Options, data []byte) check {
 	}
 	c := check{hash: sc.hash()}
 	c.foreign, c.sensors = sc.foreign()
-	if len(sc.spoorHandlers()) == 0 {
+	if len(sc.spoorAll()) == 0 {
 		c.state = checkNone
 		return c
 	}

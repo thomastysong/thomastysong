@@ -1,6 +1,7 @@
 package shellx
 
 import (
+	"regexp"
 	"strings"
 )
 
@@ -113,12 +114,41 @@ func detectDialect(s string) Dialect {
 	case "cmd":
 		return Cmd
 	}
+	// Neither PowerShell nor cmd.exe has a heredoc. A "<<WORD" whose
+	// terminator line is present settles the dialect, and its body (data
+	// for cat, code for an interpreter) must not vote: a Go or PowerShell
+	// file written with cat contains plenty of foreign-looking text.
+	if hasHeredoc(t) {
+		return Posix
+	}
 	ps, cmd, sh := 0, 0, 0
 
 	// POSIX signals.
 	for _, sig := range []string{"$(", "${", "2>/dev/null", "/dev/null", "~/", "| sh", "|sh", "| bash", "|bash", "#!/", "$'", "sudo ", "export ", " || true", "set -e"} {
 		if strings.Contains(l, sig) {
 			sh += 2
+		}
+	}
+	// Heredocs exist in POSIX shells (and PowerShell has no "<<"); cmd.exe
+	// has neither. Unix absolute paths as arguments are POSIX evidence too.
+	for _, sig := range []string{"<<'", "<<\"", "<<-", "<<eof", "<< 'eof'", "<<end"} {
+		if strings.Contains(l, sig) {
+			sh += 3
+			break
+		}
+	}
+	// "NAME=value cmd" or "NAME=value;" as the first word needs "set" in
+	// cmd.exe and "$" in PowerShell; "name() {" is a POSIX function.
+	if posixAssignFirst(t) {
+		sh += 3
+	}
+	if posixFuncDef.MatchString(t) {
+		sh += 3
+	}
+	for _, sig := range []string{" /tmp/", " /home/", " /etc/", " /usr/", " /var/", " /opt/", " /root/", " /users/", " /private/", " ./", " ../"} {
+		if strings.Contains(l, sig) {
+			sh += 2
+			break
 		}
 	}
 
@@ -159,7 +189,10 @@ func detectDialect(s string) Dialect {
 	cmd += cmdVarScore(t)
 	if winOnlyCommand(first) {
 		cmd += 3
-	} else if winPathCommand(first) && strings.Contains(t, "\\") {
+	} else if winPathCommand(first) && windowsPathArg(t) {
+		// "cd C:\x", "copy C:\a.txt D:\b": the first argument must look like
+		// a Windows path. A backslash elsewhere ("\n" in a curl format, "\("
+		// in a grep pattern) is ordinary in POSIX commands.
 		cmd += 3
 	}
 	if strings.Contains(t, "^&") || strings.Contains(t, "^|") || strings.Contains(t, "^>") {
@@ -309,6 +342,90 @@ func cmdVarScore(t string) int {
 	return score
 }
 
+var posixFuncDef = regexp.MustCompile(`(^|[;&|\s{(])[A-Za-z_][A-Za-z0-9_-]*\s*\(\)\s*\{`)
+
+// posixAssignFirst reports whether t starts with NAME=value.
+func posixAssignFirst(t string) bool {
+	i := 0
+	for i < len(t) && isIdentByte(t[i]) && !(i == 0 && t[i] >= '0' && t[i] <= '9') {
+		i++
+	}
+	return i > 0 && i < len(t) && t[i] == '='
+}
+
+// hasHeredoc reports whether s contains a POSIX heredoc: "<<WORD",
+// "<<'WORD'", "<<\"WORD\"" or "<<-WORD", followed later by a line that is
+// exactly WORD (leading tabs allowed for <<-).
+func hasHeredoc(s string) bool {
+	for i := 0; i+2 < len(s); i++ {
+		if s[i] != '<' || s[i+1] != '<' || (i > 0 && s[i-1] == '<') || s[i+2] == '<' {
+			continue
+		}
+		j := i + 2
+		strip := false
+		if j < len(s) && s[j] == '-' {
+			strip = true
+			j++
+		}
+		for j < len(s) && (s[j] == ' ' || s[j] == '\t') {
+			j++
+		}
+		q := byte(0)
+		if j < len(s) && (s[j] == '\'' || s[j] == '"') {
+			q = s[j]
+			j++
+		}
+		k := j
+		for k < len(s) && (isIdentByte(s[k]) || s[k] == '-' || s[k] == '.') {
+			k++
+		}
+		if k == j || k-j > 64 {
+			continue
+		}
+		word := s[j:k]
+		if q != 0 && (k >= len(s) || s[k] != q) {
+			continue
+		}
+		nl := strings.IndexByte(s[k:], '\n')
+		if nl < 0 {
+			continue
+		}
+		for _, ln := range strings.Split(s[k+nl+1:], "\n") {
+			ln = strings.TrimRight(ln, "\r")
+			if strip {
+				ln = strings.TrimLeft(ln, "\t")
+			}
+			if ln == word {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// windowsPathArg reports whether the first argument of the command line t
+// looks like a Windows path: a drive letter, a UNC prefix, a %VAR%\ prefix,
+// or backslash separators with no forward slash.
+func windowsPathArg(t string) bool {
+	_, rest, ok := strings.Cut(strings.TrimSpace(t), " ")
+	if !ok {
+		return false
+	}
+	arg := strings.TrimLeft(strings.TrimSpace(rest), "\"")
+	if i := strings.IndexAny(arg, " \"&|<>"); i >= 0 {
+		arg = arg[:i]
+	}
+	switch {
+	case len(arg) >= 3 && isASCIILetter(arg[0]) && arg[1] == ':' && (arg[2] == '\\' || arg[2] == '/'):
+		return true
+	case strings.HasPrefix(arg, `\\`), strings.HasPrefix(arg, "%") && strings.Contains(arg, `%\`):
+		return true
+	}
+	return strings.Contains(arg, `\`) && !strings.Contains(arg, "/")
+}
+
+func isASCIILetter(c byte) bool { return c|0x20 >= 'a' && c|0x20 <= 'z' }
+
 func winOnlyCommand(w string) bool {
 	switch w {
 	case "reg", "schtasks", "sc", "netsh", "wevtutil", "vssadmin", "wbadmin", "bcdedit", "certutil", "bitsadmin",
@@ -322,7 +439,7 @@ func winOnlyCommand(w string) bool {
 
 func winPathCommand(w string) bool {
 	switch w {
-	case "copy", "move", "type", "dir", "rd", "rmdir", "ren", "start", "call", "echo", "set", "cd", "mkdir", "md":
+	case "copy", "move", "type", "dir", "rd", "rmdir", "ren", "start", "call", "cd", "mkdir", "md":
 		return true
 	}
 	return false

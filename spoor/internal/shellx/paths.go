@@ -318,21 +318,33 @@ var sensorDirs = []string{
 // Managed hook and settings locations of the hook-capable agents
 // (agent-surfaces-a.md sections 2 to 6, threats.md AGENT_CONTROL_FILES).
 var agentHookPaths = []string{
-	"managed-settings", "managed-mcp.json", "/etc/claude-code", "application support/claudecode",
-	"program files/claudecode", "programdata/claudecode",
-	"/etc/codex", "programdata/openai/codex", "managed_config.toml", ".codex/config.toml", ".codex/hooks.json",
-	"policy.d", "/etc/github-copilot", "programdata/github/copilot", "application support/githubcopilot",
-	"program files/githubcopilot", ".copilot/hooks", ".copilot/settings.json", ".github/hooks/", ".github/copilot/settings",
-	".claude/settings", "hooks.json", "/etc/cursor", "programdata/cursor", "application support/cursor/hooks",
-	".gemini/settings.json", "/etc/gemini-cli", "programdata/gemini-cli", "application support/geminicli",
+	"managed-settings.d/", "/etc/claude-code/", "application support/claudecode/",
+	"program files/claudecode/", "programdata/claudecode/",
+	"/etc/codex/", "programdata/openai/codex/", ".codex/config.toml", ".codex/hooks.json",
+	"/etc/github-copilot/", "programdata/github/copilot/", "application support/githubcopilot/",
+	"program files/githubcopilot/", ".copilot/hooks", ".copilot/settings.json", ".github/hooks/", ".github/copilot/settings",
+	".claude/settings", ".cursor/hooks.json", "/etc/cursor/", "programdata/cursor/", "application support/cursor/hooks",
+	".gemini/settings.json", "/etc/gemini-cli/", "programdata/gemini-cli/", "application support/geminicli/",
 	// Windows policy keys and macOS managed-preference domains.
 	"policies/claudecode", "policies/github/copilot", "policies/githubcopilot",
 	"com.anthropic.claudecode", "com.openai.codex", "com.github.copilot",
 }
 
+// agentHookFiles are managed-policy file names that mean the same thing
+// wherever an administrator or installer places them. Matched against the
+// base name only: a file merely named like one of them (a downloaded
+// "cc_managed-settings.md", a test fixture "hooks.json") is not one.
+var agentHookFiles = []string{"managed-settings.json", "managed-mcp.json", "managed_config.toml"}
+
 func isAgentHookPath(norm string) bool {
+	base := baseName(norm)
+	for _, f := range agentHookFiles {
+		if base == f {
+			return true
+		}
+	}
 	for _, s := range agentHookPaths {
-		if strings.Contains(norm, s) {
+		if strings.Contains(norm, s) || strings.HasSuffix(norm+"/", s) {
 			return true
 		}
 	}

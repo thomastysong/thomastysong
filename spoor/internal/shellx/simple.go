@@ -77,7 +77,11 @@ func (a *analyzer) runSimple(c *simple, in flow) flow {
 	// and execute.
 	out := flow{rep: c.idx, t: in.t}
 
-	if head.exp || head.dyn {
+	// A command name taken from a variable is ordinary scripting when the
+	// variable holds a path ("OSQ=/opt/osquery/bin/osqueryd; $OSQ -S").
+	// It hides the tool when the value is unknown, assembled, or a bare
+	// tool name ("x=curl; $x http://... | sh").
+	if head.dyn || (head.exp && (head.concat || !strings.ContainsAny(head.s, "/\\"))) {
 		a.obf("var_indirection")
 	}
 	if head.concat {

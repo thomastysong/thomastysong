@@ -71,9 +71,15 @@ func (b *bundleMgr) load() (*rules.Set, uint64) {
 	d := b.d
 	set, err := rules.LoadEmbedded()
 	if err != nil {
+		// Only a broken build gets here. The sensor still collects, scans
+		// and reports with whatever else loads; the heartbeat shows the
+		// rule count and this error.
 		d.log.Error("embedded rules do not load", "error", err)
 		d.board.add("rules.embedded_errors", 1)
-		return nil, 0
+		d.emit(healthError(d.env.now(), "rules.embedded_failed", "the rule packs built into the binary did not load"))
+		if set, err = rules.Load(map[string][]byte{}); err != nil {
+			return nil, 0
+		}
 	}
 	var ver uint64
 	info, err := bundle.Installed(b.dir)
@@ -143,6 +149,10 @@ func (b *bundleMgr) check() {
 	}
 	set, ver := b.load()
 	if set == nil || ver == 0 {
+		return
+	}
+	if set.Count() == 0 {
+		b.d.board.add("bundle.reload_errors", 1)
 		return
 	}
 	if err := b.d.pipe.SetRules(set, strconv.FormatUint(ver, 10)); err != nil {

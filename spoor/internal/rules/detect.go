@@ -88,12 +88,10 @@ func (e *Engine) evidence(r *rule, fields map[string]any, memo evidenceMemo) map
 	return out
 }
 
+// labels are the content labels of a detection; evaluate adds rules_hash
+// after the rule loop.
 func (e *Engine) labels(r *rule) map[string]string {
-	l := map[string]string{"rule_pack": r.pack, "rule_pack_version": r.packVersion}
-	if len(e.hash) >= 12 {
-		l["rules_hash"] = e.hash[:12]
-	}
-	return l
+	return map[string]string{"rule_pack": r.pack, "rule_pack_version": r.packVersion}
 }
 
 // detection builds the detection.finding record for r firing on ev.

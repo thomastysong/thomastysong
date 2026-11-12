@@ -56,11 +56,11 @@ type consumer interface {
 // pruneOptions configure an outboxPruner.
 type pruneOptions struct {
 	dir        string
-	maxAge     time.Duration // <= 0: no age limit
-	maxBytes   int64         // <= 0: no byte cap
+	maxAge     time.Duration     // <= 0: no age limit
+	maxBytes   int64             // <= 0: no byte cap
 	consumers  func() []consumer // re-evaluated every pass: a tail database may appear later
-	statePath  string // remembered stream coverage per consumer ("" = in memory)
-	copyDir    string // scratch space for reading a tail database that cannot be opened in place
+	statePath  string            // remembered stream coverage per consumer ("" = in memory)
+	copyDir    string            // scratch space for reading a tail database that cannot be opened in place
 	privileged bool
 	gid        int
 	readOnly   bool // measure only (spoor doctor): never delete or save
@@ -117,10 +117,10 @@ type dropReport struct {
 
 // pruneResult is the outcome of one pass (or one measurement).
 type pruneResult struct {
-	segments int
-	bytes    int64
-	oldest   time.Time
-	newest   time.Time
+	segments  int
+	bytes     int64
+	oldest    time.Time
+	newest    time.Time
 	perStream map[string]streamSize
 
 	consumers   int

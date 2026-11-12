@@ -26,12 +26,12 @@ type layout struct {
 type dirKind int
 
 const (
-	dirData       dirKind = iota // traversable by everyone, writable by the sensor only
-	dirPrivate                   // the sensor only: local ring, checkpoints
-	dirOutbox                    // the sensor writes, output.group reads
-	dirSpoolRoot                 // traversable, not listable: users reach their own subdirectory
-	dirBundle                    // signed public content: readable by everyone
-	dirUserSpool                 // one account's private spool
+	dirData      dirKind = iota // traversable by everyone, writable by the sensor only
+	dirPrivate                  // the sensor only: local ring, checkpoints
+	dirOutbox                   // the sensor writes, output.group reads
+	dirSpoolRoot                // traversable, not listable: users reach their own subdirectory
+	dirBundle                   // signed public content: readable by everyone
+	dirUserSpool                // one account's private spool
 )
 
 // Unix modes per kind. Explicit chmod after creation, because the service

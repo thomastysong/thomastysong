@@ -61,23 +61,20 @@ type Info struct {
 	Tests       int
 }
 
-// packFromNode compiles one parsed pack file into s.
-func (s *Set) packFromNode(name string, root *yaml.Node, embedded bool) error {
+// packFromNode compiles one parsed pack file into s. A pack from the
+// embedded cache (lazy) has its rules compiled in steps (lazy.go).
+func (s *Set) packFromNode(name string, root *yaml.Node, embedded, lazy bool) error {
+	if lazy {
+		if handled, err := s.lazyPack(name, root, embedded); handled {
+			return err
+		}
+	}
 	var p rawPack
 	if err := decodeNode(root, &p); err != nil {
 		return fmt.Errorf("rules: %s: %w", name, err)
 	}
-	if p.Pack == "" || !validListName(p.Pack) {
-		return fmt.Errorf("rules: %s: pack name %q: use lower-case letters, digits, '_', '-' and '.'", name, p.Pack)
-	}
-	if p.Version == "" || len(p.Version) > 64 || strings.ContainsAny(p.Version, ", \t\n") {
-		return fmt.Errorf("rules: %s: version is required (no spaces or commas)", name)
-	}
-	if len(p.Rules) > MaxPackRules {
-		return fmt.Errorf("rules: %s: more than %d rules", name, MaxPackRules)
-	}
-	if prev, ok := s.packs[p.Pack]; ok {
-		return fmt.Errorf("rules: %s: pack %q (version %s) is already loaded", name, p.Pack, prev)
+	if err := s.checkPackHead(name, p.Pack, p.Version, len(p.Rules)); err != nil {
+		return err
 	}
 	s.packs[p.Pack] = p.Version
 	ruleNodes := mapValue(root, "rules")
@@ -90,14 +87,77 @@ func (s *Set) packFromNode(name string, root *yaml.Node, embedded bool) error {
 		if err != nil {
 			return fmt.Errorf("rules: %s: %w", name, err)
 		}
-		r.embedded = embedded
-		if old, dup := s.byID[r.ID]; dup {
-			s.issues = append(s.issues, Issue{RuleID: r.ID, Level: LevelError, Code: "duplicate_id",
-				Msg: fmt.Sprintf("rule id defined twice (pack %s and pack %s); the later definition is used", old.pack, r.pack)})
-		}
-		s.put(r)
+		s.addRule(r, embedded)
 	}
 	return nil
+}
+
+// rawPackHead is a pack file with its rules left as a node. It declares
+// the same keys as rawPack (TestRawPackHeadKeys).
+type rawPackHead struct {
+	Pack        string    `yaml:"pack"`
+	Version     string    `yaml:"version"`
+	Description string    `yaml:"description"`
+	Rules       yaml.Node `yaml:"rules"`
+}
+
+// checkPackHead applies the pack-level checks of packFromNode.
+func (s *Set) checkPackHead(name, pack, version string, rules int) error {
+	if pack == "" || !validListName(pack) {
+		return fmt.Errorf("rules: %s: pack name %q: use lower-case letters, digits, '_', '-' and '.'", name, pack)
+	}
+	if version == "" || len(version) > 64 || strings.ContainsAny(version, ", \t\n") {
+		return fmt.Errorf("rules: %s: version is required (no spaces or commas)", name)
+	}
+	if rules > MaxPackRules {
+		return fmt.Errorf("rules: %s: more than %d rules", name, MaxPackRules)
+	}
+	if prev, ok := s.packs[pack]; ok {
+		return fmt.Errorf("rules: %s: pack %q (version %s) is already loaded", name, pack, prev)
+	}
+	return nil
+}
+
+// lazyPack loads a pack from the embedded cache as rule stubs. handled is
+// false when the pack is not in the plain shape it reads; the caller then
+// compiles it whole (and reports any error from there).
+func (s *Set) lazyPack(name string, root *yaml.Node, embedded bool) (handled bool, err error) {
+	var p rawPackHead
+	if err := decodeNode(root, &p); err != nil {
+		return false, nil
+	}
+	if p.Rules.Kind != 0 && p.Rules.Kind != yaml.SequenceNode {
+		return false, nil
+	}
+	if err := s.checkPackHead(name, p.Pack, p.Version, len(p.Rules.Content)); err != nil {
+		return true, err
+	}
+	s.packs[p.Pack] = p.Version
+	for _, rn := range p.Rules.Content {
+		r := stubRule(rn, p.Pack, p.Version)
+		if r == nil {
+			var rr rawRule
+			if err := decodeNode(rn, &rr); err != nil {
+				return true, fmt.Errorf("rules: %s: %w", name, err)
+			}
+			if r, err = compileRule(&rr, rn, p.Pack, p.Version); err != nil {
+				return true, fmt.Errorf("rules: %s: %w", name, err)
+			}
+		}
+		s.addRule(r, embedded)
+	}
+	return true, nil
+}
+
+// addRule adds a compiled rule of a pack being loaded, noting a duplicate
+// id.
+func (s *Set) addRule(r *rule, embedded bool) {
+	r.embedded = embedded
+	if old, dup := s.byID[r.ID]; dup {
+		s.issues = append(s.issues, Issue{RuleID: r.ID, Level: LevelError, Code: "duplicate_id",
+			Msg: fmt.Sprintf("rule id defined twice (pack %s and pack %s); the later definition is used", old.pack, r.pack)})
+	}
+	s.put(r)
 }
 
 // put adds r, replacing a rule with the same id in place.
@@ -159,6 +219,10 @@ type sourceFile struct {
 	name string
 	size int // bytes of the YAML source, for the per-file caps
 	root *yaml.Node
+	// cached is set on files decoded from the embedded cache: content that
+	// compiled whole when the cache was made, so its rules may be
+	// compiled lazily.
+	cached bool
 }
 
 // fileRole says what a content file is from its base name: "lists",
@@ -248,7 +312,7 @@ func (s *Set) addSource(src sourceFile, embedded bool) error {
 		}
 		s.suppressions = append(s.suppressions, sups...)
 	case "pack":
-		return s.packFromNode(src.name, src.root, embedded)
+		return s.packFromNode(src.name, src.root, embedded, src.cached)
 	}
 	return nil
 }
@@ -422,6 +486,7 @@ func (s *Set) Hash() string {
 func (s *Set) Rules() []Info {
 	out := make([]Info, 0, len(s.rules))
 	for _, r := range s.rules {
+		_ = r.ensure() // an invalid rule is listed with its id; Lint says why
 		out = append(out, Info{
 			ID: r.ID, Title: r.Title, Description: r.Description, Severity: r.Severity,
 			Confidence: r.Confidence, Class: r.Class, Kind: r.Kind, Category: r.Category,

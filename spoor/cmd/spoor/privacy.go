@@ -539,7 +539,10 @@ func purgeSegment(path string, m userMatcher, dry bool) (int, error) {
 					kept.Write(l)
 				}
 			} else if len(l) > 0 {
-				// A partial line being written: keep it for the next pass.
+				// A torn last line (writers append whole lines in one
+				// write, so only a crash leaves one): kept as it is.
+				off += int64(len(l))
+				kept.Write(l)
 				return nil
 			}
 			if err != nil {

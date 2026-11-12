@@ -89,7 +89,15 @@
 // key. RedactArgs, RedactURL and RedactMap add structure-aware redaction for
 // argument vectors, URLs and decoded tool inputs. References to a secret
 // ($TOKEN, ${VAR}, %VAR%, @file, op://...) are never redacted: they are the
-// useful, non-sensitive part.
+// useful, non-sensitive part. RedactArgs knows the password flags and
+// positions of common tools (mysql -pPW, sshpass, sqlcmd -P, keytool
+// -storepass, schtasks /rp, smbclient -U user%pw, sqlplus user/pw@db, vault
+// login TOKEN ...), so every caller gets them, not only the privacy tier.
+//
+// Redaction markers already in the input ("[REDACTED:<kind>:<fp>]", and the
+// keyed "hmac=" and fingerprint-free forms) are opaque: no pattern matches
+// inside one or across one, so redacting twice changes nothing and a marker
+// never ends up inside another.
 //
 // Two things callers should know. First, free-text detection of passwords
 // is necessarily heuristic: "password=hunter2" is redacted, "the password is

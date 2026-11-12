@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -168,7 +169,7 @@ func (a *app) scan(ctx context.Context, cfg *config.Config, o scanOptions) (*sca
 	}
 	finished := a.now()
 	res.Finished, res.Ledger = finished.UTC(), dres.Ledger
-	res.Complete = !dres.Ledger.Truncated && ctx.Err() == nil
+	res.Complete = scanComplete(dres.Ledger) && ctx.Err() == nil
 	hostIDSource := platform.HostIDSource()
 	if cfg.HostID != "" {
 		hostIDSource = "config"
@@ -207,6 +208,22 @@ func (a *app) scan(ctx context.Context, cfg *config.Config, o scanOptions) (*sca
 		res.Counts[string(e.Kind)]++
 	}
 	return res, nil
+}
+
+// scanComplete applies discovery's own rule for a scan that can prove
+// absence: nothing truncated, refused, skipped or failed (a refused home
+// shows up only as the ledger note discovery writes when it withholds
+// removals).
+func scanComplete(l discovery.Ledger) bool {
+	if l.Truncated || l.Errors > 0 || l.Denied > 0 || l.Skipped > 0 {
+		return false
+	}
+	for _, n := range l.Notes {
+		if strings.HasPrefix(n, "removals not reported") {
+			return false
+		}
+	}
+	return true
 }
 
 // seenAssets is every asset a complete differential scan observed: the

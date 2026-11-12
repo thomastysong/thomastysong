@@ -114,12 +114,25 @@ func tailDBConsumers(spec, checkDir string) []consumer {
 }
 
 // readTailDB returns the rows of a Fluent Bit tail database without ever
-// writing to it. It first opens the file read-only in place. SQLite needs
-// the -shm file of a WAL database; when Fluent Bit has stopped and removed
-// it and the directory is read-only to this process (systemd
-// ProtectSystem=strict), the file is opened as immutable, which is true
-// while nobody writes it. As a last resort the database and its WAL are
-// copied into the daemon's own checkpoint directory and read there.
+// writing to it or creating anything beside it.
+//
+// SQLite opens a WAL database through its -wal and -shm sidecars and
+// creates them when they are missing, even for a read-only connection; a
+// root-owned -shm left in Fluent Bit's directory can then lock a Fluent Bit
+// running as another user out of its own database (observed here: a mode=ro
+// read of a stopped Fluent Bit's database created both files). So:
+//
+//   - no -wal file (Fluent Bit stopped cleanly, or rollback journal mode):
+//     the file is not being written; it is opened as immutable, which reads
+//     it without locks or sidecars;
+//   - a -wal file (Fluent Bit running): opened read-only in place, sharing
+//     Fluent Bit's own sidecars (the shipped configuration sets db.locking
+//     false so this reader is not locked out);
+//   - when that fails (a read-only mount under systemd ProtectSystem=strict,
+//     a lock), the database and its WAL are copied into the daemon's own
+//     checkpoint directory and read there. A copy can be slightly behind but
+//     every row in it is one that existed, so it never reports more than was
+//     read.
 func readTailDB(path, copyDir string) ([]tailRow, error) {
 	fi, err := os.Stat(path)
 	if err != nil {
@@ -131,14 +144,16 @@ func readTailDB(path, copyDir string) ([]tailRow, error) {
 	if fi.Size() > maxTailDBBytes {
 		return nil, fmt.Errorf("%s: %d bytes is too large for a tail database", path, fi.Size())
 	}
-	rows, err := queryTailDB(path, false)
+	_, werr := os.Lstat(path + "-wal")
+	walExists := werr == nil
+	var rows []tailRow
+	if walExists {
+		rows, err = queryTailDB(path, false)
+	} else {
+		rows, err = queryTailDB(path, true)
+	}
 	if err == nil {
 		return rows, nil
-	}
-	if _, werr := os.Lstat(path + "-wal"); errors.Is(werr, os.ErrNotExist) {
-		if rows, ierr := queryTailDB(path, true); ierr == nil {
-			return rows, nil
-		}
 	}
 	if copyDir == "" {
 		return nil, err

@@ -159,8 +159,8 @@ func (d *daemon) emit(ev *event.Event) {
 	d.pipe.Ingest(ev)
 }
 
-func newDaemon(cfg *config.Config, log *slog.Logger, env runEnv) (d *daemon, err error) {
-	d = &daemon{
+func newDaemon(cfg *config.Config, log *slog.Logger, env runEnv) (_ *daemon, err error) {
+	d := &daemon{
 		cfg:     cfg,
 		log:     log,
 		env:     env,

@@ -552,13 +552,16 @@ func (a *app) printDoctor(r *doctorReport) {
 			}
 		}
 	}
-	if len(r.Hooks) > 0 {
-		fmt.Fprintln(a.stdout, "\nHooks:")
+	var shown []hookState
+	for _, s := range r.Hooks {
+		if s.Status != hookinstall.StatusMissing || s.Hash != "" {
+			shown = append(shown, s)
+		}
+	}
+	if len(shown) > 0 {
+		fmt.Fprintln(a.stdout, "\nHooks (missing ones omitted):")
 		tw := a.table()
-		for _, s := range r.Hooks {
-			if s.Status == hookinstall.StatusMissing && s.Hash == "" {
-				continue
-			}
+		for _, s := range shown {
 			fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n", s.Agent, s.Scope, s.User, s.Status)
 		}
 		tw.Flush()

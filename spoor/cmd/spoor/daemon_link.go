@@ -14,6 +14,7 @@ import (
 // internal/daemon. Doctor renders the snapshot through JSON, so it depends
 // on nothing but the function signatures.
 func daemonRun(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
+	daemon.Version = versionString()
 	return daemon.Run(ctx, cfg, log)
 }
 

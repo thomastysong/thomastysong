@@ -51,14 +51,21 @@ rules:
   - id: SPR-EVADE-002
     title: Sensor files deleted or modified
     description: >-
-      A command deletes or writes spoor's own configuration, state, spool
-      or binary at its installed locations (packaging/: /etc/spoor,
-      /var/lib/spoor, /usr/bin/spoor, the service unit, the per-user state
-      directory, the Windows and macOS equivalents). Whoever can change the
-      sensor decides what it reports. The path list is explicit because
-      the sensor_files path class also matches any file named after the
-      sensor, which in the benign replay meant this project's own source
-      tree, build output and test fixtures (8 false alerts before tuning).
+      A command deletes, writes, moves, creates or changes the permissions
+      of spoor's own configuration, state, spool, socket or binary at its
+      installed locations: the system directories of internal/platform
+      (/etc/spoor, /var/lib/spoor, /run/spoor on Linux; /Library/Application
+      Support/spoor and /var/run/spoor on macOS; C:\ProgramData\spoor on
+      Windows), the per-user directories (~/.local/state/spoor,
+      ~/Library/Application Support/spoor, %'(?i)^(/etc/spoor|/var/lib/spoor|(/private)?/var/run/spoor|/run/spoor|/var/log/spoor|/opt/spoor|/usr/(local/)?(s?bin|lib|libexec)/spoor|(/usr/lib|/lib|/etc)/systemd/system/spoor\.service(\.d)?|/Library/(Application Support|Logs)/spoor|/Library/LaunchDaemons/com\.github\.thomastysong\.spoor\.plist|[a-z]:[\\/](program files|programdata)[\\/]spoor|(%(programdata|programfiles|localappdata)%|\$env:(programdata|programfiles|localappdata))[\\/]spoor|(~|\$\{?home\}?|/root|/var/root|/home/[^/]+|/Users/[^/]+)/(\.local/state|Library/Application Support)/spoor|(~|\$\{?home\}?|%userprofile%|\$env:userprofile|[a-z]:[\\/]users[\\/][^\\/]+)[\\/]appdata[\\/]local[\\/]spoor)([/\\]|$)'ALAPPDATA%\spoor), the
+      binary, the service unit and the launchd plist. Creating the file
+      "disabled" in the configuration directory is the documented kill
+      switch. Whoever can change the sensor decides what it reports. The
+      path list is explicit and anchored because the sensor_files path class
+      and the analyser's sensor_tamper fact also match any path that merely
+      contains these names, which in the benign replay meant this project's
+      own source tree, packaging staging roots and test fixtures (8 false
+      alerts before tuning).
     kind: activity
     class: alert
     severity: critical
@@ -70,16 +77,28 @@ rules:
       - "research/threats.md section 2 row 25"
       - "research/threats.md section 3 R37"
     falsepositives:
-      - "Uninstalling the sensor"
+      - "Installing, upgrading or uninstalling the sensor from an agent session"
     when:
       type: [tool.pre, process.exec]
     match:
       any:
-        - shell.deletes|any_re: "(?i)^(/etc/spoor|/var/lib/spoor|/run/spoor|/usr/(local/)?bin/spoor|/usr/(lib|local/lib)/spoor|(/usr/lib|/etc)/systemd/system/spoor\\.service|/Library/Application Support/spoor|/Library/LaunchDaemons/com\\.github\\.thomastysong\\.spoor\\.plist|c:\\\\program files\\\\spoor|c:\\\\programdata\\\\spoor|(~|\\$HOME|/root|/home/[^/]+|/Users/[^/]+)/\\.local/state/spoor)(/|\\\\|$)"
-        - shell.writes|any_re: "(?i)^(/etc/spoor|/var/lib/spoor|/run/spoor|/usr/(local/)?bin/spoor|/usr/(lib|local/lib)/spoor|(/usr/lib|/etc)/systemd/system/spoor\\.service|/Library/Application Support/spoor|/Library/LaunchDaemons/com\\.github\\.thomastysong\\.spoor\\.plist|c:\\\\program files\\\\spoor|c:\\\\programdata\\\\spoor|(~|\\$HOME|/root|/home/[^/]+|/Users/[^/]+)/\\.local/state/spoor)(/|\\\\|$)"
+        - shell.deletes|any_re: '(?i)^(/etc/spoor|/var/lib/spoor|(/private)?/var/run/spoor|/run/spoor|/var/log/spoor|/opt/spoor|/usr/(local/)?(s?bin|lib|libexec)/spoor|(/usr/lib|/lib|/etc)/systemd/system/spoor\.service(\.d)?|/Library/(Application Support|Logs)/spoor|/Library/LaunchDaemons/com\.github\.thomastysong\.spoor\.plist|[a-z]:[\\/](program files|programdata)[\\/]spoor|(%(programdata|programfiles|localappdata)%|\$env:(programdata|programfiles|localappdata))[\\/]spoor|(~|\$\{?home\}?|/root|/var/root|/home/[^/]+|/Users/[^/]+)/(\.local/state|Library/Application Support)/spoor|(~|\$\{?home\}?|%userprofile%|\$env:userprofile|[a-z]:[\\/]users[\\/][^\\/]+)[\\/]appdata[\\/]local[\\/]spoor)([/\\]|$)'
+        - shell.writes|any_re: '(?i)^(/etc/spoor|/var/lib/spoor|(/private)?/var/run/spoor|/run/spoor|/var/log/spoor|/opt/spoor|/usr/(local/)?(s?bin|lib|libexec)/spoor|(/usr/lib|/lib|/etc)/systemd/system/spoor\.service(\.d)?|/Library/(Application Support|Logs)/spoor|/Library/LaunchDaemons/com\.github\.thomastysong\.spoor\.plist|[a-z]:[\\/](program files|programdata)[\\/]spoor|(%(programdata|programfiles|localappdata)%|\$env:(programdata|programfiles|localappdata))[\\/]spoor|(~|\$\{?home\}?|/root|/var/root|/home/[^/]+|/Users/[^/]+)/(\.local/state|Library/Application Support)/spoor|(~|\$\{?home\}?|%userprofile%|\$env:userprofile|[a-z]:[\\/]users[\\/][^\\/]+)[\\/]appdata[\\/]local[\\/]spoor)([/\\]|$)'
         - all:
             - tool.kind|in: [file_write, file_edit]
-            - target.path|re: "(?i)^(/etc/spoor|/var/lib/spoor|/run/spoor|/usr/(local/)?bin/spoor|/usr/(lib|local/lib)/spoor|(/usr/lib|/etc)/systemd/system/spoor\\.service|/Library/Application Support/spoor|/Library/LaunchDaemons/com\\.github\\.thomastysong\\.spoor\\.plist|c:\\\\program files\\\\spoor|c:\\\\programdata\\\\spoor|(/root|/home/[^/]+|/Users/[^/]+)/\\.local/state/spoor)(/|\\\\|$)"
+            - target.path|re: '(?i)^(/etc/spoor|/var/lib/spoor|(/private)?/var/run/spoor|/run/spoor|/var/log/spoor|/opt/spoor|/usr/(local/)?(s?bin|lib|libexec)/spoor|(/usr/lib|/lib|/etc)/systemd/system/spoor\.service(\.d)?|/Library/(Application Support|Logs)/spoor|/Library/LaunchDaemons/com\.github\.thomastysong\.spoor\.plist|[a-z]:[\\/](program files|programdata)[\\/]spoor|(%(programdata|programfiles|localappdata)%|\$env:(programdata|programfiles|localappdata))[\\/]spoor|(~|\$\{?home\}?|/root|/var/root|/home/[^/]+|/Users/[^/]+)/(\.local/state|Library/Application Support)/spoor|(~|\$\{?home\}?|%userprofile%|\$env:userprofile|[a-z]:[\\/]users[\\/][^\\/]+)[\\/]appdata[\\/]local[\\/]spoor)([/\\]|$)'
+        # touch, mkdir, chmod, chown, chattr, mv (its source), icacls,
+        # New-Item ...: the analyser tags the change as sensor_tamper but
+        # records no write or delete for it.
+        - all:
+            - shell.defense_evasion: sensor_tamper
+            - any_command:
+                args|any_re: '(?i)^(/etc/spoor|/var/lib/spoor|(/private)?/var/run/spoor|/run/spoor|/var/log/spoor|/opt/spoor|/usr/(local/)?(s?bin|lib|libexec)/spoor|(/usr/lib|/lib|/etc)/systemd/system/spoor\.service(\.d)?|/Library/(Application Support|Logs)/spoor|/Library/LaunchDaemons/com\.github\.thomastysong\.spoor\.plist|[a-z]:[\\/](program files|programdata)[\\/]spoor|(%(programdata|programfiles|localappdata)%|\$env:(programdata|programfiles|localappdata))[\\/]spoor|(~|\$\{?home\}?|/root|/var/root|/home/[^/]+|/Users/[^/]+)/(\.local/state|Library/Application Support)/spoor|(~|\$\{?home\}?|%userprofile%|\$env:userprofile|[a-z]:[\\/]users[\\/][^\\/]+)[\\/]appdata[\\/]local[\\/]spoor)([/\\]|$)'
+        # Commands that always create or change their operands, for the
+        # spellings the analyser does not tag (cmd.exe mkdir).
+        - any_command:
+            name|in: [touch, mkdir, md, chmod, chown, chgrp, chattr, chflags, setfacl, icacls, cacls, takeown, new-item, ni, set-acl]
+            args|any_re: '(?i)^(/etc/spoor|/var/lib/spoor|(/private)?/var/run/spoor|/run/spoor|/var/log/spoor|/opt/spoor|/usr/(local/)?(s?bin|lib|libexec)/spoor|(/usr/lib|/lib|/etc)/systemd/system/spoor\.service(\.d)?|/Library/(Application Support|Logs)/spoor|/Library/LaunchDaemons/com\.github\.thomastysong\.spoor\.plist|[a-z]:[\\/](program files|programdata)[\\/]spoor|(%(programdata|programfiles|localappdata)%|\$env:(programdata|programfiles|localappdata))[\\/]spoor|(~|\$\{?home\}?|/root|/var/root|/home/[^/]+|/Users/[^/]+)/(\.local/state|Library/Application Support)/spoor|(~|\$\{?home\}?|%userprofile%|\$env:userprofile|[a-z]:[\\/]users[\\/][^\\/]+)[\\/]appdata[\\/]local[\\/]spoor)([/\\]|$)'
     response: ask
     dedup: [shell.deletes, target.path]
     evidence: [target.command, target.path, shell.deletes, shell.writes]
@@ -91,6 +110,39 @@ rules:
       - name: config directory removed
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf /etc/spoor" } }
         expect: match
+      - name: kill switch created with touch
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "sudo touch /etc/spoor/disabled" } }
+        expect: match
+      - name: kill switch created as a directory
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "sudo mkdir /etc/spoor/disabled" } }
+        expect: match
+      - name: kill switch in the per-user directory
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "touch ~/.local/state/spoor/disabled" } }
+        expect: match
+      - name: binary made unexecutable
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "sudo chmod 000 /usr/bin/spoor" } }
+        expect: match
+      - name: configuration moved away
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "sudo mv /etc/spoor/spoor.toml /tmp/x" } }
+        expect: match
+      - name: macOS per-user state directory removed
+        event: { type: tool.pre, host: { os: darwin }, tool: { kind: shell, name: Bash }, target: { command: "rm -rf ~/Library/Application\\ Support/spoor" } }
+        expect: match
+      - name: macOS per-user spool removed by absolute path
+        event: { type: tool.pre, host: { os: darwin }, tool: { kind: shell, name: Bash }, target: { command: "rm -rf '/Users/tester/Library/Application Support/spoor/spool'" } }
+        expect: match
+      - name: macOS hook socket removed
+        event: { type: tool.pre, host: { os: darwin }, tool: { kind: shell, name: Bash }, target: { command: "rm -f /var/run/spoor/hook.sock" } }
+        expect: match
+      - name: macOS kill switch
+        event: { type: tool.pre, host: { os: darwin }, tool: { kind: shell, name: Bash }, target: { command: "sudo touch '/Library/Application Support/spoor/disabled'" } }
+        expect: match
+      - name: Windows per-user spool removed
+        event: { type: tool.pre, host: { os: windows }, tool: { kind: shell, name: PowerShell }, target: { command: "Remove-Item -Recurse -Force $env:'(?i)^(/etc/spoor|/var/lib/spoor|(/private)?/var/run/spoor|/run/spoor|/var/log/spoor|/opt/spoor|/usr/(local/)?(s?bin|lib|libexec)/spoor|(/usr/lib|/lib|/etc)/systemd/system/spoor\.service(\.d)?|/Library/(Application Support|Logs)/spoor|/Library/LaunchDaemons/com\.github\.thomastysong\.spoor\.plist|[a-z]:[\\/](program files|programdata)[\\/]spoor|(%(programdata|programfiles|localappdata)%|\$env:(programdata|programfiles|localappdata))[\\/]spoor|(~|\$\{?home\}?|/root|/var/root|/home/[^/]+|/Users/[^/]+)/(\.local/state|Library/Application Support)/spoor|(~|\$\{?home\}?|%userprofile%|\$env:userprofile|[a-z]:[\\/]users[\\/][^\\/]+)[\\/]appdata[\\/]local[\\/]spoor)([/\\]|$)'ALAPPDATA\\spoor" } }
+        expect: match
+      - name: Windows kill switch
+        event: { type: tool.pre, host: { os: windows }, tool: { kind: shell, name: PowerShell }, target: { command: "New-Item -ItemType File -Path C:\\ProgramData\\spoor\\disabled" } }
+        expect: match
       - name: reading the sensor config
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cat /etc/spoor/spoor.yaml" } }
         expect: no_match
@@ -99,6 +151,9 @@ rules:
         expect: no_match
       - name: sensor built in its own source tree
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "go build -o bin/spoor ./cmd/spoor && cp packaging/systemd/spoor.service /tmp/pkgroot/etc/systemd/system/" } }
+        expect: no_match
+      - name: package staging root that mirrors the installed layout
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "mkdir -p /tmp/pkgroot/etc/spoor && touch /tmp/pkgroot/etc/spoor/disabled && chmod 755 /tmp/pkgroot/usr/bin/spoor" } }
         expect: no_match
       - name: user spool directory removed
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf ~/.local/state/spoor" } }

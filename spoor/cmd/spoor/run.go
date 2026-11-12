@@ -43,10 +43,16 @@ func (a *app) cmdRun(args []string) int {
 	if err != nil {
 		return a.fail("run", err)
 	}
+	var logw io.Writer = a.stderr
 	if isWindowsService() {
-		return runService(cfg, path, lvl, *format)
+		// The service has no console. internal/daemon recognises the
+		// service control manager itself and runs under svc.Run.
+		if f, err := openServiceLog(cfg); err == nil {
+			defer f.Close()
+			logw = f
+		}
 	}
-	log := newLogger(a.stderr, lvl, *format)
+	log := newLogger(logw, lvl, *format)
 	ctx, stop := signal.NotifyContext(a.ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	return runDaemon(ctx, cfg, path, log)

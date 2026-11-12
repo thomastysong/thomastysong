@@ -62,6 +62,11 @@ func lintRule(s *Set, r *rule, setAnywhere map[string]bool) []Issue {
 	add := func(level, code, format string, a ...any) {
 		out = append(out, Issue{RuleID: r.ID, Level: level, Code: code, Msg: fmt.Sprintf(format, a...)})
 	}
+	tests, err := r.testList()
+	if err != nil {
+		add(LevelError, "invalid_rule", "%v", err)
+		return out
+	}
 	if strings.TrimSpace(r.Title) == "" {
 		add(LevelError, "missing_field", "title is empty")
 	}
@@ -105,7 +110,7 @@ func lintRule(s *Set, r *rule, setAnywhere map[string]bool) []Issue {
 	}
 
 	neg, pos := 0, 0
-	for _, t := range r.tests {
+	for _, t := range tests {
 		if t.Expect == "no_match" {
 			neg++
 		} else {

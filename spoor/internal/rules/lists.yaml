@@ -8,26 +8,41 @@
 # trusted host never vouches for another host in the same command.
 lists:
   # Hosts whose curl | sh installers are documented by the vendor on its
-  # own site. A shared code host (raw.githubusercontent.com) is never listed
-  # here: anyone can publish there; list exact URLs below instead.
+  # own site, and on which nobody else can publish (SPR-EXEC-001). Matched
+  # against parsed hosts, never against URL text. A shared host is never
+  # listed here: raw.githubusercontent.com serves every repository, and
+  # deno.land/x/ serves third-party modules; list exact URLs below instead.
   trusted_installer_hosts:
     - sh.rustup.rs
     - claude.ai
     - bun.sh
-    - deno.land
     - astral.sh
     - get.pnpm.io
     - install.python-poetry.org
     - get.docker.com
     - ollama.com
 
-  # Installer URLs on shared hosts, by prefix (the trailing * is a prefix
-  # match, so keep the owner/repository part in the entry).
+  # Installer URLs on shared hosts. An entry is an exact URL or a prefix
+  # that ends at a path boundary ("/" before the *): a prefix without one,
+  # such as "https://sh.rustup.rs*", also matches
+  # https://sh.rustup.rs.evil.example/. SPR-EXEC-001 applies these only
+  # when every host of the command is in trusted_installer_url_hosts and no
+  # URL carries userinfo, dot segments or escapes, so add the host there
+  # too. Pin a GitHub repository to a named ref (HEAD, a release tag), not
+  # to any ref: raw.githubusercontent.com serves a commit id from any fork
+  # of the repository under the upstream's name.
+  # UNVERIFIED: fork commits by id under raw.githubusercontent.com (shown
+  # for github.com commit pages and for Actions "impostor commits").
   trusted_installer_urls:
-    - "https://raw.githubusercontent.com/Homebrew/install/*"
-    - "https://raw.githubusercontent.com/nvm-sh/nvm/*"
-    - "https://sh.rustup.rs*"
-    - "https://claude.ai/install.sh*"
+    - "https://raw.githubusercontent.com/Homebrew/install/HEAD/*"
+    - "https://raw.githubusercontent.com/nvm-sh/nvm/v*"
+    - "https://deno.land/install.sh"
+    - "https://deno.land/install.ps1"
+
+  # The hosts of trusted_installer_urls.
+  trusted_installer_url_hosts:
+    - raw.githubusercontent.com
+    - deno.land
 
   # Hosts whose content is not treated as untrusted input
   # (SPR-FLOW-001): vendor documentation and language references. Package
@@ -271,10 +286,69 @@ lists:
     - 0.0.0.0
     - host.docker.internal
 
-  # Host classes whose content does not set untrusted_input
-  # (SPR-FLOW-001). Every host of the result must be in one of these
-  # classes. Package registries are listed because counting them made the
-  # flag near-constant; remove the entry to treat registry READMEs as
-  # untrusted.
-  trusted_content_host_classes:
-    - package_registry
+  # Package registries whose content does not set untrusted_input
+  # (SPR-FLOW-001): counting them made the flag near-constant on benign
+  # sessions. Ship an empty list in a bundle to treat registry READMEs as
+  # untrusted. Hosts, not the package_registry host class: an unknown host
+  # has no class, so a class test cannot see an attacker's URL next to a
+  # registry URL in one command. Every host of the result must be listed
+  # here (or every host in trusted_content_hosts). The public registries of
+  # classify's package_registry class, each with its subdomains; CDNs that
+  # serve any repository's files (cdn.jsdelivr.net/gh/, esm.sh/gh/) and
+  # skill and MCP directories are left out because they serve arbitrary
+  # third-party text.
+  trusted_registry_hosts:
+    - registry.npmjs.org
+    - npmjs.com
+    - "*.npmjs.com"
+    - npmjs.org
+    - "*.npmjs.org"
+    - registry.yarnpkg.com
+    - yarnpkg.com
+    - "*.yarnpkg.com"
+    - jsr.io
+    - registry.npmmirror.com
+    - pypi.org
+    - "*.pypi.org"
+    - pythonhosted.org
+    - "*.pythonhosted.org"
+    - conda.anaconda.org
+    - repo.anaconda.com
+    - anaconda.org
+    - crates.io
+    - "*.crates.io"
+    - proxy.golang.org
+    - sum.golang.org
+    - pkg.go.dev
+    - rubygems.org
+    - "*.rubygems.org"
+    - repo.maven.apache.org
+    - repo1.maven.org
+    - central.sonatype.com
+    - plugins.gradle.org
+    - packagist.org
+    - "*.packagist.org"
+    - nuget.org
+    - "*.nuget.org"
+    - pub.dev
+    - hex.pm
+    - metacpan.org
+    - cran.r-project.org
+    - hackage.haskell.org
+    - hub.docker.com
+    - registry-1.docker.io
+    - ghcr.io
+    - quay.io
+    - mcr.microsoft.com
+    - public.ecr.aws
+    - registry.k8s.io
+    - formulae.brew.sh
+    - deb.debian.org
+    - archive.ubuntu.com
+    - security.ubuntu.com
+    - dl-cdn.alpinelinux.org
+    - packages.microsoft.com
+    - dl.fedoraproject.org
+    - download.opensuse.org
+    - archlinux.org
+    - cache.nixos.org

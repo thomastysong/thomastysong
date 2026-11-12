@@ -83,9 +83,15 @@ type Engine struct {
 	anyType  []*rule            // activity rules without a type prefilter
 	invRules []*rule
 	guard    []*rule // activity rules with response ask|block
-	hash     string
 	version  string
 	baseline Baseline
+
+	// The content hash labels detections. It is computed on first need
+	// from a snapshot of the set: rendering every rule's canonical form is
+	// work a hook process that reports nothing should not pay.
+	hashOnce sync.Once
+	hashSet  *Set
+	hash     string
 
 	mu       sync.Mutex
 	sessions *sessions
@@ -94,7 +100,7 @@ type Engine struct {
 
 	evals, matches, detections, suppressed, suppressedOp atomic.Uint64
 	timeouts, panics, evicted, missingLists              atomic.Uint64
-	imports, importsRejected                             atomic.Uint64
+	imports, importsRejected, invalid                    atomic.Uint64
 }
 
 // NewEngine snapshots s; later changes to s do not affect the engine.
@@ -123,7 +129,7 @@ func NewEngine(s *Set, o Options) *Engine {
 		lists:    map[string]*namedList{},
 		flagOnly: map[string]bool{},
 		byType:   map[string][]*rule{},
-		hash:     s.Hash(),
+		hashSet:  s.clone(),
 		version:  s.Version(),
 		baseline: o.Baseline,
 		sessions: newSessions(o.MaxSessions),
@@ -301,6 +307,10 @@ func (e *Engine) evaluate(ev *event.Event, fired map[string]bool) (res Result) {
 		if r.when != nil && !r.when.eval(fields, ctx) {
 			continue
 		}
+		if r.lazy != nil && r.ensure() != nil {
+			e.invalid.Add(1) // compiled on first use; an invalid rule never fires
+			continue
+		}
 		var used []flagEntryNamed
 		if len(r.require) > 0 || len(r.requireAny) > 0 {
 			if st == nil {
@@ -375,6 +385,15 @@ func (e *Engine) evaluate(ev *event.Event, fired map[string]bool) (res Result) {
 	}
 	if n := len(cands); n > 0 && !res.Timeout {
 		e.ruleNS[cands[n-1].ID] += uint64(e.clock().Sub(prev))
+	}
+	// Outside the rule loop, so the first detection's hash never counts
+	// against a rule's deadline.
+	if len(res.Detections) > 0 {
+		if h := e.rulesHash(); len(h) >= 12 {
+			for _, d := range res.Detections {
+				d.Labels["rules_hash"] = h[:12]
+			}
+		}
 	}
 	// Flags set by this event take effect for later events only, so the
 	// outcome never depends on the order rules are listed in.
@@ -673,10 +692,21 @@ func (e *Engine) dedupe(st *sessionState, r *rule, det *event.Event, fields map[
 	return false
 }
 
+// rulesHash returns Set.Hash of the set the engine was built from.
+func (e *Engine) rulesHash() string {
+	e.hashOnce.Do(func() {
+		e.hash = e.hashSet.Hash()
+		e.hashSet = nil
+	})
+	return e.hash
+}
+
 // Stats returns counters: evals, matches, detections, suppressed,
 // suppressed_operator, timeouts, panics, sessions, sessions_evicted,
-// lists_missing, imports, imports_rejected, and rule_ns.<id> (cumulative
-// evaluation time) for the ten most expensive rules.
+// lists_missing, imports, imports_rejected, rules_invalid (evaluations of
+// a rule from the embedded cache whose body failed to compile; zero in a
+// build whose tests pass), and rule_ns.<id> (cumulative evaluation time)
+// for the ten most expensive rules.
 func (e *Engine) Stats() map[string]uint64 {
 	out := map[string]uint64{
 		"evals":               e.evals.Load(),
@@ -690,6 +720,7 @@ func (e *Engine) Stats() map[string]uint64 {
 		"lists_missing":       e.missingLists.Load(),
 		"imports":             e.imports.Load(),
 		"imports_rejected":    e.importsRejected.Load(),
+		"rules_invalid":       e.invalid.Load(),
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()

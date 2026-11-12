@@ -9,9 +9,15 @@ rules:
   - id: SPR-DESTR-001
     title: Recursive delete of the filesystem root or a home directory
     description: >-
-      rm -rf of / or of a whole home directory (literal, ~ or $HOME). No
-      coding task needs it; Shai-Hulud 2.0 and the Tensorlake watcher wiped
-      $HOME, and agents have deleted user data on their own.
+      rm -rf of / or of a whole home directory, however it is spelled: the
+      literal path, ~, ~user or $HOME; find started at a home directory
+      that deletes without narrowing what it matches; a recursive delete of
+      * or . right after cd to a home directory; or a delete of .. (or cd
+      .. and a delete of $PWD) from a directory directly below a home
+      directory. No coding task needs it; Shai-Hulud 2.0 and the Tensorlake
+      watcher wiped $HOME, and agents have deleted user data on their own.
+      The analyser does not apply a cd to the paths that follow it, so these
+      spellings are matched on the parsed commands themselves.
     kind: activity
     class: alert
     severity: critical
@@ -29,7 +35,59 @@ rules:
     when:
       type: [tool.pre, process.exec]
     match:
-      shell.destructive|contains_any: [rm_recursive_root, rm_recursive_home]
+      any:
+        - shell.destructive|contains_any: [rm_recursive_root, rm_recursive_home]
+        # rm -r of ~user (the analyser tags ~, $HOME and literal homes).
+        - any_command:
+            name: rm
+            all:
+              - args|any_re: "^-(-recursive|[a-zA-Z]*[rR])"
+              - args|any_re: '(?i)^(~[a-z0-9._-]*|\$\{?home\}?|/home/[^/]+|/Users/[^/]+|/root|/var/root)/?(\*|\.\*)?$'
+        # find from a home directory that deletes whatever it finds: -type
+        # and depth limits still take everything; a name, path, age or size
+        # test narrows it to housekeeping (find ~ -name '*.pyc' -delete).
+        - any_command:
+            name: find
+            args|any_re: '(?i)^(~[a-z0-9._-]*|\$\{?home\}?|/home/[^/]+|/Users/[^/]+|/root|/var/root|%userprofile%|\$env:userprofile|[a-z]:[\\/]users[\\/][^\\/]+)[/\\]?$'
+            any:
+              - args|contains: -delete
+              - all:
+                  - args|contains_any: [-exec, -execdir, -ok, -okdir]
+                  - args|contains_any: [rm, /bin/rm, /usr/bin/rm, shred, unlink]
+            not:
+              args|contains_any: [-name, -iname, -path, -ipath, -wholename, -iwholename, -regex, -iregex, -lname, -ilname, -newer, -newermt, -anewer, -cnewer, -mtime, -mmin, -atime, -amin, -ctime, -cmin, -used, -size, -empty, -user, -nouser, -group, -nogroup, -uid, -gid, -perm, -links, -inum, -samefile, -prune, -fstype, -xtype, -readable, -writable, -executable]
+        # cd to a home directory (or a bare cd), then a recursive delete of
+        # everything in the new working directory.
+        - all:
+            - any_command:
+                name: cd
+                any:
+                  - args|any_re: '(?i)^(~[a-z0-9._-]*|\$\{?home\}?|/home/[^/]+|/Users/[^/]+|/root|/var/root|%userprofile%|\$env:userprofile|[a-z]:[\\/]users[\\/][^\\/]+)[/\\]?$'
+                  - args|exists: false
+            - any_command:
+                name|in: [rm, find]
+                args|any_re: '^(\.|\./?\*|\*|\.\*|\$\{?PWD\}?)/?$'
+            - any:
+                - shell.destructive|contains_any: [rm_recursive_wildcard, find_delete]
+                - any_command:
+                    name: find
+                    args|contains: -delete
+        # From a directory directly below a home directory, .. is the home
+        # directory itself.
+        - all:
+            - session.cwd|re: '(?i)^(/home/[^/]+|/Users/[^/]+|/root|[a-z]:[\\/]users[\\/][^\\/]+)[/\\][^/\\]+[/\\]?$'
+            - shell.destructive|contains_any: [rm_recursive_wildcard, find_delete]
+            - any:
+                - any_command:
+                    name|in: [rm, find]
+                    args|any_re: '^\.\./?\*?$'
+                - all:
+                    - any_command:
+                        name: cd
+                        args|any_re: '^\.\./?$'
+                    - any_command:
+                        name|in: [rm, find]
+                        args|any_re: '^(\.|\./?\*|\*|\$\{?PWD\}?)/?$'
     dedup: [shell.deletes]
     evidence: [target.command, shell.deletes, shell.destructive]
     remedy: Stop the agent; check backups for the paths it named.
@@ -45,6 +103,42 @@ rules:
         expect: no_match
       - name: a cache below home
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf ~/.cache/go-build" } }
+        expect: no_match
+      - name: find from home deleting everything below it
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "find ~ -mindepth 1 -delete" } }
+        expect: match
+      - name: find from $HOME deleting everything
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "find $HOME -delete" } }
+        expect: match
+      - name: find from home deleting every file through rm
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "find ~ -type f -exec rm -f {} +" } }
+        expect: match
+      - name: cd home, then delete everything
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cd ~ && rm -rf *" } }
+        expect: match
+      - name: bare cd, then delete everything
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cd; rm -rf ./*" } }
+        expect: match
+      - name: cd up from a project below home, then delete the new working directory
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cd .. && rm -rf \"$PWD\"" } }
+        expect: match
+      - name: parent of a project below home deleted
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf ../*" } }
+        expect: match
+      - name: another user's home through ~user
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf ~tester" } }
+        expect: match
+      - name: compiled files under home removed by name
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "find ~ -name '*.pyc' -delete" } }
+        expect: no_match
+      - name: old logs under home removed by age
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "find ~ -mtime +30 -name '*.log' -delete" } }
+        expect: no_match
+      - name: cd into a project below home, then clean it
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cd ~/project/build && rm -rf *" } }
+        expect: no_match
+      - name: sibling directory of the project removed
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf ../project-old" } }
         expect: no_match
 
   - id: SPR-DESTR-002

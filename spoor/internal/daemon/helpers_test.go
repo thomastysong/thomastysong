@@ -16,9 +16,11 @@ import (
 
 	"github.com/thomastysong/spoor/internal/catalog"
 	"github.com/thomastysong/spoor/internal/config"
+	"github.com/thomastysong/spoor/internal/engine"
 	"github.com/thomastysong/spoor/internal/event"
 	"github.com/thomastysong/spoor/internal/hookinstall"
 	"github.com/thomastysong/spoor/internal/platform"
+	"github.com/thomastysong/spoor/internal/rules"
 	"github.com/thomastysong/spoor/internal/spool"
 )
 
@@ -205,6 +207,9 @@ func claudeLines(session, cwd, useID, command string, at time.Time) string {
 func records(t *testing.T, dir, prefix string) []map[string]any {
 	t.Helper()
 	ents, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil // not created yet
+	}
 	if err != nil {
 		t.Fatalf("read %s: %v", dir, err)
 	}
@@ -287,4 +292,82 @@ func waitFor(t *testing.T, d time.Duration, what string, cond func() bool) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatalf("timed out after %s waiting for %s", d, what)
+}
+
+// captureSink keeps what the pipeline writes.
+type captureSink struct {
+	mu  sync.Mutex
+	evs []*event.Event
+}
+
+func (c *captureSink) Name() string { return "capture" }
+func (c *captureSink) Write(b []*event.Event) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, e := range b {
+		c.evs = append(c.evs, e.Clone())
+	}
+	return nil
+}
+func (c *captureSink) Flush() error { return nil }
+func (c *captureSink) Close() error { return nil }
+
+func (c *captureSink) all() []*event.Event {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]*event.Event(nil), c.evs...)
+}
+
+// useIDs lists the tool-call ids of captured activity.
+func (c *captureSink) useIDs() map[string]bool {
+	out := map[string]bool{}
+	for _, e := range c.all() {
+		if e.Kind == event.KindActivity && e.Tool != nil && e.Tool.UseID != "" {
+			out[e.Tool.UseID] = true
+		}
+	}
+	return out
+}
+
+// unitDaemon builds a daemon without starting its loops: the collectors
+// under test are driven by hand, and the pipeline (daemon mode, standard
+// profile so activity is shipped) writes into a capture sink.
+func (f *fixture) unitDaemon() (*daemon, *captureSink) {
+	f.t.Helper()
+	f.cfg.Privacy.Profile = "standard"
+	env := f.env()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	l, err := prepareLayout(f.cfg, env.privileged, log)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	cat, err := catalog.Load()
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	d := &daemon{
+		cfg: f.cfg, log: log, env: env, started: time.Now(), layout: l,
+		users: newUserSet(), procs: newProcView(), hooks: newHookView(), board: newBoard(), cat: cat,
+	}
+	d.users.set([]platform.UserHome{f.user})
+	if d.policy, err = engine.PolicyFromConfig(f.cfg); err != nil {
+		f.t.Fatal(err)
+	}
+	sinkC := &captureSink{}
+	host, src := env.host()
+	// Only the test pack: these tests are about the daemon's collectors,
+	// not about the embedded detection content.
+	set, err := rules.Load(map[string][]byte{"test.yaml": []byte(testRulePack)})
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	d.pipe, err = engine.New(engine.Options{
+		Config: f.cfg, Catalog: cat, Rules: set, Outbox: sinkC, Host: host, HostIDSource: src,
+		Mode: engine.ModeDaemon, Now: time.Now, Disabled: env.disabled,
+	})
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	d.scans = newScanner(d)
+	return d, sinkC
 }

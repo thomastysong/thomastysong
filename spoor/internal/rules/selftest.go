@@ -40,8 +40,15 @@ func (s *Set) RunTests() []TestResult {
 	run.disabled = map[string]bool{}
 	var out []TestResult
 	for _, r := range s.rules {
-		for i := range r.tests {
-			out = append(out, runTest(run, r, &r.tests[i]))
+		tests, err := r.testList()
+		if err != nil {
+			// A rule from the embedded cache whose body or tests do not
+			// compile (see lazy.go): one failed result says why.
+			out = append(out, TestResult{RuleID: r.ID, Name: "(compile)", Got: "error", Want: "match", Detail: err.Error()})
+			continue
+		}
+		for i := range tests {
+			out = append(out, runTest(run, r, &tests[i]))
 		}
 	}
 	return out

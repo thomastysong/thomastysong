@@ -209,7 +209,7 @@ func decodeCache(b []byte, want [sha256.Size]byte) (srcs []sourceFile, err error
 		if fileRole(name) == "" {
 			return nil, errCache
 		}
-		srcs = append(srcs, sourceFile{name: name, size: size, root: root})
+		srcs = append(srcs, sourceFile{name: name, size: size, root: root, cached: true})
 	}
 	if r.err != nil || r.off != len(b) {
 		return nil, errCache

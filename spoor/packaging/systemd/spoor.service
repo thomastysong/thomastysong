@@ -20,7 +20,13 @@ RestartSec=5s
 # Flush on SIGTERM; systemd waits this long before SIGKILL.
 TimeoutStopSec=20s
 
-# /var/lib/spoor (state, outbox, spools) and /run/spoor.
+# /var/lib/spoor (state, outbox, spools) and /run/spoor. Group=spoor makes
+# the data directory root:spoor, which lets members of the spoor group (the
+# log shipper) read the outbox. Without it systemd sees the daemon's
+# root:spoor directory as foreign and re-owns it, recursively, to root:root
+# at every start, which also takes the per-user spool directories away from
+# their users. The packages create the group before the service starts.
+Group=spoor
 StateDirectory=spoor
 StateDirectoryMode=0750
 RuntimeDirectory=spoor

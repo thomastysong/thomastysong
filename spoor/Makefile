@@ -21,7 +21,7 @@ GOOS_HOST := $(shell $(GO) env GOOS)
 
 export CGO_ENABLED := 0
 
-.PHONY: help build test vet fmt-check lint rules bench e2e e2e-container cross package image image-binary release-snapshot clean
+.PHONY: help build test vet fmt-check lint licenses-check rules bench e2e e2e-container cross package image image-binary release-snapshot clean
 
 help: ## list the targets
 	@awk -F':.*## ' '/^[a-z][a-z0-9-]*:.*## /{printf "  %-17s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -41,6 +41,9 @@ fmt-check: ## fail when a Go file is not gofmt-formatted
 
 lint: fmt-check vet rules ## gofmt, go vet, staticcheck when installed, rule lint and tests
 	@if command -v staticcheck >/dev/null 2>&1; then staticcheck ./...; else echo "staticcheck not installed; skipped"; fi
+
+licenses-check: ## fail when THIRD_PARTY_LICENSES no longer matches the linked modules
+	$(GO) run ./tools/licensegen -repo . -check
 
 rules: build ## spoor rules lint (errors fail) and every rule's inline tests
 	$(DIST)/spoor rules lint

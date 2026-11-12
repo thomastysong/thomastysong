@@ -79,6 +79,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # The bare binary, without file capabilities.
 FROM scratch AS binary
 COPY --from=build /out/binary/spoor /spoor
+COPY LICENSE NOTICE THIRD_PARTY_LICENSES /usr/share/doc/spoor/
 
 # The node sensor (default target).
 FROM ${BASE_IMAGE} AS sensor
@@ -91,6 +92,7 @@ LABEL org.opencontainers.image.title="spoor" \
 # BuildKit's COPY keeps the security.capability attribute (verified by
 # test/e2e/container_test.go on the built image; see deploy/kubernetes/VERIFIED.md).
 COPY --from=build /out/sensor/usr/bin/spoor /usr/bin/spoor
+COPY LICENSE NOTICE THIRD_PARTY_LICENSES /usr/share/doc/spoor/
 # Default data directory for `docker run`; Kubernetes mounts an emptyDir here
 # (the root filesystem is read-only there).
 COPY --from=build --chown=65532:65532 /out/sensor/var/lib/spoor /var/lib/spoor

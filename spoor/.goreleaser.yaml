@@ -62,6 +62,8 @@ archives:
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - LICENSE
+      - NOTICE
+      - THIRD_PARTY_LICENSES
       - packaging/systemd/spoor.service
       - packaging/launchd/com.github.thomastysong.spoor.plist
       - packaging/windows/install-service.ps1
@@ -101,6 +103,18 @@ nfpms:
           group: root
       - src: LICENSE
         dst: /usr/share/doc/spoor/LICENSE
+        file_info:
+          mode: 0644
+          owner: root
+          group: root
+      - src: NOTICE
+        dst: /usr/share/doc/spoor/NOTICE
+        file_info:
+          mode: 0644
+          owner: root
+          group: root
+      - src: THIRD_PARTY_LICENSES
+        dst: /usr/share/doc/spoor/THIRD_PARTY_LICENSES
         file_info:
           mode: 0644
           owner: root

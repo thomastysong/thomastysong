@@ -24,6 +24,7 @@ CGO_ENABLED=0 go build -o spoor ./cmd/spoor     # or: make build  (writes dist/s
   vet               go vet on every package
   fmt-check         fail when a Go file is not gofmt-formatted
   lint              gofmt, go vet, staticcheck when installed, rule lint and tests
+  licenses-check    fail when THIRD_PARTY_LICENSES no longer matches the linked modules
   rules             spoor rules lint (errors fail) and every rule's inline tests
   bench             scenario benchmark gate and report (bench/results is committed)
   e2e               end-to-end tests that need only the local machine (CLI, extension)
@@ -69,6 +70,7 @@ Some files are generated, and their tests fail until they are regenerated:
 | record shapes the binary writes | `sudo env "PATH=$PATH" docs/schema/examples/regen.sh`, then update the examples quoted in `docs/EVENTS.md` | same |
 | `internal/rules/packs/*.yaml`, `internal/rules/lists.yaml` | `go generate ./internal/rules` (writes `packs/embedded.cache`) | `go test ./internal/rules` |
 | the shipped packs | the catalogue in `docs/RULES.md` (jq program shown there) | review |
+| `go.mod` (a dependency added, removed or bumped) | `go run ./tools/licensegen -repo . -out THIRD_PARTY_LICENSES`; it stops on a license text it has not seen, so read the new text and extend its reviewed table, and `moduleLicenses` in `cmd/spoor/version.go` | `make licenses-check` (CI) and `go test ./cmd/spoor` |
 
 ## Detection rules
 

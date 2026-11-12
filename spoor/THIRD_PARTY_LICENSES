@@ -20,12 +20,18 @@ not distributed in the binary and are not listed. The "License" column names
 the terms of the code spoor links; a remark explains where a module's files
 name more. Toolchain: go1.26.0.
 
-After a dependency change this file must be regenerated the same way: run
-the command above for every release target; for each module found, take
-every file named LICENSE*, LICENCE*, COPYING*, NOTICE* or PATENTS* at the
-module root (go list -m -f '{{.Dir}}' <module>) and in the directories
-between each linked package and that root; stop if a module has none; and
-read any text that changed before changing a license name below.
+After a dependency change, regenerate this file from the repository root:
+
+    go run ./tools/licensegen -repo . -out THIRD_PARTY_LICENSES
+
+It runs the command above for every release target and, for each module
+found, takes every file named LICENSE*, LICENCE*, COPYING*, NOTICE* or
+PATENTS* at the module root (go list -m -f '{{.Dir}}' <module>) and in the
+directories between each linked package and that root. It stops when a
+module has no such file, or when a module or its license text is not in
+its reviewed table, so a person reads the new text before a license name
+below changes. `make licenses-check` (run in CI) fails when this file is
+stale.
 
 INDEX
 

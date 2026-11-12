@@ -83,6 +83,8 @@ jobs:
         with:
           go-version-file: go.mod
       - run: make rules
+      - name: third-party licenses are current
+        run: go mod download && make licenses-check
       - name: scenario benchmark gate
         run: make bench
       - uses: actions/upload-artifact@v4

@@ -186,6 +186,63 @@ func TestNFPMMatchesGoreleaser(t *testing.T) {
 	}
 }
 
+// TestLicenseFilesShipped: every release format carries LICENSE, NOTICE
+// (credits for reused data and designs) and THIRD_PARTY_LICENSES (the
+// licenses of the statically linked modules), which their licenses require
+// in any binary redistribution.
+func TestLicenseFilesShipped(t *testing.T) {
+	files := []string{"LICENSE", "NOTICE", "THIRD_PARTY_LICENSES"}
+	for _, f := range files {
+		if fi, err := os.Stat(filepath.Join(root(t), f)); err != nil || fi.Size() == 0 {
+			t.Errorf("%s missing or empty: %v", f, err)
+		}
+	}
+	gr := yamlDocs(t, ".goreleaser.yaml")[0]
+	for _, a := range gr["archives"].([]any) {
+		if strs(get(a, "formats"))[0] == "binary" {
+			continue // a raw binary cannot carry files; the other archives do
+		}
+		got := strs(get(a, "files"))
+		for _, f := range files {
+			if !contains(got, f) {
+				t.Errorf("archive %v lacks %s", get(a, "id"), f)
+			}
+		}
+	}
+	nf := yamlDocs(t, "packaging/linux/nfpm.yaml")[0]
+	g := gr["nfpms"].([]any)[0].(map[string]any)
+	for name, cs := range map[string][]content{"nfpm.yaml": contents(nf["contents"]), ".goreleaser.yaml nfpms": contents(g["contents"])} {
+		for _, f := range files {
+			ok := false
+			for _, c := range cs {
+				if c.Src == f && c.Dst == "/usr/share/doc/spoor/"+f && c.Mode == 0o644 {
+					ok = true
+				}
+			}
+			if !ok {
+				t.Errorf("%s does not install %s as /usr/share/doc/spoor/%s mode 0644", name, f, f)
+			}
+		}
+	}
+	// Both final image stages (binary and sensor) copy them.
+	df := read(t, "Dockerfile")
+	line := "COPY " + strings.Join(files, " ") + " /usr/share/doc/spoor/"
+	stages := regexp.MustCompile(`(?m)^FROM `).Split(df, -1)
+	for _, st := range stages[1:] {
+		name := regexp.MustCompile(`AS (\S+)`).FindStringSubmatch(st)
+		if name == nil || name[1] == "build" {
+			continue
+		}
+		if !strings.Contains(st, line) {
+			t.Errorf("Dockerfile stage %s lacks %q", name[1], line)
+		}
+	}
+	pkg := read(t, "packaging/macos/build-pkg.sh")
+	if !strings.Contains(pkg, "for f in "+strings.Join(files, " ")+"; do") || !strings.Contains(pkg, "/usr/local/share/doc/spoor/$f") {
+		t.Error("macOS pkg does not install the license files under /usr/local/share/doc/spoor")
+	}
+}
+
 func contains(l []string, s string) bool {
 	for _, x := range l {
 		if x == s {

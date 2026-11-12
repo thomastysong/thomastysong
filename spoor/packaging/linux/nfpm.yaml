@@ -49,6 +49,18 @@ contents:
       mode: 0644
       owner: root
       group: root
+  - src: NOTICE
+    dst: /usr/share/doc/spoor/NOTICE
+    file_info:
+      mode: 0644
+      owner: root
+      group: root
+  - src: THIRD_PARTY_LICENSES
+    dst: /usr/share/doc/spoor/THIRD_PARTY_LICENSES
+    file_info:
+      mode: 0644
+      owner: root
+      group: root
 scripts:
   preinstall: packaging/linux/preinstall.sh
   postinstall: packaging/linux/postinstall.sh

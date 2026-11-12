@@ -94,11 +94,15 @@ func (a *app) cmdVersion(args []string) int {
 // moduleLicenses maps the modules spoor links to their licenses, read from
 // each module's LICENSE file in the module cache (2026-11-12). The full texts
 // ship in THIRD_PARTY_LICENSES with the source and release archives.
+// moduleLicenses names the license of the code spoor links from each module.
+// TestModuleLicensesMatchThirdPartyFile holds it to the INDEX of
+// THIRD_PARTY_LICENSES, which tools/licensegen generates from the license
+// files themselves.
 func moduleLicenses() map[string]string {
 	return map[string]string{
 		"github.com/BurntSushi/toml":       "MIT",
 		"github.com/apache/thrift":         "Apache-2.0",
-		"github.com/klauspost/compress":    "BSD-3-Clause AND Apache-2.0 (see its LICENSE: several parts)",
+		"github.com/klauspost/compress":    "BSD-3-Clause AND MIT (the Apache-2.0 part, gzhttp, is not linked)",
 		"github.com/osquery/osquery-go":    "MIT",
 		"golang.org/x/sys":                 "BSD-3-Clause",
 		"golang.org/x/text":                "BSD-3-Clause",
@@ -112,7 +116,7 @@ func moduleLicenses() map[string]string {
 		"github.com/ncruces/go-strftime":   "MIT",
 		"github.com/pkg/errors":            "BSD-2-Clause",
 		"github.com/remyoudompheng/bigfft": "BSD-3-Clause",
-		"modernc.org/libc":                 "BSD-3-Clause",
+		"modernc.org/libc":                 "BSD-3-Clause AND MIT",
 		"modernc.org/mathutil":             "BSD-3-Clause",
 		"modernc.org/memory":               "BSD-3-Clause",
 		"github.com/go-logr/logr":          "Apache-2.0",

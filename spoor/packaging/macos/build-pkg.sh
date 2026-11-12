@@ -26,10 +26,13 @@ label=com.github.thomastysong.spoor
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-install -d -m 0755 "$work/root/usr/local/bin" "$work/root/Library/LaunchDaemons" "$work/scripts"
+install -d -m 0755 "$work/root/usr/local/bin" "$work/root/usr/local/share/doc/spoor" "$work/root/Library/LaunchDaemons" "$work/scripts"
 install -m 0755 "$bin" "$work/root/usr/local/bin/spoor"
 install -m 0644 "$here/../launchd/$label.plist" "$work/root/Library/LaunchDaemons/$label.plist"
 install -m 0755 "$here/postinstall" "$work/scripts/postinstall"
+for f in LICENSE NOTICE THIRD_PARTY_LICENSES; do
+	install -m 0644 "$here/../../$f" "$work/root/usr/local/share/doc/spoor/$f"
+done
 
 set -- --root "$work/root" --scripts "$work/scripts" --identifier "$label" \
 	--version "$version" --install-location / --ownership recommended

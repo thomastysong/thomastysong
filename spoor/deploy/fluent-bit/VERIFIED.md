@@ -77,6 +77,34 @@ shared key, forward with user authentication, forward over a unix socket
 with gzip, OTLP/HTTP, OTLP with null values, file tail, and the outbox
 shipper delivering to a forward input.
 
+## Fragment smoke tests (2026-11-12, Fluent Bit 5.2.0)
+
+- **osquery.yaml** against real Fleet output: two scheduled reports (one
+  snapshot, one differential, 10 s interval) on a Fleet 4.94.1 server with
+  one enrolled osquery 5.19.0 host. Fleet's filesystem result log was tailed
+  through the fragment: all 11 lines arrived on `osquery.spoor` and the
+  event time equalled `unixTime` for all 11 (event time is parsed from
+  `calendarTime`).
+- **no-binary/otel.yaml + normalize.lua**: OTLP/HTTP JSON log records shaped
+  like Claude Code's `tool_result` and `permission_mode_changed` events
+  were posted to the input. `curl … | bash` and `wget -qO- … | sh -s --`
+  produced SPR-LITE-001, `cat ~/.aws/credentials` SPR-LITE-002, `sudo
+  systemctl stop osqueryd` SPR-LITE-003 and a switch to `bypassPermissions`
+  SPR-LITE-004, each once on `spoor.detection`; `go test ./...` stayed an
+  activity record on `spoor.otel`. Event time came from `timeUnixNano`.
+  A first run emitted every finding twice: `rewrite_tag` kept the original
+  record. The shipped rule sets keep to `false`.
+- **numbat.yaml**: the adapter's numbat test records (event, finding,
+  enforcement, indicator) plus a `scan_summary` line were each routed to
+  `numbat.<record_type>`; a non-JSON line stayed on `numbat.raw` as `log`.
+  `scan_summary` and `diagnostic` were missing from the first version of the
+  routing rule.
+- Tail path behaviour that shaped the defaults: a missing plain file and a
+  glob that matches nothing are silent, but a glob whose top directory does
+  not exist (`/Users/*/…` on Linux) logs a warning and an error on every
+  refresh. Defaults therefore list one platform's paths; the others are set
+  through the environment variable.
+
 ## Not verified here
 
 Delivery into Splunk, Elasticsearch, OpenSearch, Sentinel, SecOps, S3,

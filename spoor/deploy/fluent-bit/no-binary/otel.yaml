@@ -1,0 +1,21 @@
+# Receive agents' native OpenTelemetry logs on loopback and normalize them.
+# See README.md for what this can and cannot do.
+pipeline:
+  inputs:
+    - name: opentelemetry
+      alias: agent_otel
+      listen: 127.0.0.1
+      port: ${SPOOR_OTEL_PORT:-4318}
+      tag: spoor.otel
+      storage.type: filesystem
+      processors:
+        logs:
+          - name: lua
+            script: ${SPOOR_FLB_CONF:-/etc/fluent-bit}/normalize.lua
+            call: spoor_otel
+  filters:
+    # Findings from the lite rules get their own tag so they can be routed
+    # like spoor's own detection stream. keep=false: a finding is emitted once.
+    - name: rewrite_tag
+      match: spoor.otel
+      rule: '$kind ^detection$ spoor.detection false'

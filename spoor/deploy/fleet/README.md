@@ -40,9 +40,12 @@ host's own paths through `fleetgen.Generate`.
 | What it cannot do | no detections, no hook coverage, no history between queries (`ai_tools` is computed when queried), nothing on plain osquery | ATC reads the whole table for every query (all columns TEXT); a scan-only setup sees no agent activity | |
 
 Tiers 2 and 3 are alternatives: ATC and the extension both provide the
-`spoor_*` table names, so deploy the ATC agent options only where the
-extension is not registered (`SPOOR_TIER=atc` in the install scripts skips
-the extension). Pick the profile by agent: `fleetd` for hosts running Fleet's
+`spoor_*` table names. With the ATC agent options in place, osquery 5.19
+refuses the extension ("Registry item spoor_agent_processes conflicts with
+another item of the same name") and the extension restarts every few
+seconds (VERIFIED.md). Deploy the ATC agent options only where the extension
+is not registered; `SPOOR_TIER=atc` in the install scripts skips (and
+unregisters) the extension. Pick the profile by agent: `fleetd` for hosts running Fleet's
 agent (its policies also read `ai_tools`, which plain osquery does not have),
 `stock` for everything else. The `stock` profile also works on fleetd hosts.
 

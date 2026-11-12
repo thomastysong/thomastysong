@@ -1,9 +1,15 @@
 # Named lists referenced by rules through |in_list and |any_in_list.
 # Matching ignores case. "*.example.com" matches any subdomain of
 # example.com (not example.com itself); "prefix*" matches by prefix.
-# Bundles replace a list by name (Set.Merge).
+# Bundles replace a list by name (Set.Merge), so an operator extends a list
+# by shipping the whole list in a bundle.
+#
+# |in_list on a list-valued field requires EVERY element to be listed: one
+# trusted host never vouches for another host in the same command.
 lists:
-  # Hosts whose curl|sh installers are widely documented by the vendor.
+  # Hosts whose curl | sh installers are documented by the vendor on its
+  # own site. A shared code host (raw.githubusercontent.com) is never listed
+  # here: anyone can publish there; list exact URLs below instead.
   trusted_installer_hosts:
     - sh.rustup.rs
     - claude.ai
@@ -12,3 +18,143 @@ lists:
     - astral.sh
     - get.pnpm.io
     - install.python-poetry.org
+    - get.docker.com
+    - ollama.com
+
+  # Installer URLs on shared hosts, by prefix (the trailing * is a prefix
+  # match, so keep the owner/repository part in the entry).
+  trusted_installer_urls:
+    - "https://raw.githubusercontent.com/Homebrew/install/*"
+    - "https://raw.githubusercontent.com/nvm-sh/nvm/*"
+    - "https://sh.rustup.rs*"
+    - "https://claude.ai/install.sh*"
+
+  # Hosts whose content is not treated as untrusted input
+  # (SPR-FLOW-001): vendor documentation and language references. Package
+  # registries are excluded by the feature itself. Add the organisation's
+  # own code and wiki hosts here through a bundle: a third party cannot
+  # author content on them. Public code hosts (github.com, gitlab.com) are
+  # deliberately absent: issues, READMEs and gists there are attacker-
+  # authorable and are the documented injection channel.
+  trusted_content_hosts:
+    - docs.python.org
+    - go.dev
+    - pkg.go.dev
+    - developer.mozilla.org
+    - docs.docker.com
+    - kubernetes.io
+    - learn.microsoft.com
+    - docs.github.com
+    - code.claude.com
+    - docs.anthropic.com
+    - docs.claude.com
+    - nodejs.org
+    - doc.rust-lang.org
+    - docs.rs
+    - man7.org
+    - www.rfc-editor.org
+    - datatracker.ietf.org
+    - docs.fluentbit.io
+    - osquery.readthedocs.io
+    - fleetdm.com
+    - attack.mitre.org
+    - atlas.mitre.org
+
+  # Hosts an upload to is ordinary engineering (SPR-EXFIL-005): object
+  # stores and registries the organisation uses. Ship the organisation's
+  # own endpoints through a bundle.
+  approved_upload_hosts:
+    - localhost
+    - 127.0.0.1
+    - "::1"
+    - "*.amazonaws.com"
+    - storage.googleapis.com
+    - "*.blob.core.windows.net"
+    - registry.npmjs.org
+    - upload.pypi.org
+    - ghcr.io
+    - uploads.github.com
+    - api.github.com
+
+  # Package registries an install may name explicitly (--registry,
+  # --index-url) without it being a dependency-confusion signal
+  # (SPR-SUPPLY-003). Add the organisation's mirrors through a bundle.
+  approved_package_indexes:
+    - "https://registry.npmjs.org*"
+    - "https://registry.yarnpkg.com*"
+    - "https://pypi.org/simple*"
+    - "https://files.pythonhosted.org*"
+    - "https://download.pytorch.org/*"
+    - "https://proxy.golang.org*"
+    - "https://index.crates.io*"
+    - "https://rubygems.org*"
+
+  # Packages named in incident reports (research/threats.md section 2).
+  # Entries carry the version when only one release was malicious. This is
+  # a seed for an OSV MAL-* / OpenSSF malicious-packages feed delivered by
+  # bundle, not a feed in itself.
+  malicious_packages:
+    - "function-color"        # row 33: AGENTS.md in ~/Downloads tells Codex to install it (Oct 2026)
+    - "function-color@*"
+    - "postmark-mcp@1.0.16"   # row 35: one-line BCC added after 15 clean versions (Sep 2025)
+
+  # Offensive security tools (SPR-OFFSEC-001), by command name. Hosts
+  # tagged offsec (Options.HostTags) are exempt in the rule itself.
+  offensive_tools:
+    - nmap
+    - masscan
+    - rustscan
+    - nxc
+    - netexec
+    - crackmapexec
+    - "impacket-*"
+    - secretsdump.py
+    - psexec.py
+    - wmiexec.py
+    - ntlmrelayx.py
+    - getuserspns.py
+    - certipy
+    - certipy-ad
+    - responder
+    - proxychains
+    - proxychains4
+    - sqlmap
+    - hydra
+    - medusa
+    - hashcat
+    - john
+    - kerbrute
+    - evil-winrm
+    - bloodhound-python
+    - linpeas.sh
+    - winpeas.exe
+    - mimikatz
+    - mimikatz.exe
+    - rubeus.exe
+    - nuclei
+    - ffuf
+    - gobuster
+    - feroxbuster
+    - nikto
+    - enum4linux
+    - smbmap
+    - ligolo-ng
+    - sliver-client
+    - msfconsole
+    - msfvenom
+
+  # AI agent command-line programs that can be told to run without
+  # approvals (SPR-AGENT-012, SPR-PROC-*).
+  agent_clis:
+    - claude
+    - codex
+    - gemini
+    - q
+    - kiro-cli
+    - copilot
+    - cursor-agent
+    - opencode
+    - goose
+    - aider
+    - amp
+    - qwen

@@ -58,8 +58,8 @@ const (
 )
 
 const (
-	maxSessions     = 4096   // live sessions kept in memory
-	maxExcluded     = 4096   // remembered excluded session keys
+	maxSessions     = 4096    // live sessions kept in memory
+	maxExcluded     = 4096    // remembered excluded session keys
 	maxCorrelation  = 1 << 17 // correlation keys remembered
 	corrTTL         = 30 * time.Minute
 	maxHeld         = 8192

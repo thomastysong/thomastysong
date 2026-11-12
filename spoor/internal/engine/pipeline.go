@@ -43,7 +43,7 @@ type Pipeline struct {
 
 	// ingest side (no processing lock)
 	qmu      sync.Mutex
-	queue    []*event.Event
+	queue    []queued
 	qcap     int
 	wake     chan struct{}
 	done     chan struct{}
@@ -306,6 +306,10 @@ func (p *Pipeline) Ingest(evs ...*event.Event) {
 		p.flushWrites()
 		return
 	}
+	// The arrival time travels with the record: the hold for a hook
+	// counterpart and the session clocks count from when the record
+	// reached the pipeline, not from when the worker got to it.
+	at := p.o.Now()
 	p.qmu.Lock()
 	room := p.qcap - len(p.queue)
 	if room < len(evs) {
@@ -315,7 +319,9 @@ func (p *Pipeline) Ingest(evs ...*event.Event) {
 		p.queueDropped.Add(uint64(len(evs) - room))
 		evs = evs[:room]
 	}
-	p.queue = append(p.queue, evs...)
+	for _, ev := range evs {
+		p.queue = append(p.queue, queued{ev, at})
+	}
 	p.qmu.Unlock()
 	select {
 	case p.wake <- struct{}{}:
@@ -363,11 +369,16 @@ func (p *Pipeline) drainLocked() {
 		if len(batch) == 0 {
 			return
 		}
-		now := p.o.Now()
-		for _, ev := range batch {
-			p.processSafe(ev, now)
+		for _, q := range batch {
+			p.processSafe(q.ev, q.at)
 		}
 	}
+}
+
+// queued is one record waiting for the daemon worker.
+type queued struct {
+	ev *event.Event
+	at time.Time
 }
 
 // Tick runs the timers: it first processes everything queued, then

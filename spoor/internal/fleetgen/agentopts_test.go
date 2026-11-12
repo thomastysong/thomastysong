@@ -234,3 +234,16 @@ func TestFragmentIsOnlySpoor(t *testing.T) {
 		t.Error("fragment aliases Content")
 	}
 }
+
+func TestNilContent(t *testing.T) {
+	var c *Content
+	if _, err := c.MergeAgentOptions(nil); err == nil {
+		t.Error("nil content merged")
+	}
+	if _, err := c.Render(); err == nil {
+		t.Error("nil content rendered")
+	}
+	if _, err := (&Content{}).Render(); err == nil {
+		t.Error("empty content rendered")
+	}
+}

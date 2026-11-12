@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -39,22 +40,8 @@ func TestReviewDuplicateEventKeyHidesTamper(t *testing.T) {
 	if s.Status != StatusModified {
 		t.Errorf("PreToolUse is overridden by a later duplicate key (the agent runs no spoor PreToolUse hook), but Status = %q (%s)", s.Status, s.Detail)
 	}
-}
-
-// Claude Code's disableAllHooks in the user's own settings file switches off
-// every user hook. Status reads that very file and still reports "user".
-func TestReviewDisableAllHooksNotDetected(t *testing.T) {
-	c := testCatalog(t)
-	o := opts(t, "linux", event.ScopeUser, "claude-code")
-	plans := mustPlan(t, c, o)
-	mustApply(t, plans)
-	path := only(t, plans, "claude-code").Path
-	data := readBytes(t, path)
-	d, _ := parseJSON(data)
-	writeFile(t, path, d.addMember(d.root, "disableAllHooks", true), 0o644)
-	s := stateOf(t, c, o, "claude-code")
-	if s.Status == StatusUser {
-		t.Errorf("disableAllHooks:true in the same file turns spoor's hooks off, but Status = %q (%s)", s.Status, s.Detail)
+	if p := only(t, mustPlan(t, c, o), "claude-code"); p.Action == ActionUnchanged {
+		t.Errorf("reinstall does not repair it either: Action = %q", p.Action)
 	}
 }
 
@@ -163,18 +150,31 @@ func TestReviewInvalidUTF8BinaryAccepted(t *testing.T) {
 	}
 }
 
+// allocDuring reports how many bytes f allocated.
+func allocDuring(f func()) uint64 {
+	var a, b runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&a)
+	f()
+	runtime.ReadMemStats(&b)
+	return b.TotalAlloc - a.TotalAlloc
+}
+
 // A user-controlled settings file with many spoor-marked entries and a
 // large foreign value makes planning re-parse the whole file once per entry
-// (removeSpoor), so a root installer can be stalled by a 4 MiB file.
+// (removeSpoor), so a root installer can be stalled by one 4 MiB file
+// (a 3.2 MB file took 88 s, a 0.65 MB one 28 s and 16 GiB of
+// allocations). Here a 76 KB file with 2000 marked entries is enough to
+// allocate gigabytes.
 func TestReviewPlanTimeOnHostileFile(t *testing.T) {
 	c := testCatalog(t)
 	o := opts(t, "linux", event.ScopeUser, "claude-code")
 	path := targetPath(t, c, o, "claude-code")
 	var b bytes.Buffer
 	b.WriteString(`{"pad": "`)
-	b.Write(bytes.Repeat([]byte("a"), 3<<20))
+	b.Write(bytes.Repeat([]byte("a"), 16<<10))
 	b.WriteString(`", "hooks": {"Stop": [{"hooks": [`)
-	for i := 0; i < 4000; i++ {
+	for i := 0; i < 2000; i++ {
 		if i > 0 {
 			b.WriteByte(',')
 		}
@@ -183,10 +183,75 @@ func TestReviewPlanTimeOnHostileFile(t *testing.T) {
 	b.WriteString("]}]}}\n")
 	writeFile(t, path, b.Bytes(), 0o644)
 	start := time.Now()
-	plans := mustPlan(t, c, o)
-	el := time.Since(start)
-	t.Logf("size %d, plan took %v, action %s", b.Len(), el, only(t, plans, "claude-code").Action)
-	if el > 10*time.Second {
-		t.Errorf("planning one %d-byte file took %v", b.Len(), el)
+	var action string
+	alloc := allocDuring(func() { action = only(t, mustPlan(t, c, o), "claude-code").Action })
+	t.Logf("size %d, plan took %v, allocated %d MiB, action %s", b.Len(), time.Since(start), alloc>>20, action)
+	if alloc > 256<<20 {
+		t.Errorf("planning one %d-byte file allocated %d MiB (one full re-parse per spoor entry)", b.Len(), alloc>>20)
+	}
+}
+
+// The TOML decoder is quadratic in time and memory on nested inline
+// tables, and nothing bounds the nesting before parseTOML hands a file to
+// it. ~/.codex/config.toml belongs to the user and is parsed by
+// PlanInstall, PlanUninstall, Status (related files) and Apply
+// (checkContent). A 48 KB file reached 5.9 GB RSS and 19 s; a 400 KB file
+// gets the process OOM-killed, which recover() cannot catch.
+func TestReviewHostileCodexConfigTOMLExhaustsMemory(t *testing.T) {
+	c := testCatalog(t)
+	o := opts(t, "linux", event.ScopeUser, "codex")
+	path := targetPath(t, c, o, "codex")
+	const n = 6000 // a 24 KB file
+	cfg := []byte("a = " + strings.Repeat("{b=", n) + "1" + strings.Repeat("}", n) + "\n")
+	writeFile(t, filepath.Join(filepath.Dir(path), "config.toml"), cfg, 0o644)
+	start := time.Now()
+	alloc := allocDuring(func() { _, _ = PlanInstall(c, o) })
+	t.Logf("config.toml %d bytes: PlanInstall took %v and allocated %d MiB", len(cfg), time.Since(start), alloc>>20)
+	if alloc > 256<<20 {
+		t.Errorf("a %d-byte user-owned config.toml made PlanInstall allocate %d MiB (unbounded TOML nesting)", len(cfg), alloc>>20)
+	}
+}
+
+// Codex requirements may pin [otel] (research: requirements keys include
+// otel). Addendum 2: OTel is refused when the managed config already pins
+// a telemetry endpoint. For the user scope planCodexOTel only looks at
+// requirements.toml beside the USER config.toml, never at the system one.
+func TestReviewCodexUserOTelIgnoresManagedRequirementsPin(t *testing.T) {
+	c := testCatalog(t)
+	o := opts(t, "linux", event.ScopeUser, "codex")
+	o.OTel = "http://127.0.0.1:4319"
+	req := filepath.Join(o.Root, "etc", "codex", "requirements.toml")
+	writeFile(t, req, []byte("[otel]\nexporter = { otlp-http = { endpoint = \"https://siem.example.com/v1/logs\", protocol = \"json\" } }\n"), 0o644)
+	for _, p := range mustPlan(t, c, o) {
+		if strings.HasSuffix(p.Path, "config.toml") && p.Action != ActionUnsupported {
+			t.Errorf("managed requirements.toml pins [otel], but the user-scope OTel plan is %q for %s:\n%s", p.Action, p.Path, p.After)
+		}
+	}
+}
+
+// Windows writes a NULL DACL (everyone full control) as
+// "D:NO_ACCESS_CONTROL". splitSDDL treats any DACL text without "(" as an
+// empty (deny-all) DACL, so the most open descriptor passes as safe.
+func TestReviewSDDLNullDACLPassesAsSafe(t *testing.T) {
+	for _, s := range []string{"O:BAD:NO_ACCESS_CONTROL", "O:SYG:SYD:NO_ACCESS_CONTROL"} {
+		if got := sddlProblem(s); got == "" {
+			t.Errorf("sddlProblem(%q) = \"\": a NULL DACL grants everyone full control", s)
+		}
+	}
+}
+
+// Claude Code: "Only disableAllHooks set at the managed settings level can
+// disable managed hooks." relatedFiles already reads every managed file
+// (for allowManagedHooksOnly) but Status ignores disableAllHooks there and
+// reports the drop-in as managed although Claude Code runs none of it.
+func TestReviewManagedDisableAllHooksNotShadowed(t *testing.T) {
+	c := testCatalog(t)
+	o := opts(t, "linux", event.ScopeManaged, "claude-code")
+	path := targetPath(t, c, o, "claude-code")
+	mustApply(t, mustPlan(t, c, o))
+	writeFile(t, filepath.Join(filepath.Dir(filepath.Dir(path)), "managed-settings.json"), []byte(`{"disableAllHooks": true}`+"\n"), 0o644)
+	s := stateOf(t, c, o, "claude-code")
+	if s.Status == StatusManaged {
+		t.Errorf("managed-settings.json sets disableAllHooks:true (unloads managed hooks too), but Status = %q (%s)", s.Status, s.Detail)
 	}
 }

@@ -2,6 +2,7 @@ package fleetgen
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -43,8 +44,16 @@ func Generate(o Options) (files map[string][]byte, err error) {
 }
 
 // Render renders built content into files.
-func (c *Content) Render() (map[string][]byte, error) {
-	files := map[string][]byte{}
+func (c *Content) Render() (files map[string][]byte, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			files, err = nil, fmt.Errorf("fleetgen: internal error: %v", r)
+		}
+	}()
+	if c == nil || len(c.ATC) == 0 {
+		return nil, errors.New("fleetgen: no content (use Build)")
+	}
+	files = map[string][]byte{}
 	put := func(name string, b []byte, err error) error {
 		if err != nil {
 			return fmt.Errorf("fleetgen: render %s: %w", name, err)

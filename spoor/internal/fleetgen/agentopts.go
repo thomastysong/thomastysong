@@ -82,6 +82,9 @@ func ExampleBaseAgentOptions() map[string]any {
 //
 // Existing spoor_* ATC entries are replaced; other entries are kept.
 func (c *Content) MergeAgentOptions(current map[string]any) (map[string]any, error) {
+	if c == nil || len(c.ATC) == 0 {
+		return nil, errors.New("fleetgen: no content (use Build)")
+	}
 	out, err := copyOptions(current)
 	if err != nil {
 		return nil, err
@@ -345,10 +348,11 @@ const atcFragmentNotes = `#
 # fleetgen.MergeAgentOptions function does the same merge programmatically.
 #
 # Do not deploy this together with the spoor osquery extension: both
-# provide the spoor_* tables, and osquery keeps only one owner per table
-# name. Numbers are TEXT under ATC; the shipped queries compare them through
-# CAST(... AS INTEGER). Table names, columns and queries come from
-# internal/state (state.ATCConfig).
+# provide the spoor_* tables, and osquery 5.19 refuses the extension
+# ("Registry item spoor_agent_processes conflicts with another item of the
+# same name"), which then restarts every few seconds. Numbers are TEXT under
+# ATC; the shipped queries compare them through CAST(... AS INTEGER). Table
+# names, columns and queries come from internal/state (state.ATCConfig).
 `
 
 func (c *Content) renderATCFragment() ([]byte, error) {

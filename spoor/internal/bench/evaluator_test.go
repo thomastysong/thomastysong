@@ -1,10 +1,12 @@
 package bench
 
 import (
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/thomastysong/spoor/internal/event"
+	"github.com/thomastysong/spoor/internal/rules"
 )
 
 // fakePipeline stands in for engine.Pipeline: it holds every event until
@@ -106,4 +108,28 @@ func TestHitsOf(t *testing.T) {
 	if got := onlyDetections(append(evs[1:], &event.Event{Kind: event.KindPosture, Check: &event.Check{ID: "x"}})); len(got) != 1 {
 		t.Errorf("onlyDetections kept %d", len(got))
 	}
+}
+
+// Eval locks the clock while moving it, and the engine reads it through
+// Now from inside Eval after the lock is released: under -race this fails
+// if Now reads the clock without the lock.
+func TestRulesEvaluatorConcurrentEval(t *testing.T) {
+	set, err := rules.LoadEmbedded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	re := NewRulesEvaluator(RulesOptions{Set: set, Home: "/home/tester", OS: "linux"})
+	var wg sync.WaitGroup
+	for g := 0; g < 4; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				re.Eval(&event.Event{V: 1, ID: "e", Kind: event.KindActivity, Type: event.TypeToolPre, Source: event.SourceHook,
+					Session: &event.Session{ID: "s", CWD: "/home/tester/project"}, Agent: &event.Agent{ID: "claude-code"},
+					Tool: &event.Tool{Name: "Bash", Kind: event.ToolShell}, Target: &event.Target{Command: "ls"}})
+			}
+		}()
+	}
+	wg.Wait()
 }

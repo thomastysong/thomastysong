@@ -78,6 +78,12 @@ func EncodeCache(files map[string][]byte) ([]byte, error) {
 	if _, err := loadSources(srcs, true); err != nil {
 		return nil, err
 	}
+	return encodeSources(srcs, sourceDigest(files)), nil
+}
+
+// encodeSources writes the cache of parsed sources made from content with
+// digest d.
+func encodeSources(srcs []sourceFile, d [sha256.Size]byte) []byte {
 	enc := cacheEncoder{idx: map[string]uint64{}}
 	for _, s := range srcs {
 		enc.str(s.name)
@@ -85,7 +91,6 @@ func EncodeCache(files map[string][]byte) ([]byte, error) {
 	}
 	var out bytes.Buffer
 	out.WriteString(cacheMagic)
-	d := sourceDigest(files)
 	out.Write(d[:])
 	putUvarint(&out, uint64(len(enc.strs)))
 	for _, s := range enc.strs {
@@ -101,7 +106,7 @@ func EncodeCache(files map[string][]byte) ([]byte, error) {
 		putUvarint(&out, uint64(countNodes(s.root)))
 		enc.node(&out, s.root)
 	}
-	return out.Bytes(), nil
+	return out.Bytes()
 }
 
 type cacheEncoder struct {

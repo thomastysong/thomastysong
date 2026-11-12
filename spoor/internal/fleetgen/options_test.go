@@ -64,6 +64,64 @@ func TestOptionsValidation(t *testing.T) {
 	}
 }
 
+// TestOptionsRefuseGlobPatterns: osquery resolves an ATC path with glob(3)
+// and GLOB_BRACE (osquery 5.19 read spoorA and spoorB for "spoor?",
+// "spoor[AB]" and "spoor{A,B}"), plus its own %, while the "installed" label
+// compares paths exactly, so any pattern character is refused.
+func TestOptionsRefuseGlobPatterns(t *testing.T) {
+	paths := map[string][]string{
+		PlatformLinux:   {"/var/lib/spoor?/state.db", "/var/lib/spoor[12]/state.db", "/srv/*/state.db", "/srv/spoor{A,B}/state.db", "/srv/x]/state.db", "/srv/x}/state.db", "/home/%/state.db"},
+		PlatformDarwin:  {"/Library/Application Support/spoor*/state.db", "/usr/local/bin/sp?or"},
+		PlatformWindows: {`C:\ProgramData\spoor?\state.db`, `C:\ProgramData\spoor[1]\state.db`, `C:\Program Files\{spoor}\spoor.exe`},
+	}
+	for plat, ps := range paths {
+		for _, p := range ps {
+			for _, o := range []Options{{DBPaths: map[string]string{plat: p}}, {BinPaths: map[string]string{plat: p}}} {
+				_, err := Build(o)
+				if err == nil || !strings.Contains(err.Error(), "wildcard or glob") {
+					t.Errorf("%s path %q: err = %v, want a glob refusal", plat, p, err)
+				}
+			}
+		}
+	}
+}
+
+// TestOptionsRefuseUncleanPaths: ATC reports a canonical path
+// ("/a//b" reads back as "/a/b" on osquery 5.19) while the file table, which
+// the "installed" label reads, reports the path as written, so only clean
+// spellings are accepted.
+func TestOptionsRefuseUncleanPaths(t *testing.T) {
+	for _, tc := range []struct{ plat, path string }{
+		{PlatformLinux, "/var//lib/spoor/state.db"},
+		{PlatformLinux, "/var/lib/spoor/state.db/"},
+		{PlatformLinux, "/"},
+		{PlatformDarwin, "/usr/local/bin/spoor/"},
+		{PlatformDarwin, "//usr/local/bin/spoor"},
+		{PlatformWindows, `C:\ProgramData\\spoor\state.db`},
+		{PlatformWindows, `C:\ProgramData\spoor\`},
+		{PlatformWindows, `C:\`},
+		{PlatformWindows, `C:/ProgramData/spoor/state.db`},
+		{PlatformWindows, `C:\ProgramData/spoor\state.db`},
+		{PlatformWindows, `C:\ProgramData\.\spoor\state.db`},
+		{PlatformWindows, `\\server\share`},
+		{PlatformWindows, `\\server\\share\state.db`},
+	} {
+		if _, err := Build(Options{DBPaths: map[string]string{tc.plat: tc.path}}); err == nil || !strings.Contains(err.Error(), "clean") {
+			t.Errorf("%s path %q: err = %v, want a refusal as not clean", tc.plat, tc.path, err)
+		}
+	}
+	for _, tc := range []struct{ plat, path string }{
+		{PlatformLinux, "/srv/spoor/state.db"},
+		{PlatformDarwin, "/Library/Application Support/spoor/state.db"},
+		{PlatformWindows, `D:\spoor\state.db`},
+		{PlatformWindows, `\\server\share\spoor\state.db`},
+	} {
+		if _, err := Build(Options{DBPaths: map[string]string{tc.plat: tc.path}}); err != nil {
+			t.Errorf("%s path %q refused: %v", tc.plat, tc.path, err)
+		}
+	}
+}
+
 // TestCustomPaths is what `spoor export fleet` relies on: paths and windows
 // given in Options reach the ATC blocks, the labels and the policies, and
 // SQL quoting holds for a path with a quote in it.

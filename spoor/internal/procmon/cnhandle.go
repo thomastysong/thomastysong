@@ -39,7 +39,11 @@ func (m *Monitor) cnLoop(ctx context.Context, c cnConn, stop *atomic.Bool) (err 
 		}
 		evs = parseCN(buf[:n], evs[:0])
 		for i := range evs {
+			t0 := time.Now()
 			m.handleCN(&evs[i])
+			if d := time.Since(t0); d > 20*time.Millisecond {
+				println("SLOW handleCN", evs[i].what, d.String())
+			}
 		}
 	}
 	return nil
@@ -109,8 +113,13 @@ func (m *Monitor) cnExec(pid int, at time.Time) {
 	m.mu.Lock()
 	seq0 := m.seq
 	m.mu.Unlock()
+	t0 := time.Now()
 	o := m.prepare(ident{pid: pid}, nil, viaCNProc, at)
+	if d := time.Since(t0); d > 20*time.Millisecond {
+		println("SLOW prepare", d.String())
+	}
 	if o == nil {
+		println("MISS", pid, time.Since(at).String())
 		if !seen { // the canary (true(1)) is usually gone already
 			m.st.readMisses.Add(1)
 		}

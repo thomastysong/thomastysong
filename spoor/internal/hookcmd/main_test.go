@@ -182,6 +182,56 @@ rules:
       - name: other
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "ls" } }
         expect: no_match
+  - id: SPR-TEST-010
+    title: Marker command that arms a session flag
+    description: Flag maintainer for the hook's session state test.
+    kind: activity
+    class: signal
+    severity: info
+    confidence: high
+    maturity: experimental
+    category: execution
+    when:
+      type: tool.pre
+      tool.kind: shell
+    match:
+      shell.commands: spoor-test-arm
+    flags:
+      set: [spoor_test_armed]
+      ttl: 30m
+    emit: false
+    tests:
+      - name: arm
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "spoor-test-arm" } }
+        expect: match
+      - name: other
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "ls" } }
+        expect: no_match
+  - id: SPR-TEST-011
+    title: Marker command guarded once the session is armed
+    description: Guard rule that depends on state from an earlier hook process.
+    kind: activity
+    class: finding
+    severity: medium
+    confidence: high
+    maturity: experimental
+    category: execution
+    when:
+      type: tool.pre
+      tool.kind: shell
+    match:
+      shell.commands: spoor-test-armed
+    flags:
+      require: [spoor_test_armed]
+    response: ask
+    tests:
+      - name: armed
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "spoor-test-armed" } }
+        flags: [spoor_test_armed]
+        expect: match
+      - name: not armed
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "spoor-test-armed" } }
+        expect: no_match
 `
 
 // sandbox is a config file, a rules directory and a spool in one temp dir.

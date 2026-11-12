@@ -411,6 +411,14 @@ func (p *Pipeline) tickLocked(now time.Time, closing bool) {
 		n := len(p.queue)
 		p.queue = nil
 		p.qmu.Unlock()
+		if closing {
+			// Held records and session rollups end with the process.
+			for _, h := range p.corr.held {
+				if !h.done {
+					n++
+				}
+			}
+		}
 		p.disabledDropped.Add(uint64(n))
 		if p.heartbeatDue(now) || closing {
 			p.heartbeat(now, true)

@@ -181,8 +181,10 @@ func (r *cmdRedactor) specials() {
 		}
 		r.printfKeys(s, argv)
 		r.psAssignments(s, argv)
+		r.envItemSetters(s, argv)
 		r.positionalSecrets(s, argv)
 	}
+	r.setEnvironmentVariable()
 }
 
 // redactFeeders removes the literal a stdin-reading consumer is given: its
@@ -509,6 +511,101 @@ func (r *cmdRedactor) psAssignments(s segment, argv []string) {
 				r.setVal(i, prefix+newMarker(classify.KindGenericSecret, v))
 			}
 		}
+	}
+}
+
+// envItemSetters handles PowerShell's provider form of an environment
+// assignment: "Set-Item env:API_KEY 'v'", "Set-Item -Path Env:\API_KEY
+// -Value v", "New-Item -Path env: -Name API_KEY -Value v". It runs in every
+// dialect: the dialect guess can miss a one-line cmdlet call, and nothing
+// else spells a command this way.
+func (r *cmdRedactor) envItemSetters(s segment, argv []string) {
+	if len(argv) < 3 {
+		return
+	}
+	switch progName(argv[0]) {
+	case "set-item", "si", "new-item", "ni", "set-content", "sc":
+	default:
+		return
+	}
+	path, name, value := "", "", -1
+	var pos []int
+	for j := 1; j < len(argv); j++ {
+		switch strings.ToLower(argv[j]) {
+		case "-path", "-literalpath":
+			if j+1 < len(argv) {
+				path = argv[j+1]
+				j++
+			}
+		case "-name":
+			if j+1 < len(argv) {
+				name = argv[j+1]
+				j++
+			}
+		case "-value":
+			if j+1 < len(argv) {
+				value = j + 1
+				j++
+			}
+		default:
+			if !strings.HasPrefix(argv[j], "-") {
+				pos = append(pos, j)
+			}
+		}
+	}
+	if path == "" && len(pos) > 0 {
+		path, pos = argv[pos[0]], pos[1:]
+	}
+	if value < 0 && len(pos) > 0 {
+		value = pos[0]
+	}
+	low := strings.ToLower(path)
+	if !strings.HasPrefix(low, "env:") || value < 0 {
+		return
+	}
+	if v := strings.TrimLeft(path[4:], `\/`); v != "" {
+		name = v
+	}
+	if name != "" && r.secretName(name) {
+		r.redactWhole(s.words[value], classify.KindGenericSecret)
+	}
+}
+
+// setEnvironmentVariable handles
+// [Environment]::SetEnvironmentVariable('NAME', 'value', 'User'): the
+// argument list follows a "(" operator, so it is not part of any segment's
+// argument vector. Arguments may be one word ("'A','v','User'") or one
+// word each ("'A', 'v',"); the value is the second comma-separated field.
+func (r *cmdRedactor) setEnvironmentVariable() {
+	for i := 0; i+2 < len(r.toks); i++ {
+		t := r.toks[i]
+		if t.kind != tWord || !strings.HasSuffix(strings.ToLower(t.val), "::setenvironmentvariable") {
+			continue
+		}
+		if op := r.toks[i+1]; op.kind != tOp || op.val != "(" {
+			continue
+		}
+		type field struct {
+			tok int
+			val string
+		}
+		var fields []field
+		for j := i + 2; j < len(r.toks) && len(fields) < 3; j++ {
+			w := r.toks[j]
+			if w.kind != tWord {
+				break
+			}
+			for _, f := range strings.Split(r.vals[j], ",") {
+				if f = strings.TrimSpace(f); f != "" {
+					fields = append(fields, field{tok: j, val: f})
+				}
+			}
+		}
+		if len(fields) < 2 || keepRef(fields[1].val) || !r.secretName(fields[0].val) {
+			continue
+		}
+		v := fields[1]
+		r.edit(v.tok, strings.Replace(r.vals[v.tok], v.val, newMarker(classify.KindGenericSecret, v.val), 1))
 	}
 }
 

@@ -31,6 +31,7 @@ const (
 	domAsset    = "spoor/v1/asset"
 	domDedup    = "spoor/v1/dedup"
 	domSecretFP = "spoor/v1/secret-fp"
+	domSummary  = "spoor/v1/summary-fp"
 )
 
 // digestHex is the length of an emitted keyed digest: 96 bits.
@@ -90,11 +91,18 @@ func isSHA256Hex(s string) bool {
 	return true
 }
 
-// rewriteMarkers replaces classify's unkeyed secret fingerprints. With a
-// key the fingerprint becomes "hmac=" + 8 hex digits of a keyed hash of the
-// unkeyed fingerprint (so the same secret still correlates within the
-// tenant); without one it is removed.
+// rewriteMarkers replaces every unkeyed content fingerprint in s: those in
+// classify's secret markers and the "fp:<8 hex>" summaries producers write
+// in place of free text (see rewriteSummaries). With a key the fingerprint
+// becomes "hmac=" + 8 hex digits of a keyed hash of the unkeyed one (so the
+// same value still correlates within the tenant); without one it is
+// removed.
 func rewriteMarkers(s string, key []byte) string {
+	return rewriteSummaries(rewriteSecretMarkers(s, key), key)
+}
+
+// rewriteSecretMarkers rewrites the fingerprints in classify's markers.
+func rewriteSecretMarkers(s string, key []byte) string {
 	if !strings.Contains(s, markerOpen) {
 		return s
 	}
@@ -118,6 +126,63 @@ func rewriteMarkers(s string, key []byte) string {
 	}
 	b.WriteString(s[last:])
 	return b.String()
+}
+
+// rewriteSummaries rewrites "fp:<8 hex>" summaries. Producers that will
+// not emit free text reduce it to one (hookio: "tool error fp:1a2b3c4d"
+// for a failed tool's error text, "denied fp:..." for a denial reason;
+// otelrecv: "tool error fp:..."), and that is the first 8 hex digits of an
+// UNKEYED SHA-256 of tool output: a short error text is recovered from it
+// with a dictionary, and the same text links records across tenants. It
+// is matched as a whole word anywhere in an emitted string, so a new
+// producer of the same format is covered too.
+func rewriteSummaries(s string, key []byte) string {
+	if !strings.Contains(s, "fp:") {
+		return s
+	}
+	var b strings.Builder
+	last := 0
+	for off := 0; off < len(s); {
+		i := strings.Index(s[off:], "fp:")
+		if i < 0 {
+			break
+		}
+		i += off
+		end := i + 3 + 8
+		if end > len(s) || !anyCaseHex(s[i+3:end]) || (i > 0 && isWordByte(s[i-1])) || (end < len(s) && isWordByte(s[end])) {
+			off = i + 1
+			continue
+		}
+		start := i
+		if key == nil && start > last && s[start-1] == ' ' {
+			start-- // "tool error fp:x" -> "tool error"
+		}
+		b.WriteString(s[last:start])
+		if key != nil {
+			b.WriteString("hmac=")
+			b.WriteString(keyed(key, domSummary, []byte(strings.ToLower(s[i+3:end])))[:8])
+		}
+		last = end
+		off = end
+	}
+	if last == 0 {
+		return s
+	}
+	b.WriteString(s[last:])
+	return b.String()
+}
+
+func anyCaseHex(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if !isHex(s[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func isWordByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_'
 }
 
 // bucket rounds a length up to the next power of four (1, 4, 16, 64, ...):

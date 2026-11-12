@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -286,9 +285,3 @@ var errNoOutbox = errors.New("engine: Options.Outbox is required")
 
 // defaultDisabled is the platform kill switch.
 func defaultDisabled() bool { return platform.Disabled() }
-
-// pathExists is used by tests and the baseline loader.
-func pathExists(p string) bool {
-	_, err := os.Lstat(p)
-	return err == nil
-}

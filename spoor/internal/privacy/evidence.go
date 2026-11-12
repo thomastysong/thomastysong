@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/thomastysong/spoor/internal/event"
+	"github.com/thomastysong/spoor/internal/features"
 )
 
 // Detection evidence.
@@ -184,11 +185,41 @@ func (p *Policy) Evidence(src *event.Event, fields []string) (ev map[string]stri
 }
 
 func isBoolOrNumberFeature(src *event.Event, f string) bool {
-	if src.Feat == nil {
+	if src.Feat == nil || !scalarField(f) {
 		return false
 	}
 	_, ok := renderScalar(src.Feat[f])
 	return ok
+}
+
+// scalarField reports a field the rule registry types as a boolean or a
+// number and that is not content. Only such a field may pass the
+// allowlist as a bare scalar: "it parses as a number" is not enough, as an
+// OTP in a prompt, a card number in tool output or numeric file content
+// parse as numbers too.
+func scalarField(f string) bool {
+	if m, ok := evidenceFields[f]; ok && m == evContent {
+		return false
+	}
+	fi, ok := features.Lookup(f)
+	return ok && (fi.Type == features.TypeBool || fi.Type == features.TypeNumber)
+}
+
+// scalarValue reports whether v is a valid rendering of field f's
+// registry type.
+func scalarValue(f, v string) bool {
+	fi, ok := features.Lookup(f)
+	if !ok {
+		return false
+	}
+	switch fi.Type {
+	case features.TypeBool:
+		return v == "true" || v == "false"
+	case features.TypeNumber:
+		_, err := strconv.ParseFloat(v, 64)
+		return err == nil
+	}
+	return false
 }
 
 // renderScalar renders booleans and numbers.
@@ -408,7 +439,7 @@ func (r *run) sanitizeEvidence(in map[string]string) map[string]string {
 		v := in[k]
 		mode, ok := allowedEvidence(k, r.lv)
 		if !ok {
-			if _, err := strconv.ParseFloat(v, 64); err == nil || v == "true" || v == "false" || v == Withheld {
+			if v == Withheld || scalarField(k) && scalarValue(k, v) {
 				out[k] = v
 				continue
 			}

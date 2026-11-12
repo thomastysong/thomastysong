@@ -41,6 +41,11 @@ func (p *Pipeline) stream(name string) *streamStat {
 // emit redacts src and writes it; toState also queues the shipped record
 // for the state database. It returns the written record.
 func (p *Pipeline) emit(src *event.Event, now time.Time, toState bool) (*event.Event, bool) {
+	if p.o.Local == nil && src.Kind == event.KindActivity && p.activityStaysLocal() {
+		// Nowhere to write it: skip the redaction work.
+		p.ctr.localDiscarded++
+		return nil, false
+	}
 	in := src
 	if len(p.labels) > 0 {
 		// Operator labels go through the privacy stage like every other
@@ -271,4 +276,15 @@ func (p *Pipeline) flushState(now time.Time) {
 		p.ctr.stateErrors++
 		p.ctr.errors++
 	}
+}
+
+// activityStaysLocal reports whether activity records stay on the host:
+// the minimal profile (also what an unknown profile falls back to), or an
+// operator stream list without "activity".
+func (p *Pipeline) activityStaysLocal() bool {
+	if !p.streamAllowed("activity") {
+		return true
+	}
+	prof, err := privacy.ParseProfile(string(p.pol.Profile))
+	return err != nil || prof == privacy.ProfileMinimal
 }

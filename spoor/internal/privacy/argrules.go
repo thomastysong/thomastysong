@@ -121,16 +121,31 @@ func moreArgSecrets(in, out []string) {
 			// vault login TOKEN (a positional token; "-" reads stdin).
 			whole(i)
 		}
-		if name, sep, val, ok := passFlag(a); ok {
+		if sep, val, ok := passFlag(a); ok {
 			switch {
 			case sep && val != "":
 				after(i, len(a)-len(val))
-			case !sep && i+1 < len(in) && !(strings.HasPrefix(in[i+1], "-") && len(in[i+1]) > 1):
+			case !sep && i+1 < len(in) && !(strings.HasPrefix(in[i+1], "-") && len(in[i+1]) > 1) && !passSource(in[i+1]):
 				whole(i + 1)
 			}
-			_ = name
 		}
 	}
+}
+
+// passSource reports a value that says where a password is read from
+// rather than being one (openssl -pass stdin, env:VAR, file:path, fd:N).
+func passSource(v string) bool {
+	low := strings.ToLower(v)
+	switch low {
+	case "stdin", "prompt", "-":
+		return true
+	}
+	for _, p := range []string{"env:", "file:", "fd:"} {
+		if strings.HasPrefix(low, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // userPass returns the offset of the password in "user/password[@db]", or
@@ -149,22 +164,20 @@ func userPass(a string) int {
 // Flags that only name where a password is (":env", ":file", -file, -fd),
 // switch prompting on (--ask-pass, --askpass) or off (--no-pass), or merely
 // contain the letters (--bypass, --compass) are not password flags.
-func passFlag(a string) (name string, sep bool, val string, ok bool) {
+func passFlag(a string) (sep bool, val string, ok bool) {
 	if len(a) < 3 || (a[0] != '-' && a[0] != '/') {
-		return "", false, "", false
+		return false, "", false
 	}
 	body := strings.TrimLeft(a, "-/")
-	name, val = body, ""
+	name := body
 	if i := strings.IndexAny(body, "=:"); i >= 0 {
 		name, val, sep = body[:i], body[i+1:], true
 	}
 	low := strings.ToLower(name)
-	if sep && body[len(name)] == ':' {
-		switch strings.ToLower(val) {
-		case "env", "file", "stdin", "fd", "prompt":
-			// keytool -storepass:env VAR: the next word names the source.
-			return "", false, "", false
-		}
+	if sep && (passSource(val) || passSource(val+":")) {
+		// keytool -storepass:env VAR, --password=stdin: the value names
+		// where the password is, not the password.
+		return false, "", false
 	}
 	matched := false
 	for _, w := range []string{"pass", "passwd", "password", "passphrase", "passcode"} {
@@ -173,15 +186,15 @@ func passFlag(a string) (name string, sep bool, val string, ok bool) {
 		}
 	}
 	if !matched {
-		return "", false, "", false
+		return false, "", false
 	}
 	for _, w := range []string{"bypass", "compass", "surpass", "trespass", "askpass", "ask-pass", "ask_pass"} {
 		if strings.HasSuffix(low, w) {
-			return "", false, "", false
+			return false, "", false
 		}
 	}
 	if strings.HasPrefix(low, "no-") || strings.HasPrefix(low, "no_") || strings.HasPrefix(low, "skip") || strings.HasPrefix(low, "ask") {
-		return "", false, "", false
+		return false, "", false
 	}
-	return name, sep, val, true
+	return sep, val, true
 }

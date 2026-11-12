@@ -70,7 +70,18 @@ func newCorrelator() *correlator {
 	return &correlator{entries: map[string]*corrEntry{}}
 }
 
+// holdable records wait for their hook twin. Prompts are held too, so the
+// hook stays the primary record whichever surface is faster; only tool
+// calls count as unmatched when released.
 func holdable(ev *event.Event) bool {
+	switch ev.Type {
+	case event.TypeToolPre, event.TypeToolPost, event.TypePromptSubmit:
+		return true
+	}
+	return false
+}
+
+func toolRecord(ev *event.Event) bool {
 	return ev.Type == event.TypeToolPre || ev.Type == event.TypeToolPost
 }
 
@@ -86,7 +97,7 @@ func addSource(l []event.Source, s event.Source) []event.Source {
 func (c *correlator) put(key string, e *corrEntry, now time.Time) {
 	c.entries[key] = e
 	c.fifo = append(c.fifo, corrFIFO{key, now})
-	for len(c.entries) > maxCorrelation && len(c.fifo) > 0 {
+	for n := len(c.fifo); n > 0 && len(c.entries) > maxCorrelation && len(c.fifo) > 0; n-- {
 		c.evictFront()
 	}
 }
@@ -94,15 +105,22 @@ func (c *correlator) put(key string, e *corrEntry, now time.Time) {
 func (c *correlator) evictFront() {
 	f := c.fifo[0]
 	c.fifo = c.fifo[1:]
-	if e, ok := c.entries[f.key]; ok && e.at.Equal(f.at) && e.held == nil {
-		delete(c.entries, f.key)
+	e, ok := c.entries[f.key]
+	if !ok || !e.at.Equal(f.at) {
+		return
 	}
+	if e.held != nil {
+		// Still waiting for its hook: keep it, and its expiry slot.
+		c.fifo = append(c.fifo, f)
+		return
+	}
+	delete(c.entries, f.key)
 }
 
 // expire forgets keys older than corrTTL. A key whose entry was refreshed
 // later than its FIFO slot is kept (its later slot expires it).
 func (c *correlator) expire(now time.Time) {
-	for len(c.fifo) > 0 && now.Sub(c.fifo[0].at) > corrTTL {
+	for n := len(c.fifo); n > 0 && len(c.fifo) > 0 && now.Sub(c.fifo[0].at) > corrTTL; n-- {
 		c.evictFront()
 	}
 	if cap(c.fifo) > 1024 && len(c.fifo) < cap(c.fifo)/4 {
@@ -128,7 +146,7 @@ func (c *correlator) markPrimary(key string, src event.Source, now time.Time) {
 // decide applies the rules above to ev; pmu is held.
 func (c *correlator) decide(p *Pipeline, ev *event.Event, s *session, now time.Time) corrAction {
 	if s == nil || naturalKey(ev) == "" {
-		if ev.Source == event.SourceOTel && holdable(ev) && s != nil && s.surfaces[event.SourceHook] {
+		if ev.Source == event.SourceOTel && toolRecord(ev) && s != nil && s.surfaces[event.SourceHook] {
 			p.ctr.uncorrelatable++
 			return corrDuplicate
 		}
@@ -243,7 +261,7 @@ func (p *Pipeline) releaseOne(h *held, now time.Time) {
 	var s *session
 	if el, ok := p.sessions[h.skey]; ok {
 		s = el.Value.(*session)
-		if h.ev.Tool != nil && h.ev.Tool.UseID != "" {
+		if toolRecord(h.ev) && h.ev.Tool != nil && h.ev.Tool.UseID != "" {
 			s.unmatchedCall(h.ev.Tool.UseID, h.ev.ID)
 		}
 	}

@@ -338,10 +338,11 @@ func redactText(s string) string {
 	var sh shield
 	h := sh.hide(s)
 	out, _ := classify.Redact(h)
-	return sh.show(unwrapShield(h, out))
+	return flattenNested(sh.show(unwrapShield(h, out)))
 }
 
-// redactArgs is classify.RedactArgs with markers shielded.
+// redactArgs is classify.RedactArgs with markers shielded, plus this
+// package's own flag rules (argrules.go).
 func redactArgs(args []string) []string {
 	var sh shield
 	in := make([]string, len(args))
@@ -355,7 +356,92 @@ func redactArgs(args []string) []string {
 		}
 		out[i] = sh.show(out[i])
 	}
+	moreArgSecrets(args, out)
+	for i := range out {
+		out[i] = flattenNested(out[i])
+	}
 	return out
+}
+
+// flattenNested collapses a marker wrapped around another marker into one.
+// classify.RedactArgs does this to a database URL: it first redacts the
+// userinfo password, then its URL pattern matches across that marker and
+// yields "postgres://[REDACTED:database_url_with_password:[REDACTED:password:fp]",
+// which reads as garbage and defeats marker parsing downstream. The
+// combined span becomes a single marker of the outer kind.
+func flattenNested(s string) string {
+	if strings.Count(s, markerOpen) < 2 {
+		return s
+	}
+	for n := 0; n < 64; n++ {
+		start, end, kind := findNested(s)
+		if start < 0 {
+			break
+		}
+		s = s[:start] + newMarker(kind, s[start:end]) + s[end:]
+	}
+	return s
+}
+
+// findNested returns the span and outer kind of the first marker whose
+// body opens another marker ("[REDACTED:kind:[REDACTED:...]",
+// "[REDACTED:kind:hmac=[REDACTED...]"). The span ends after the inner
+// marker's closing bracket and, when present, the outer one's.
+func findNested(s string) (start, end int, kind string) {
+	for off := 0; off < len(s); {
+		i := strings.Index(s[off:], markerOpen)
+		if i < 0 {
+			break
+		}
+		i += off
+		j := i + len(markerOpen)
+		k := j
+		for k < len(s) && k-j <= 64 && isKindByte(s[k]) {
+			k++
+		}
+		p := k
+		if p < len(s) && s[p] == ':' {
+			p++
+		}
+		p += len(prefixOf(s[p:], "hmac="))
+		if !strings.HasPrefix(s[p:], markerOpen) {
+			off = i + 1
+			continue
+		}
+		kind = s[j:k]
+		if kind == "" {
+			kind = classify.KindGenericSecret
+		}
+		depth := 1
+		e := p
+		for e < len(s) {
+			if strings.HasPrefix(s[e:], markerOpen) {
+				depth++
+				e += len(markerOpen)
+				continue
+			}
+			if s[e] == ']' {
+				e++
+				depth--
+				// The outer marker's own bracket, when classify kept it.
+				for depth > 0 && e < len(s) && s[e] == ']' {
+					e++
+					depth--
+				}
+				break
+			}
+			e++
+		}
+		return i, e, kind
+	}
+	return -1, 0, ""
+}
+
+func prefixOf(s, p string) string {
+	if strings.HasPrefix(s, p) {
+		return p
+	}
+	return ""
 }
 
 // unwrapShield undoes a marker classify put over a shield reference (it

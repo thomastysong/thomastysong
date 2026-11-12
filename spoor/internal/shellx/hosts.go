@@ -69,8 +69,20 @@ func urlStop(c byte) bool {
 	return c < 0x20 || c == 0x7f
 }
 
+// maxHostPort is the longest host[:port] an authority can hold: a 255-byte
+// name (or a bracketed IPv6 literal of that size) and ":65535".
+const maxHostPort = 255 + len("[]") + len(":65535")
+
+// maxURLFact bounds one entry of Facts.URLs.
+const maxURLFact = 2048
+
 // urlHost extracts the host of a URL or scheme-less host/path reference:
 // userinfo stripped, port removed, lower-case, IPv6 brackets removed.
+//
+// It returns "" when what follows the last '@' is longer than any
+// host[:port]. That is a credential whose '@' was lost (the lexers cap one
+// word at maxWord) or padding: reading a host out of it would report the
+// user name ("deploy" in "https://deploy:<token>...") as the destination.
 func urlHost(raw string) string {
 	s := raw
 	if i := strings.Index(s, "://"); i >= 0 {
@@ -84,6 +96,9 @@ func urlHost(raw string) string {
 	}
 	if i := strings.LastIndexByte(s, '@'); i >= 0 {
 		s = s[i+1:]
+	}
+	if len(s) > maxHostPort {
+		return ""
 	}
 	return cleanHost(s)
 }
@@ -139,6 +154,10 @@ const userinfoKind = "basic_auth_url"
 // makes package privacy rewrite it on the way out (keyed with the tenant
 // key, or removed when there is none), exactly as it does for classify's
 // own markers. Any other shape would pass through privacy untouched.
+//
+// An authority whose host[:port] part is longer than any host can be is
+// replaced whole: it is a credential whose '@' was lost before this point
+// (a word over maxWord) or padding, and nothing in it is a usable host.
 func redactUserinfo(u string) string {
 	i := strings.Index(u, "://")
 	if i < 0 {
@@ -149,29 +168,56 @@ func redactUserinfo(u string) string {
 	if end < 0 {
 		end = len(rest)
 	}
-	at := strings.LastIndexByte(rest[:end], '@')
+	auth := rest[:end]
+	at := strings.LastIndexByte(auth, '@')
+	if len(auth)-(at+1) > maxHostPort {
+		return u[:i+3] + userinfoMarker(auth) + rest[end:]
+	}
 	if at <= 0 {
 		return u
 	}
-	info := rest[:at]
+	info := auth[:at]
 	// "git@" and other bare user names carry no secret.
 	if !strings.Contains(info, ":") && len(info) < 20 {
 		return u
 	}
-	sum := sha256.Sum256([]byte(info))
-	return u[:i+3] + "[REDACTED:" + userinfoKind + ":" + hex.EncodeToString(sum[:4]) + "]" + rest[at:]
+	return u[:i+3] + userinfoMarker(info) + rest[at:]
 }
 
+func userinfoMarker(secret string) string {
+	sum := sha256.Sum256([]byte(secret))
+	return "[REDACTED:" + userinfoKind + ":" + hex.EncodeToString(sum[:4]) + "]"
+}
+
+// url records a URL and its host.
+//
+// Both are read from the whole URL, and only the stored fact is clipped.
+// Clipping first cut the '@' off a userinfo longer than the clip (Azure AD
+// and JWT access tokens run 1.5 to 2.5 KB): the credential was stored in
+// clear, the user name was reported as the host, and padding the userinfo
+// was enough to hide the real destination from every host rule.
 func (a *analyzer) url(u string) {
 	u = strings.TrimSpace(u)
 	if u == "" {
 		return
 	}
-	if len(u) > 2048 {
-		u = clip(u, 2048)
-	}
-	addUniq(&a.f.URLs, redactUserinfo(u))
 	a.host(urlHost(u))
+	addUniq(&a.f.URLs, clipFact(redactUserinfo(u), maxURLFact))
+}
+
+// clipFact cuts s to at most n bytes on a rune boundary, and never inside
+// a "[REDACTED:...]" marker: a marker cut before its ']' keeps all or part
+// of its unkeyed fingerprint in a shape package privacy does not rewrite.
+func clipFact(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	c := clip(s, n)
+	// A marker holds no '[', so a cut inside one leaves its '[' last.
+	if k := strings.LastIndexByte(c, '['); k >= 0 && strings.HasPrefix(s[k:], "[REDACTED:") && !strings.Contains(c[k:], "]") {
+		c = c[:k]
+	}
+	return c
 }
 
 func (a *analyzer) host(h string) {

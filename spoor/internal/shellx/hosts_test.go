@@ -80,3 +80,86 @@ func TestFactsCarryClassifyMarker(t *testing.T) {
 		t.Fatalf("hosts %q", f.Hosts)
 	}
 }
+
+// An authority longer than any host[:port] yields no host: it is a
+// credential whose '@' was cut off (or padding), and its first label would
+// otherwise be reported as the destination.
+func TestURLHostOversizeAuthority(t *testing.T) {
+	long := strings.Repeat("A", maxHostPort)
+	cases := []struct{ in, want string }{
+		{"https://deploy:" + long + "/x", ""},
+		{"https://deploy:" + long, ""},
+		{"https://u:" + long + "@git.example.com/x", "git.example.com"},
+		{"https://git.example.com:443/x", "git.example.com"},
+		{"https://" + strings.Repeat("a", 256) + ":1/", ""}, // fits host:port, but no name exceeds 255 bytes
+		{"https://" + strings.Repeat("a", 240) + ".io:65535/", strings.Repeat("a", 240) + ".io"},
+	}
+	for _, c := range cases {
+		if got := urlHost(c.in); got != c.want {
+			t.Errorf("urlHost(%.40q...) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// The oversize authority is replaced whole by a classify-shaped marker, so
+// privacy rewrites its fingerprint like any other.
+func TestRedactUserinfoOversizeAuthority(t *testing.T) {
+	tok := strings.Repeat("Zx81kPwm3RtY6vBn", 40)
+	for _, in := range []string{
+		"https://deploy:" + tok + "/org/repo.git",
+		"https://deploy:" + tok,
+		"https://u:p@" + tok + "/x",
+	} {
+		got := redactUserinfo(in)
+		if strings.Contains(got, "Zx81kPwm3RtY6vBn") || !classifyMarker.MatchString(got) {
+			t.Errorf("redactUserinfo(%.40q...) = %.80q", in, got)
+		}
+		if i := strings.Index(in[8:], "/"); i >= 0 && !strings.HasSuffix(got, in[8+i:]) {
+			t.Errorf("path lost: %q", got)
+		}
+	}
+}
+
+// clipFact never leaves part of a marker: at every cut offset across one,
+// the result holds the whole marker or none of it.
+func TestClipFactKeepsMarkersWhole(t *testing.T) {
+	marker := "[REDACTED:basic_auth_url:" + fp8("u:p") + "]"
+	s := "https://" + strings.Repeat("h", 30) + marker + "@" + strings.Repeat("p", 60)
+	start := strings.Index(s, marker)
+	for n := 0; n <= len(s); n++ {
+		got := clipFact(s, n)
+		if len(got) > n || !strings.HasPrefix(s, got) {
+			t.Fatalf("n=%d: %q is not a prefix of at most n bytes", n, got)
+		}
+		has := strings.Contains(got, marker)
+		if k := strings.Index(got, "[REDACTED"); k >= 0 && !has {
+			t.Fatalf("n=%d: partial marker %q", n, got[k:])
+		}
+		if n >= start+len(marker) && !has {
+			t.Fatalf("n=%d: whole marker dropped", n)
+		}
+		if n > start && n < start+len(marker) && len(got) != start {
+			t.Fatalf("n=%d: cut not moved to the marker start: %d", n, len(got))
+		}
+	}
+	// Multi-byte runes are not split.
+	if got := clipFact(strings.Repeat("é", 10), 5); got != "éé" {
+		t.Fatalf("clipFact split a rune: %q", got)
+	}
+}
+
+// A URL whose marker sits past the 2 KiB fact cap (an absurdly long
+// scheme-like prefix handed to curl) does not leave a partial marker.
+func TestURLFactLongPrefixNoPartialMarker(t *testing.T) {
+	for pad := 2000; pad <= 2048; pad++ {
+		cmd := "curl https" + strings.Repeat("s", pad) + "://u:Zx81kPwm3RtY6vBn@h.example/x"
+		for _, u := range Analyze(cmd, "").URLs {
+			if k := strings.Index(u, "[REDACTED"); k >= 0 && !classifyMarker.MatchString(u[k:]) {
+				t.Fatalf("pad=%d: partial marker %q", pad, u[k:])
+			}
+			if strings.Contains(u, "Zx81kPwm3RtY6vBn") {
+				t.Fatalf("pad=%d: credential in %q", pad, u[len(u)-40:])
+			}
+		}
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -174,7 +175,7 @@ func (b *builder) claudeProjects(top map[string]any) int {
 			continue
 		}
 		start := len(b.out)
-		project := capString(p, maxProjectLen)
+		project := p // cut by finish, like names
 		if project == "" {
 			// An empty key would be indistinguishable from user scope.
 			project = "."
@@ -251,6 +252,7 @@ func (b *builder) finish() ([]Server, error) {
 	if len(b.out) == 0 {
 		return nil, nil
 	}
+	b.cutIdentity()
 	sort.SliceStable(b.out, func(i, j int) bool {
 		if b.out[i].Project != b.out[j].Project {
 			return b.out[i].Project < b.out[j].Project
@@ -261,6 +263,74 @@ func (b *builder) finish() ([]Server, error) {
 		return b.out, ErrTooManyServers
 	}
 	return b.out, nil
+}
+
+// cutIdentity bounds Name and Project, the two fields that identify a
+// server: discovery hashes them into the asset id, and differential
+// inventory matches that id against the previous scan's, which may have
+// run in another process. A cut form must therefore be the same in every
+// process, differ for different values, and give a reader of the log no
+// way to test a guess about the text it cut.
+//
+// A digest of the full value cannot do all three: unkeyed, it is a
+// guessing oracle for the tail; keyed per process (capString), it changes
+// on every run, so a long-named server would be reported as new, and its
+// old id as removed, on every scan, and a change to its definition never
+// as changed. So the cut form carries no digest: it is the head followed
+// by "~" and the value's rank among the distinct over-long values of this
+// file that share the head (sorted bytewise), skipping any form a value of
+// the file already has. That is a function of the file alone, unique
+// within it (the asset id adds the path), and says nothing about one tail
+// on its own. Adding or removing another over-long value with the same
+// head can shift the rank, which reads as a rename; nothing else does.
+func (b *builder) cutIdentity() {
+	names := make([]string, len(b.out))
+	projects := make([]string, len(b.out))
+	for i := range b.out {
+		names[i], projects[i] = b.out[i].Name, b.out[i].Project
+	}
+	nc, pc := stableCuts(names, maxNameLen), stableCuts(projects, maxProjectLen)
+	for i := range b.out {
+		if c, ok := nc[b.out[i].Name]; ok {
+			b.out[i].Name = c
+		}
+		if c, ok := pc[b.out[i].Project]; ok {
+			b.out[i].Project = c
+		}
+	}
+}
+
+// stableCuts maps every distinct value of vals longer than max to its cut
+// form (see cutIdentity). It returns nil when nothing is too long.
+func stableCuts(vals []string, max int) map[string]string {
+	var long []string
+	taken := make(map[string]bool, len(vals))
+	for _, v := range vals {
+		if len(v) > max && !taken[v] {
+			long = append(long, v)
+		}
+		taken[v] = true
+	}
+	if len(long) == 0 {
+		return nil
+	}
+	sort.Strings(long)
+	out := make(map[string]string, len(long))
+	rank := map[string]int{}
+	for _, v := range long {
+		// 12 bytes hold "~" and any rank up to MaxServers.
+		head := v[:cutPoint(v, max-12)]
+		for {
+			rank[head]++
+			c := head + "~" + strconv.Itoa(rank[head])
+			if !taken[c] {
+				taken[c] = true
+				out[v] = c
+				break
+			}
+		}
+	}
+	return out
 }
 
 func hasAny(m map[string]any, keys ...string) bool {
@@ -344,7 +414,7 @@ func projectOf(path string) string {
 			if root == "" {
 				root = path[:1] // the file sits in the filesystem root
 			}
-			return capString(root, maxProjectLen)
+			return root // cut by finish
 		}
 	}
 	return ""

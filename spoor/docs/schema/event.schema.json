@@ -1,0 +1,1268 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "spoor event record",
+  "description": "One NDJSON line written by spoor (outbox segments, local ring, stdout, spoor detect --ndjson). Schema version 1 (field v). Generated from internal/event by `go test ./internal/event -run TestSchema -update`; do not edit by hand. Reference: docs/EVENTS.md.",
+  "anyOf": [
+    {
+      "$ref": "#/$defs/Event"
+    },
+    {
+      "$ref": "#/$defs/Skeleton"
+    }
+  ],
+  "$defs": {
+    "Account": {
+      "type": "object",
+      "description": "Account is the identity the agent is signed in with, when a surface reports it (vendor OpenTelemetry does; hooks usually do not). It answers the first governance question: corporate tenant, personal account or a raw API key on a managed machine.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "ID is the vendor account identifier; emitted as a keyed digest unless the privacy profile is full."
+        },
+        "org": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "description": "Kind: organization | personal | api_key | unknown."
+        }
+      },
+      "additionalProperties": false
+    },
+    "Agent": {
+      "type": "object",
+      "description": "Agent identifies the AI agent product.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "catalog id, e.g. \"claude-code\""
+        },
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "pid": {
+          "type": "integer"
+        },
+        "surface": {
+          "type": "string",
+          "description": "Surface is how the agent was run: cli | ide | desktop | sdk | ci | cloud."
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "Asset": {
+      "type": "object",
+      "description": "Asset is one inventory record. ID is stable across scans for the same (host, kind, identity, owner, location) so downstream can upsert.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/AssetKind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "vendor": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "catalog_id": {
+          "type": "string",
+          "description": "CatalogID is the catalog entry that identified the asset (\"\" when unknown)."
+        },
+        "parent": {
+          "type": "string",
+          "description": "Parent is the catalog id of the agent that owns this item (an MCP server declared in Cursor's config has Parent \"cursor\")."
+        },
+        "path": {
+          "type": "string",
+          "description": "install path or declaring file"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope",
+          "description": "for declared items"
+        },
+        "owner": {
+          "type": "string",
+          "description": "OS user the item belongs to"
+        },
+        "running": {
+          "type": "boolean"
+        },
+        "pid": {
+          "type": "integer"
+        },
+        "sha256": {
+          "type": "string",
+          "description": "SHA256 is the content hash: binary hash for agents, definition hash for MCP servers and hooks, folder hash for skills."
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Evidence lists how identity was established, e.g. \"package:npm\", \"bundle_id\", \"path\", \"process\", \"signature\". Two independent classes are required for Confidence \"high\"."
+        },
+        "confidence": {
+          "type": "string",
+          "description": "high | medium | low"
+        },
+        "signer": {
+          "type": "string",
+          "description": "Signer is the code-signing identity when verified (team id / publisher)."
+        },
+        "first_seen": {
+          "$ref": "#/$defs/Time"
+        },
+        "last_seen": {
+          "$ref": "#/$defs/Time"
+        },
+        "change": {
+          "$ref": "#/$defs/Change"
+        },
+        "risk_flags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "RiskFlags are closed-vocabulary posture hints computed at scan time."
+        },
+        "mcp": {
+          "$ref": "#/$defs/MCP"
+        },
+        "telemetry": {
+          "$ref": "#/$defs/Telemetry",
+          "description": "Telemetry describes how well spoor can see this agent (agents only)."
+        },
+        "detail": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "AssetKind": {
+      "type": "string",
+      "description": "AssetKind classifies an inventory record.",
+      "enum": [
+        "agent",
+        "app",
+        "ide_extension",
+        "ai_browser",
+        "browser_extension",
+        "model_runtime",
+        "mcp_server",
+        "skill",
+        "plugin",
+        "hook",
+        "rules_file",
+        "subagent",
+        "command",
+        "ci_agent",
+        "project_config"
+      ]
+    },
+    "Change": {
+      "type": "string",
+      "description": "Change describes how an asset differs from the previous scan.",
+      "enum": [
+        "new",
+        "changed",
+        "removed",
+        "unchanged"
+      ]
+    },
+    "Check": {
+      "type": "object",
+      "description": "Check is one posture check result.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "rule id of the posture rule"
+        },
+        "title": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "description": "pass | fail | unknown"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "agent_id": {
+          "type": "string"
+        },
+        "asset_id": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "subject": {
+          "type": "string",
+          "description": "file path or setting key checked"
+        },
+        "expected": {
+          "type": "string"
+        },
+        "actual": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "remedy": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "status"
+      ],
+      "additionalProperties": false
+    },
+    "Container": {
+      "type": "object",
+      "description": "Container locates the workload when the agent runs in a container.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "runtime": {
+          "type": "string",
+          "description": "docker | containerd | cri-o | podman"
+        },
+        "image": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "pod": {
+          "type": "string"
+        },
+        "pod_uid": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        },
+        "node": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Coverage": {
+      "type": "object",
+      "description": "Coverage is the per-agent, per-user visibility statement: which surfaces are actually delivering. \"Not collected\" must never read as \"clean\".",
+      "properties": {
+        "agent_id": {
+          "type": "string"
+        },
+        "user": {
+          "type": "string"
+        },
+        "hooks": {
+          "type": "string",
+          "description": "see Telemetry.Hooks"
+        },
+        "transcript": {
+          "type": "string",
+          "description": "see Telemetry.Transcript"
+        },
+        "processes": {
+          "type": "integer",
+          "description": "running agent processes seen"
+        },
+        "state": {
+          "type": "string",
+          "description": "State: covered | partial | blind | absent."
+        }
+      },
+      "required": [
+        "agent_id",
+        "state"
+      ],
+      "additionalProperties": false
+    },
+    "Detection": {
+      "type": "object",
+      "description": "Detection is a rule match.",
+      "properties": {
+        "rule_id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "class": {
+          "$ref": "#/$defs/DetectionClass",
+          "description": "Class is how much attention the match deserves: \"signal\" (counted into the session summary, not shipped by default), \"finding\" (shipped, no page) or \"alert\" (expected to be silent on ordinary developer work)."
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "confidence": {
+          "type": "string",
+          "description": "low | medium | high"
+        },
+        "maturity": {
+          "type": "string",
+          "description": "experimental | stable"
+        },
+        "category": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Tags carries framework mappings in Sigma tag style: attack.t1059.004, atlas.aml.t0051, owasp.asi05."
+        },
+        "evidence": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Evidence is a small redacted map of the field values that matched."
+        },
+        "event_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "EventIDs are the ids of the events that produced the match, oldest first; for sequence rules this is the chain."
+        },
+        "flags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Flags are the session flags that were required and present."
+        },
+        "response": {
+          "type": "string",
+          "description": "Response is what the rule asks for (none | ask | block); Enforced says whether spoor actually returned that decision to the agent."
+        },
+        "enforced": {
+          "type": "boolean"
+        },
+        "dedup_key": {
+          "type": "string",
+          "description": "DedupKey groups repeats of the same finding; Count is how many matches this record stands for after suppression."
+        },
+        "count": {
+          "type": "integer"
+        },
+        "escalate": {
+          "type": "boolean",
+          "description": "Escalate marks findings that are suspicious but not conclusive and are good candidates for a downstream LLM or human judge."
+        },
+        "remedy": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "rule_id",
+        "title",
+        "severity"
+      ],
+      "additionalProperties": false
+    },
+    "DetectionClass": {
+      "type": "string",
+      "description": "Detection classes, lowest to highest (ClassRank).",
+      "enum": [
+        "signal",
+        "finding",
+        "alert"
+      ]
+    },
+    "Event": {
+      "type": "object",
+      "description": "Event is the normalized record.",
+      "properties": {
+        "v": {
+          "type": "integer",
+          "const": 1
+        },
+        "id": {
+          "type": "string"
+        },
+        "ts": {
+          "$ref": "#/$defs/Time"
+        },
+        "emitted": {
+          "$ref": "#/$defs/Time",
+          "description": "Emitted is when the record was written for shipping, set only when that is more than a minute after TS (a laptop that was offline, a backfilled transcript). Rules with event-time lookback windows can schedule on it."
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "monotonic per (Writer, stream), for gap detection downstream"
+        },
+        "dedupe": {
+          "type": "string",
+          "description": "Dedupe is identical for every record that describes the same action, whichever surface reported it (see DedupeKey)."
+        },
+        "kind": {
+          "$ref": "#/$defs/Kind"
+        },
+        "type": {
+          "$ref": "#/$defs/EventType"
+        },
+        "source": {
+          "$ref": "#/$defs/Source"
+        },
+        "fidelity": {
+          "$ref": "#/$defs/Fidelity"
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Source"
+          },
+          "description": "Sources lists every surface that corroborated this event after cross-surface correlation (for example [\"hook\",\"transcript\"])."
+        },
+        "integrity": {
+          "$ref": "#/$defs/Integrity"
+        },
+        "writer": {
+          "type": "string",
+          "description": "Writer identifies the process that wrote the record (random per process start). Seq is monotonic per Writer, and heartbeats report per-writer counts, so a consumer can prove that nothing was lost or removed."
+        },
+        "host": {
+          "$ref": "#/$defs/Host"
+        },
+        "user": {
+          "$ref": "#/$defs/User"
+        },
+        "agent": {
+          "$ref": "#/$defs/Agent"
+        },
+        "account": {
+          "$ref": "#/$defs/Account"
+        },
+        "session": {
+          "$ref": "#/$defs/Session"
+        },
+        "tool": {
+          "$ref": "#/$defs/Tool"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "prompt": {
+          "$ref": "#/$defs/Prompt"
+        },
+        "outcome": {
+          "$ref": "#/$defs/Outcome"
+        },
+        "process": {
+          "$ref": "#/$defs/Process"
+        },
+        "container": {
+          "$ref": "#/$defs/Container"
+        },
+        "repo": {
+          "$ref": "#/$defs/Repo"
+        },
+        "asset": {
+          "$ref": "#/$defs/Asset",
+          "description": "Kind == inventory"
+        },
+        "check": {
+          "$ref": "#/$defs/Check",
+          "description": "Kind == posture"
+        },
+        "detection": {
+          "$ref": "#/$defs/Detection",
+          "description": "Kind == detection"
+        },
+        "health": {
+          "$ref": "#/$defs/Health",
+          "description": "Kind == health"
+        },
+        "summary": {
+          "$ref": "#/$defs/Summary",
+          "description": "Kind == summary"
+        },
+        "privacy": {
+          "type": "string",
+          "description": "Privacy is the tier that was applied when the record was emitted."
+        },
+        "truncated": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Truncated names fields whose values were cut, so truncation is never silent; the cut value itself ends in an \"[TRUNCATED:<n>B]\" marker (when a sink cuts target.command to fit its line cap it records the full length in Labels[\"target.command.len\"] instead). No hash of the full value is kept: an unkeyed one would let a reader confirm guesses about the missing text."
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "v",
+        "id",
+        "ts",
+        "kind",
+        "type",
+        "source"
+      ],
+      "additionalProperties": false
+    },
+    "EventType": {
+      "type": "string",
+      "description": "Event.Type: the activity types (Kind activity) and the types of the other kinds. detection.context is declared in internal/privacy.",
+      "enum": [
+        "session.start",
+        "session.end",
+        "prompt.submit",
+        "tool.pre",
+        "tool.post",
+        "turn.end",
+        "subagent.start",
+        "subagent.stop",
+        "permission.decision",
+        "config.change",
+        "notification",
+        "context.compact",
+        "agent.process.start",
+        "agent.process.stop",
+        "process.exec",
+        "hook.payload_anomaly",
+        "inventory.asset",
+        "posture.check",
+        "detection.finding",
+        "health.heartbeat",
+        "health.error",
+        "session.summary",
+        "detection.context"
+      ]
+    },
+    "Fidelity": {
+      "type": "string",
+      "description": "Fidelity says whether the record was directly observed or reconstructed.",
+      "enum": [
+        "observed",
+        "inferred"
+      ]
+    },
+    "Health": {
+      "type": "object",
+      "description": "Health is the sensor heartbeat. It is deliberately content-free.",
+      "properties": {
+        "sensor_version": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string",
+          "description": "Mode: daemon | extension | hook | scan."
+        },
+        "uptime_s": {
+          "type": "integer"
+        },
+        "counters": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "surfaces": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SurfaceStatus"
+          }
+        },
+        "coverage": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Coverage"
+          }
+        },
+        "rules_count": {
+          "type": "integer"
+        },
+        "rules_hash": {
+          "type": "string"
+        },
+        "catalog_version": {
+          "type": "string"
+        },
+        "last_scan": {
+          "$ref": "#/$defs/Time"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Reason is a closed-vocabulary code for health.error records."
+        },
+        "detail": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sensor_version",
+        "mode"
+      ],
+      "additionalProperties": false
+    },
+    "Host": {
+      "type": "object",
+      "description": "Host identifies the endpoint. ID should equal osquery's system_info.uuid so events join to Fleet hosts.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "os": {
+          "type": "string",
+          "description": "linux | darwin | windows"
+        },
+        "arch": {
+          "type": "string",
+          "description": "amd64 | arm64"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Integrity": {
+      "type": "string",
+      "description": "Integrity says who could have altered a record before it was written. Hooks run as the monitored user, so their records are advisory until a privileged collector corroborates them; anything a Fleet policy depends on must be root-integrity.",
+      "enum": [
+        "root",
+        "user"
+      ]
+    },
+    "Kind": {
+      "type": "string",
+      "description": "Kind is the top-level class of a record and selects the output stream.",
+      "enum": [
+        "activity",
+        "inventory",
+        "posture",
+        "detection",
+        "health",
+        "summary"
+      ]
+    },
+    "MCP": {
+      "type": "object",
+      "description": "MCP holds normalized launch facts for a declared MCP server, so a central team can hunt for a bad package or endpoint across the fleet.",
+      "properties": {
+        "transport": {
+          "type": "string",
+          "description": "stdio | http | sse | ws"
+        },
+        "command": {
+          "type": "string",
+          "description": "executable as declared (basename unless tier is full)"
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "secrets redacted"
+        },
+        "runner": {
+          "type": "string",
+          "description": "Runner is the package launcher when one is used: npx | bunx | uvx | pipx | pip | docker | podman | node | python | deno | binary."
+        },
+        "ecosystem": {
+          "type": "string",
+          "description": "npm | pypi | oci | \"\""
+        },
+        "package": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "pinned": {
+          "type": "boolean",
+          "description": "Pinned is true only for an exact version or an image digest."
+        },
+        "url_host": {
+          "type": "string"
+        },
+        "url_path": {
+          "type": "string"
+        },
+        "env_keys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "names only, never values"
+        },
+        "header_keys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "has_inline_secret": {
+          "type": "boolean"
+        },
+        "auth_mode": {
+          "type": "string",
+          "description": "none | env | header | oauth | inherited"
+        },
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "pinned"
+      ],
+      "additionalProperties": false
+    },
+    "Outcome": {
+      "type": "object",
+      "description": "Outcome is the result of a tool call or turn.",
+      "properties": {
+        "status": {
+          "type": "string",
+          "description": "Status: ok | error | denied | interrupted | unknown."
+        },
+        "error": {
+          "type": "string"
+        },
+        "duration_ms": {
+          "type": "integer"
+        },
+        "exit_code": {
+          "type": "integer"
+        },
+        "decision": {
+          "type": "string",
+          "description": "Decision: allow | deny | ask, when a permission decision was observed."
+        },
+        "decision_source": {
+          "type": "string",
+          "description": "user | policy | hook | spoor"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Process": {
+      "type": "object",
+      "description": "Process describes an OS process.",
+      "properties": {
+        "pid": {
+          "type": "integer"
+        },
+        "ppid": {
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "exe": {
+          "type": "string"
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "secrets redacted"
+        },
+        "start_time": {
+          "$ref": "#/$defs/Time"
+        },
+        "user": {
+          "type": "string"
+        },
+        "ancestors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Ancestors is the chain of process names from parent to root."
+        },
+        "env_markers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "EnvMarkers are agent marker variable NAMES found in the environment (values are never emitted except session ids copied into Session)."
+        },
+        "flags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Flags are risky argv flags recognized by the catalog, e.g. \"--dangerously-skip-permissions\"."
+        }
+      },
+      "additionalProperties": false
+    },
+    "Prompt": {
+      "type": "object",
+      "description": "Prompt summarizes a user prompt without necessarily carrying it.",
+      "properties": {
+        "len": {
+          "type": "integer"
+        },
+        "sha256": {
+          "type": "string",
+          "description": "keyed hash when a tenant key is configured"
+        },
+        "text": {
+          "type": "string",
+          "description": "tiers redacted/full only"
+        }
+      },
+      "required": [
+        "len"
+      ],
+      "additionalProperties": false
+    },
+    "Repo": {
+      "type": "object",
+      "description": "Repo describes the source repository of the session's working directory.",
+      "properties": {
+        "root": {
+          "type": "string"
+        },
+        "remote": {
+          "type": "string",
+          "description": "credentials stripped"
+        },
+        "branch": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Scope": {
+      "type": "string",
+      "description": "Scope is where a configuration item is declared.",
+      "enum": [
+        "managed",
+        "system",
+        "user",
+        "project",
+        "plugin"
+      ]
+    },
+    "Session": {
+      "type": "object",
+      "description": "Session identifies one agent conversation.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string",
+          "description": "parent session for subagents"
+        },
+        "turn_id": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "permission_mode": {
+          "type": "string",
+          "description": "PermissionMode is the agent's own vocabulary, normalized to: default | plan | accept_edits | auto | dont_ask | bypass."
+        },
+        "model": {
+          "type": "string"
+        },
+        "transcript": {
+          "type": "string",
+          "description": "path of the session log, when known"
+        },
+        "subagent_id": {
+          "type": "string"
+        },
+        "subagent_type": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Severity": {
+      "type": "string",
+      "description": "Severity levels, lowest to highest (SeverityRank).",
+      "enum": [
+        "info",
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ]
+    },
+    "Skeleton": {
+      "type": "object",
+      "description": "Content-free stand-in written when redaction failed or a record could not be brought under the line cap (internal/privacy, internal/sink). It keeps the Event layout and its routing fields, its truncated list contains \"*\" and, when the privacy stage wrote it, a label names the reason (privacy_error or line_cap). Its string values may be clipped, so only the marker and the routing fields are checked here.",
+      "properties": {
+        "v": {
+          "type": "integer",
+          "const": 1
+        },
+        "id": {
+          "type": "string"
+        },
+        "ts": {
+          "$ref": "#/$defs/Time"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "contains": {
+            "const": "*"
+          }
+        }
+      },
+      "required": [
+        "v",
+        "id",
+        "ts",
+        "kind",
+        "type",
+        "source",
+        "truncated"
+      ]
+    },
+    "Source": {
+      "type": "string",
+      "description": "Source is the collection method that produced a record.",
+      "enum": [
+        "hook",
+        "transcript",
+        "process",
+        "scan",
+        "otel",
+        "osquery",
+        "adapter",
+        "sensor"
+      ]
+    },
+    "Summary": {
+      "type": "object",
+      "description": "Summary is the per-session rollup: enough to answer fleet-wide questions (\"which hosts called MCP server X\", \"which sessions loaded skill hash Y\") from a small indexed stream while raw activity stays local or in cold storage. It carries counts, classes and identifiers, never content.",
+      "properties": {
+        "started": {
+          "$ref": "#/$defs/Time"
+        },
+        "ended": {
+          "$ref": "#/$defs/Time"
+        },
+        "final": {
+          "type": "boolean",
+          "description": "true when the session ended; false for periodic rollups"
+        },
+        "events": {
+          "type": "integer"
+        },
+        "prompts": {
+          "type": "integer"
+        },
+        "subagents": {
+          "type": "integer"
+        },
+        "tool_calls": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "description": "ToolCalls counts tool calls by normalized kind."
+        },
+        "hosts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Hosts are distinct network hosts contacted through tools (capped)."
+        },
+        "host_classes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "path_classes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "PathClasses are the distinct sensitive path classes touched."
+        },
+        "mcp_servers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "installs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Installs are packages installed by the agent as \"manager:name\"."
+        },
+        "detections": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "rule ids"
+        },
+        "max_severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "flags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "session flags set by rules"
+        },
+        "surfaces": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Source"
+          },
+          "description": "Surfaces that reported this session and the resulting coverage state (covered | partial | blind)."
+        },
+        "coverage": {
+          "type": "string"
+        },
+        "denied": {
+          "type": "integer",
+          "description": "tool calls denied by user, policy or guard"
+        },
+        "blocked": {
+          "type": "integer",
+          "description": "tool calls blocked by spoor guard mode"
+        }
+      },
+      "required": [
+        "events"
+      ],
+      "additionalProperties": false
+    },
+    "SurfaceStatus": {
+      "type": "object",
+      "description": "SurfaceStatus reports one collector.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "hooks | transcripts | processes | scan"
+        },
+        "status": {
+          "type": "string",
+          "description": "Status: ok | degraded | failed | disabled."
+        },
+        "last_event": {
+          "$ref": "#/$defs/Time"
+        },
+        "events": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "errors": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "schema_drift": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "status"
+      ],
+      "additionalProperties": false
+    },
+    "Target": {
+      "type": "object",
+      "description": "Target is what the tool call acts on, extracted and normalized.",
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "shell command line, secrets redacted"
+        },
+        "path": {
+          "type": "string",
+          "description": "primary file path"
+        },
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "additional paths referenced"
+        },
+        "url": {
+          "type": "string",
+          "description": "userinfo, query and fragment stripped unless tier is full"
+        },
+        "host": {
+          "type": "string",
+          "description": "network host"
+        },
+        "hosts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "query": {
+          "type": "string",
+          "description": "web search query; tiers redacted/full only"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Telemetry": {
+      "type": "object",
+      "description": "Telemetry is per-agent coverage state: which surfaces spoor has.",
+      "properties": {
+        "hooks": {
+          "type": "string",
+          "description": "Hooks: managed | user | missing | modified | unsupported | disabled."
+        },
+        "transcript": {
+          "type": "string",
+          "description": "Transcript: tailing | found | none | relocated | disabled."
+        },
+        "native_otel": {
+          "type": "string",
+          "description": "NativeOTel: enabled | disabled | unsupported."
+        }
+      },
+      "additionalProperties": false
+    },
+    "Time": {
+      "type": "string",
+      "description": "RFC 3339 in UTC with exactly six fraction digits (TimeLayout), the form Fluent Bit's strict parser needs. Optional time fields are left out when unset.",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{6}Z$"
+    },
+    "Tool": {
+      "type": "object",
+      "description": "Tool describes the tool call.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "agent's own tool name, e.g. \"Bash\""
+        },
+        "kind": {
+          "$ref": "#/$defs/ToolKind"
+        },
+        "use_id": {
+          "type": "string",
+          "description": "agent's tool-call id; join key across surfaces"
+        },
+        "mcp_server": {
+          "type": "string",
+          "description": "for Kind == mcp"
+        },
+        "mcp_tool": {
+          "type": "string"
+        },
+        "input_sha256": {
+          "type": "string",
+          "description": "InputSHA256 is the hash of the canonical JSON of the tool input, so identical calls correlate without shipping content."
+        },
+        "input_keys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "InputKeys lists top-level argument names (metadata tier)."
+        },
+        "input": {
+          "type": "object",
+          "description": "Input is the redacted tool input; present only in tiers redacted/full."
+        },
+        "output": {
+          "type": "string",
+          "description": "Output is the redacted, truncated tool output; tiers redacted/full only."
+        },
+        "output_sha256": {
+          "type": "string"
+        },
+        "output_len": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ToolKind": {
+      "type": "string",
+      "description": "ToolKind is the cross-agent normalized class of a tool call.",
+      "enum": [
+        "shell",
+        "file_read",
+        "file_write",
+        "file_edit",
+        "file_list",
+        "web_fetch",
+        "web_search",
+        "mcp",
+        "subagent",
+        "browser",
+        "other"
+      ]
+    },
+    "User": {
+      "type": "object",
+      "description": "User is the OS account the agent runs as.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string",
+          "description": "uid on POSIX, SID on Windows"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

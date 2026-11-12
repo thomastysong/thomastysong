@@ -64,7 +64,9 @@ func toServer(name string, v any, d dialect) (Server, bool) {
 		ck, uk, ek = cmdKeysGoose, urlKeysGoose, envKeysGoose
 	}
 
-	s := Server{Name: capString(name, maxNameLen)}
+	// The name is cut to maxNameLen by builder.finish, which sees every
+	// name of the file and can keep the cut forms stable and distinct.
+	s := Server{Name: name}
 
 	var pre []string
 	switch c := get(ck...).(type) {
@@ -328,22 +330,44 @@ func lookupFold(m map[string]string, lowerKey string) (string, bool) {
 	return "", false
 }
 
-// capString cuts s to at most max bytes on a rune boundary. A cut value ends
-// in "~" and a digest of the full value keyed per process (runFP8), so two
-// different long names stay distinguishable and the cut is visible, while
-// nothing in the output lets a reader confirm a guess about the cut tail.
+// capString cuts s to at most max bytes on a rune boundary, never inside a
+// redaction marker. A cut value ends in "~" and a digest of the full value
+// keyed per process (runFP8), so two different long values stay
+// distinguishable within a run and the cut is visible, while nothing in
+// the output lets a reader confirm a guess about the cut tail.
+//
+// The digest changes from one process to the next, so capString is for
+// values that are reported, never for ones that identify an asset
+// (Server.Name, Server.Project): builder.finish cuts those.
 func capString(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}
-	cut := max - 12
-	if cut < 0 {
-		cut = 0
+	return s[:cutPoint(s, max-12)] + "~" + runFP8(s)
+}
+
+// cutPoint returns where to cut s so that the head is at most n bytes: on a
+// rune boundary, and moved back to the start of a "[REDACTED" marker the
+// cut would otherwise split. The values cut here are already redacted, and
+// a marker's fingerprint is an UNKEYED digest of the credential (fp8) that
+// package privacy rewrites only inside a complete marker: a marker cut
+// before its ']' would ship all or part of that fingerprint as written.
+func cutPoint(s string, n int) int {
+	if n >= len(s) {
+		return len(s)
 	}
-	for cut > 0 && !utf8.RuneStart(s[cut]) {
-		cut--
+	if n < 0 {
+		n = 0
 	}
-	return s[:cut] + "~" + runFP8(s)
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	// A marker holds no '[', so a cut inside one leaves its '[' last.
+	if k := strings.LastIndexByte(s[:n], '['); k >= 0 && strings.HasPrefix(s[k:], "[REDACTED") &&
+		strings.IndexByte(s[k:n], ']') < 0 {
+		n = k
+	}
+	return n
 }
 
 // listEntryName names an entry of a list-shaped declaration.

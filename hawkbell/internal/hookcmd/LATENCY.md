@@ -351,3 +351,130 @@ binary in packaging and in the hook command, so it is the integrator's
 call. `modernc.org/sqlite` is in the full binary's init (the
 import-graph test in BUILD-C was not written: one binary cannot keep it
 out of the hook path; this measurement stands in for it).
+
+## Spool pruning in the hook (2026-11-12)
+
+The worker now deletes the account's own expired files that no daemon
+deletes: everything in the fallback spool in the home and in a
+`$HAWKBELL_SPOOL` directory, and the session state of the system spool
+(`spool.MaybePrune` in `internal/spool/prune.go`, called at the end of
+`appendAll` in `worker.go`, after the reply is written). Each directory is
+scanned at most once an hour, unless `retention.spool` is shorter or the
+previous scan stopped at its cap of 1,000 deletions; otherwise the call is
+one lstat of the directory's `.prune` marker, two when the directory does
+not exist.
+
+Measured against the base commit `6d0d308`. "With pruning" is `6d0d308`
+plus only this change (the files of `internal/spool` other than tests,
+`internal/hookcmd/worker.go` and `doc.go`, `internal/daemon/spoolrun.go`),
+because other packages in the working tree were being edited at the time.
+Both were built like the release (22,909,054 and 22,921,342 bytes). Same
+VM as above (4 vCPU), load average 0.6 to 1.9:
+
+```
+F=<scratch dir>
+git archive 6d0d308 hawkbell | tar -x -C $F/before    # and again into $F/after,
+                                                     # then copy the changed files into $F/after
+(cd $F/before/hawkbell && CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags '-s -w -buildid=' -o $F/bin/hb-before ./cmd/hawkbell)
+(cd $F/after/hawkbell  && CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags '-s -w -buildid=' -o $F/bin/hb-after  ./cmd/hawkbell)
+go build -o $F/bin/hooklatency ./tools/hooklatency
+# runs A and B (the new build first in each round):
+$F/bin/hooklatency -bin $F/bin/hb-after -alt $F/bin/hb-before -alttag 6d0d308 -dir "$(mktemp -d -p $F)" \
+    -hello $F/bin/hello -payload internal/hookio/testdata/claude/PreToolUse.json -n 300 -prune 3 -only "empty,kill switch,observe"
+# run C (order swapped):
+$F/bin/hooklatency -bin $F/bin/hb-before -alt $F/bin/hb-after -alttag spool-prune -dir "$(mktemp -d -p $F)" \
+    -payload internal/hookio/testdata/claude/PreToolUse.json -n 300 -prune 3 -only "kill switch,observe"
+# run D:
+$F/bin/hooklatency -bin $F/bin/hb-after -alt $F/bin/hb-before -alttag 6d0d308 -dir "$(mktemp -d -p $F)" \
+    -payload internal/hookio/testdata/claude/PreToolUse.json -n 300 -prune 100 -only "prune-due"
+```
+
+`-prune N` is new in `tools/hooklatency`: before every run of the
+"prune-due" case (observe, supervised, direct and `sh -c`) the case's spool
+gets N expired record files (64 KiB each, last written 100 hours ago) and
+a `.prune` marker older than an hour, so every run of the new build scans
+and deletes N files. The set-up is not timed. After each run set, the new
+build's prune-due spool held none of the expired files and the `6d0d308`
+spool held all of them.
+
+p50 / p90 / p99 ms, n = 300 per case and run, 0 non-zero exits in all
+runs:
+
+| case | run | `6d0d308` | with pruning |
+|---|---|---|---|
+| observe supervised, direct (scanned within the hour: one lstat) | A | 10.33 / 11.94 / 13.27 | 10.36 / 11.90 / 13.44 |
+| | B | 10.30 / 11.96 / 14.59 | 10.24 / 11.98 / 15.86 |
+| | C | 10.10 / 11.77 / 14.70 | 10.38 / 12.23 / 14.72 |
+| observe supervised, `sh -c` | A | 11.04 / 12.71 / 15.94 | 11.20 / 12.64 / 13.73 |
+| | B | 10.69 / 12.38 / 13.89 | 10.86 / 12.76 / 16.53 |
+| | C | 10.68 / 12.17 / 15.87 | 10.87 / 12.72 / 16.84 |
+| observe supervised, `bash -lc` | A | 18.44 / 20.67 / 23.28 | 18.68 / 20.84 / 24.04 |
+| | B | 18.27 / 20.64 / 28.16 | 18.45 / 21.37 / 26.56 |
+| | C | 18.37 / 20.52 / 23.38 | 18.40 / 21.27 / 24.71 |
+| observe unsupervised, direct | A | 5.51 / 6.63 / 8.69 | 5.61 / 6.71 / 8.03 |
+| | B | 5.51 / 6.54 / 9.82 | 5.58 / 6.61 / 8.11 |
+| | C | 5.47 / 6.62 / 8.11 | 5.58 / 6.71 / 9.25 |
+| observe prune-due, 3 files, direct | A | 9.69 / 11.04 / 13.32 | 10.08 / 11.61 / 13.56 |
+| | B | 9.64 / 11.06 / 15.46 | 9.93 / 11.39 / 15.06 |
+| | C | 9.57 / 11.13 / 16.31 | 9.99 / 11.71 / 13.75 |
+| observe prune-due, 3 files, `sh -c` | A | 10.79 / 12.30 / 14.32 | 11.05 / 12.75 / 16.54 |
+| | B | 10.74 / 12.46 / 16.24 | 11.01 / 12.67 / 20.64 |
+| | C | 10.72 / 12.59 / 16.79 | 10.99 / 12.70 / 15.24 |
+| observe prune-due, 100 files, direct | D | 10.52 / 12.20 / 15.87 | 12.57 / 14.12 / 16.12 |
+| observe prune-due, 100 files, `sh -c` | D | 11.42 / 13.32 / 15.04 | 13.42 / 15.47 / 17.62 |
+| kill switch (runs none of the new code) | A | 4.13 / 4.92 / 5.33 | 4.28 / 5.11 / 6.82 |
+| | B | 4.02 / 4.97 / 6.35 | 4.23 / 5.02 / 5.84 |
+| | C | 4.22 / 5.13 / 6.72 | 3.89 / 4.66 / 5.83 |
+
+Reading:
+
+- When no scan is due, the new build was between 0.06 ms faster and
+  0.28 ms slower at p50 in the twelve steady-state comparisons above. The
+  added work is three lstat calls per worker (strace of one worker run:
+  the spool directory and `/var/lib/hawkbell/spool/0`, to tell whether
+  `$HAWKBELL_SPOOL` names the system spool, and the `.prune` marker).
+  `go test -run '^$' -bench MaybePrune -benchtime 2000x -count 3
+  ./internal/spool` puts the marker check at 0.95 to 0.99 µs and the case
+  where the system spool is in use and the home has no fallback spool (two
+  failing lstats) at 1.57 to 1.62 µs. The kill-switch row, which runs none
+  of the new code, moved by +0.15 and +0.21 ms with the new build first in
+  each round and by -0.33 ms with it second: differences of this size are
+  the position in the round and run-to-run spread, not the change.
+- A due scan that deletes three files added 0.26 to 0.42 ms at p50 in
+  every run. That is more than the in-process benchmark of the same scan
+  (61 to 171 µs per call, `BenchmarkMaybePruneDue3`); the set-up recreates
+  the deleted files for the new build but overwrites existing ones for
+  `6d0d308`, which may account for part of the difference. It was not
+  separated. Such a scan runs at most once an hour per spool directory
+  (with the exceptions above).
+- Deleting 100 files in one scan added 2.0 ms at p50 (run D), for
+  example the first hook after an upgrade on a spool that grew for a
+  month. One scan deletes at most 1,000 files and leaves the rest to the
+  next hook.
+
+Not measured: guard and detect-in-hook modes (the scan runs after the
+reply is written, so it delays the process exit, not the decision), calls
+whose events are all excluded (`privacy.exclude`; they run the same call
+after their empty reply), the system-spool path through the full binary
+(benchmark only), macOS, Windows, and spools on network file systems.
+
+## Sources of the red-team figures in the earlier records (2026-11-12)
+
+Added after the design records were published; the sections above are
+unchanged.
+
+- The empty-hook baseline (1.7 / 2.5 / 8.5 ms p50 in "Results") is the
+  platform-parity reviewer's run of a hook binary through each launch path:
+  1.69 ms direct, 2.50 ms through `sh -c` and 8.45 ms through `bash -lc`,
+  300 runs each, with 0.95 ms for `/bin/true` in the same run
+  ([redteam/platform-parity.md](../../redteam/platform-parity.md), E4).
+  [design/BUILD-C.md](../../design/BUILD-C.md) section C1 calls it "an
+  empty hook"; E4 does not describe the binary.
+- The supervisor figures (1.3 to 3.5 ms direct, 3.5 to 7.5 ms supervised,
+  in "Supervised versus unsupervised") have no record in this repository.
+  They come from the detection-quality verifier's reply of 2026-11-11,
+  which the build task for this package repeated; the verifier's saved
+  output on the build machine holds the exit codes of its supervisor
+  prototype, not timings.
+- The spec that "The full `spoor` binary" names for the import-graph test
+  is [design/BUILD-C.md](../../design/BUILD-C.md), section C3.

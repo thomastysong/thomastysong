@@ -2,7 +2,7 @@
 
 Generated 2026-11-12 by `internal/bench` (`Runner.Replay`). Corpus: snapshot of /root/.claude/projects taken 2026-11-12T04:28:51Z, recorded before the rename from the working name spoor to hawkbell and read with that name rewritten as in the repository (`benchrun -old-name`: `RewriteOldName` in `internal/bench/oldname.go`).
 
-Regenerated after the rename from the working name spoor to hawkbell. The review appended below was written for the report of this benchmark made before the rename (2026-11-12, packs hash `5323a0c8ac33`, rule ids SPR-<PACK>-<NNN>). Compared with that report, with the old name and rule ids read as the new ones (`CompareRenamed`), every number, class, label and sample (time, thread, tool, label, reason) in the tables below is the same. The packs hash differs because the rename changed the rule ids and the name in the rule text. Event ids differ after their time prefix because they are keyed with the name, and evidence text differs where it holds the name.
+Regenerated after the rename from the working name spoor to hawkbell. The review appended below was written for the report of this benchmark made before the rename (2026-11-12, packs hash `5323a0c8ac33`, rule ids SPR-<PACK>-<NNN>). Compared with that report, with the old name and rule ids read as the new ones (`CompareRenamed`), every number, class, label and sample (time, thread, tool, label, reason) in the tables below is the same. The packs hash differs because the rename changed the rule ids and the name in the rule text, and because rules were changed after the rename (`git log -- internal/rules/packs`); none of these changes moved a number compared here. Event ids differ after their time prefix because they are keyed with the name, and evidence text differs where it holds the name.
 
 | Corpus | Value |
 |---|---|
@@ -14,7 +14,7 @@ Regenerated after the rename from the working name spoor to hawkbell. The review
 | Prompts | 30 |
 | First / last event | 2026-11-11T16:37:11Z / 2026-11-12T04:28:50Z |
 | Tool calls by kind | file_edit 151, file_list 10, file_read 360, file_write 475, mcp 9, other 87, shell 4046, subagent 25, web_fetch 24, web_search 150 |
-| Rules | 138 enabled (`agent-integrity@2026.11.0,coverage@2026.11.0,credential@2026.11.0,defense-evasion@2026.11.0,destructive@2026.11.0,execution@2026.11.0,exfiltration@2026.11.0,offensive@2026.11.0,persistence@2026.11.0,posture@2026.11.0,process@2026.11.0,sequence@2026.11.0,supply-chain@2026.11.0`, hash `82523dea0cec`) |
+| Rules | 138 enabled (`agent-integrity@2026.11.0,coverage@2026.11.0,credential@2026.11.0,defense-evasion@2026.11.0,destructive@2026.11.0,execution@2026.11.0,exfiltration@2026.11.0,offensive@2026.11.0,persistence@2026.11.0,posture@2026.11.0,process@2026.11.0,sequence@2026.11.0,supply-chain@2026.11.0`, hash `d3c2ecd19907`) |
 
 ## Limits
 
@@ -418,3 +418,50 @@ go run ./internal/bench/cmd/benchrun -replay $S/corpus -home /root -samples 5 \
 ```
 
 `benign-replay-before.json` is the first run over the same snapshot, before any of the tuning above.
+
+### The 05:17:47Z snapshot replayed again (2026-11-12)
+
+Written after the rename: this section uses the current names (HB-<PACK>-<NNN>, `hawkbell`).
+
+`live-benign-replay.md` (the "Second run" above) was not regenerated with the current packs (hash `d3c2ecd19907`; the intermediate packs `248f17ca7280` of the same day gave the same output), because its numbers do not stay the same. Its snapshot still exists and reads with the same counts as that report: 106 files, 13,165 events, 6,522 tool calls, 5,142 shell commands. Replayed with the current code and labels, read with `-old-name` and compared with the committed `live-benign-replay.json` through `-renamed-from` (the command at the end of this section), `benchrun` refuses to write the report and exits 1. It prints at most 20 differences, sorted by key (`maxRenamedDiffs` and `renamedDiff` in `internal/bench/renamed.go`). Its first eight lines, verbatim:
+
+```
+benchrun: -renamed-from bench/results/live-benign-replay.json: the reports differ:
+  engine.detections: "205" before the rename, "204" now
+  engine.matches: "1524" before the rename, "901" now
+  rules[HB-AGENT-012].hit_rate.hi: "0.005286424572374477" before the rename, "0.005469859987176058" now
+  rules[HB-AGENT-012].hit_rate.k: "23" before the rename, "24" now
+  rules[HB-AGENT-012].hit_rate.lo: "0.0023511282451745327" before the rename, "0.002474166717705396" now
+  rules[HB-AGENT-012].hit_rate.p: "0.003526525605642441" before the rename, "0.0036798528058877645" now
+  rules[HB-AGENT-012].hits: "23" before the rename, "24" now
+```
+
+To find the commit at which each number changed, `benchrun` was also built from `git archive` of commit `c384122` (the release code; the parent of the path canonicalisation commit) and of commit `253369f` (path canonicalisation). Each build replayed this snapshot with `-samples 5` and no labels:
+
+| Run over the 05:17:47Z snapshot | Detections | `engine.matches` |
+|---|---|---|
+| committed `live-benign-replay.json` | 205 | 1,524 |
+| build of `c384122` | 206 | 1,525 |
+| build of `253369f` | 204 | 901 |
+| current code (`-old-name`) | 204 | 901 |
+
+The current code and the `253369f` build give the same hits for every rule and the same engine counters. Over the 04:28:51Z snapshot the same two builds give 1,420 and 860 matches, the numbers in "After path canonicalisation", and 182 detections each.
+
+Rule by rule, the current code replayed with labels and without `-renamed-from`, compared with the committed report and the two builds:
+
+- Hits changed for six rules. Two change between the committed run and the `c384122` build, as "Rerun with the release code" gives for the 04:28:51Z snapshot: HB-EXEC-007 10 to 12 (one new sample is a run of `deploy/fleet/verify.sh` with `shell.inherited_kinds: written_script`) and HB-EXFIL-013 39 to 38 (the `build:mcpconf` heredoc `01a1cbc1-58a0` no longer fires). The other four change between the `c384122` and `253369f` builds. Two of them are the changes "After path canonicalisation" gives for the 04:28:51Z snapshot: HB-AGENT-012 23 to 24 and HB-CRED-001 6 to 5 (`01a1cb93-6914` no longer fires). The other two fall after 04:28:51Z: HB-CRED-005 3 to 2 and HB-SEQ-006 2 to 1. Both lose the same event, `01a1ce21-753c` (`review:fleet`: an `env -u ...` wrapper around osqueryd, run in a loop over glob patterns, that the analyser read as a token print), labelled `false_positive` for both rules; the `c384122` build samples it for both rules and the `253369f` build for neither. Each of the 94 transcript files of the 04:28:51Z snapshot is a byte prefix of the same file in this snapshot (checked with `cmp -n`).
+- `engine.matches` counts every rule match before suppression and before the check that a rule emits (`Engine.evaluate` in `internal/rules/engine.go`). No detection was suppressed in these runs (`suppressed` and `suppressed_operator` are 0), so the matches beyond the detections are matches of the eight HB-FLOW marker rules, which set flags and emit nothing (`emit: false` in `sequence.yaml`; the same eight rules at both commits). Those fell from 1,319 (`c384122`) to 697 (`253369f`), at the same commit as over the 04:28:51Z snapshot. Which marker rules lost them was not measured: the counter is a total.
+- Alerts: the same 4 hits (HB-EVADE-003 3, HB-EVADE-002 1) in the same 3 threads, now labelled 1 `red_team`, 2 `rule_bug` and 1 `false_positive`. That is the 3 false alerts in 6,522 tool calls that "Rerun with the release code" gives for this snapshot.
+- Labels changed, hits unchanged: HB-CRED-004, HB-CRED-007, HB-CRED-012, HB-EVADE-001, HB-EVADE-002, HB-EVADE-003, HB-OFFSEC-008, from the release review. Two sampled hits have no label: HB-AGENT-012 `01a1cdce-0ef0` and the HB-EXEC-007 `verify.sh` run.
+- Threads with a finding-class hit: 14 to 13 of 106 files. Alert and signal threads are unchanged (3 and 40).
+
+Each of the snapshot's 106 transcript files is a byte prefix of the same file in the 10:27:00Z snapshot that `release-benign-replay.md` replays (`cmp -n`), so that report covers these sessions with the current labels. It supersedes `live-benign-replay.md`, which is kept as the record of the earlier run.
+
+```
+go run ./internal/bench/cmd/benchrun -replay <snapshot taken 05:17:47Z> -home /root -samples 5 -old-name \
+    -alias "$S=\$S" -alias "<temp root>=\$T" -alias "<session id>=<session>" \
+    -alias "<checkout of this repository>=\$REPO" -alias "<research checkout>=\$ADR" \
+    -corpus-name "snapshot of /root/.claude/projects taken 2026-11-12T05:17:47Z" \
+    -labels bench/replay-labels.yaml -prefix live- \
+    -renamed-from bench/results/live-benign-replay.json -out <scratch directory>
+```

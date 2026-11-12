@@ -61,6 +61,33 @@ func rmTargetClass(t arg) string {
 	return ""
 }
 
+// joinedTargetClass classifies an operand of a recursive delete at the
+// directory a cd earlier on this command line moved to, so that "cd / &&
+// rm -rf home" is tagged as "rm -rf /home" is and "cd C:\Users && rd /s
+// alice" as "rd /s C:\Users\alice" is. rmTargetClass reads the operand as
+// written; this adds the class of where it lands. It returns "" when no cd
+// on the line set a directory the analysis knows, when the operand does
+// not depend on that directory (rooted, or an unresolved expansion), and
+// for an operand whose last component is "." or "..": rm refuses those,
+// and the class of a bare one as written (rm_recursive_wildcard) stays.
+func (a *analyzer) joinedTargetClass(t arg) string {
+	if a.cwd == "" || a.cwdLost || t.dyn || t.guard || t.proc || rootedDir(t.s) {
+		return ""
+	}
+	last := strings.TrimRight(strings.ReplaceAll(t.s, "\\", "/"), "/")
+	if i := strings.LastIndexByte(last, '/'); i >= 0 {
+		last = last[i+1:]
+	}
+	if last == "." || last == ".." {
+		return ""
+	}
+	p, _ := a.canon(t.s)
+	if p == "" {
+		return ""
+	}
+	return rmTargetClass(arg{s: p, glob: t.glob})
+}
+
 func hRm(a *analyzer, c *simple, in flow, out *flow) {
 	if c.dialect != Posix && winDelete(a, c) {
 		return
@@ -76,6 +103,9 @@ func hRm(a *analyzer, c *simple, in flow, out *flow) {
 			continue
 		}
 		if cls := rmTargetClass(t); cls != "" {
+			a.destructive(cls)
+		}
+		if cls := a.joinedTargetClass(t); cls != "" {
 			a.destructive(cls)
 		}
 		if noPreserve {

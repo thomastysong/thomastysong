@@ -223,7 +223,7 @@ func TestFitLine(t *testing.T) {
 
 func TestFilesShrinksOversizeEvents(t *testing.T) {
 	dir := t.TempDir()
-	s, err := NewFiles(FilesOptions{Dir: dir}) // default 48 KiB
+	s, err := NewFiles(FilesOptions{Dir: dir}) // default 16 KiB
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,9 +238,8 @@ func TestFilesShrinksOversizeEvents(t *testing.T) {
 		t.Fatalf("lines = %d", len(lines))
 	}
 	for _, l := range lines {
-		// Fluent Bit's tail buffer is 64k in the shipped config; the default
-		// limit leaves room below it.
-		if len(l)+1 > 48<<10 {
+		// The default limit is output.max_line_bytes' default (16 KiB).
+		if len(l)+1 > 16<<10 {
 			t.Errorf("line of %d bytes exceeds the default limit", len(l)+1)
 		}
 	}

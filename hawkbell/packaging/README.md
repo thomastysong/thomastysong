@@ -12,7 +12,7 @@ are fixed, because the systemd unit, the launchd plist, the Fleet scripts
 
 | path | what | tested here |
 |---|---|---|
-| `systemd/hawkbell.service` | the Linux unit (hardening, `Group=hawkbell`, capability bounding set) | `systemd-analyze verify` (systemd 255): as shipped, on a host without the binary, its only message is `Command /usr/bin/hawkbell is not executable`; with `ExecStart` naming an existing binary it reports nothing (not in a run record below: rerun the command to check). Installed by the packages below, never started under systemd ([docs/LIMITATIONS.md](../docs/LIMITATIONS.md)) |
+| `systemd/hawkbell.service` | the Linux unit (hardening, `Group=hawkbell`, capability bounding set) | `systemd-analyze verify` (systemd 255): as shipped, on a host without the binary, its only message is `Command /usr/bin/hawkbell is not executable`; with `ExecStart` naming an existing binary it reports nothing (section "systemd-analyze verify (2026-11-12)" below). Installed by the packages below, never started under systemd ([docs/LIMITATIONS.md](../docs/LIMITATIONS.md)) |
 | `launchd/com.github.thomastysong.hawkbell.plist` | the macOS LaunchDaemon | no (no macOS host) |
 | `windows/install-service.ps1` | Windows service install/update/uninstall | no (no Windows host, no pwsh) |
 | `windows/hawkbell.wxs` | WiX v4 installer **sketch** | no: never compiled |
@@ -182,6 +182,29 @@ rename) reports the same for the same install in the same container.
 `go test -count=1 ./packaging/...`: 18 tests and subtests, all passed.
 Not rerun: the goreleaser check and snapshot (goreleaser is not installed
 here).
+
+### systemd-analyze verify (2026-11-12)
+
+Static check of `systemd/hawkbell.service` at commit 6d0d308 (the unit is
+unchanged in the working tree), on the build host: systemd 255
+(255.4-1ubuntu8.18), no `hawkbell` group, `/usr/bin/hawkbell` absent. `$S`
+is a scratch directory holding a binary built with `go build ./cmd/hawkbell`.
+
+```
+$ systemd-analyze verify packaging/systemd/hawkbell.service; echo "exit $?"
+hawkbell.service: Command /usr/bin/hawkbell is not executable: No such file or directory
+exit 1
+$ sed "s|^ExecStart=/usr/bin/hawkbell |ExecStart=$S/hawkbell |" packaging/systemd/hawkbell.service > $S/sa/hawkbell.service
+$ systemd-analyze verify $S/sa/hawkbell.service; echo "exit $?"
+exit 0
+```
+
+The second run printed nothing. `verify` loads and checks the unit; it
+does not start it, so this says nothing about the hardening at run time:
+the unit has still never been started under systemd (no systemd in the
+package test containers, a fake `systemctl` in the Fleet script test).
+`deploy/fleet/scripts/install-hawkbell.sh` embeds the same directives
+(`TestEmbeddedServiceDefinitions`) and was not checked separately.
 
 ## macOS and Windows
 

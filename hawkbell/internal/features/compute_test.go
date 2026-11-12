@@ -577,7 +577,7 @@ func TestHostileInputs(t *testing.T) {
 // download inside it, a temporary file elsewhere, and a short or foreign id
 // still are.
 func TestOutputUntrustedOwnTemp(t *testing.T) {
-	const sid = "142ab6a6-828d-5c94-9577-a504570fae11"
+	const sid = "5f0c3a1e-2b4d-4c6e-8a9b-0d1e2f3a4b5c"
 	scratch := "/tmp/claude-0/-home-u/" + sid + "/scratchpad"
 	post := func(kind event.ToolKind, tg *event.Target, id string) *event.Event {
 		return &event.Event{Kind: event.KindActivity, Type: event.TypeToolPost, Tool: &event.Tool{Kind: kind}, Target: tg,

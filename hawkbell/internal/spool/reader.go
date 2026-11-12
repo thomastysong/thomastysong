@@ -70,7 +70,7 @@ func NewReader(o ReaderOptions) *Reader {
 		o.PerUIDPerSecond = 200
 	}
 	if o.Retain <= 0 {
-		o.Retain = 72 * time.Hour
+		o.Retain = DefaultRetention
 	}
 	if o.Now == nil {
 		o.Now = time.Now

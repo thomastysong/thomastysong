@@ -145,7 +145,8 @@ func (d dialectSpec) entries(p params) ([]entry, bool) {
 // blocking is what the operator asked for. VERIFIED: hooks.md "Other exit
 // codes" ("a hook that can't start is a non-blocking error too") and
 // "Block the action when a hook fails" ("Without onFailure set, the same
-// missing script is a non-blocking error"), research/dl_hooks/hooks.md.
+// missing script is a non-blocking error"), code.claude.com/docs/en/hooks.md
+// as read on 2026-11-11 (a downloaded copy, not in this repository).
 func claudeHandler(p params, ev hookio.HookEvent, async bool) jobj {
 	h := jobj{
 		{"type", "command"},
@@ -234,8 +235,10 @@ func copilotHandler(p params, ev hookio.HookEvent, async bool) jobj {
 // a missing binary would deny the event: the command carries the guard. On
 // PowerShell it appends "; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }"
 // to the command, which the guarded form never reaches.
-// VERIFIED: packages/core/src/hooks/hookRunner.ts (convertPlainTextToHookOutput
-// and the PowerShell suffix), redteam/verify-platform-parity/dl/gemini-hookRunner.ts.
+// VERIFIED: google-gemini/gemini-cli main as read on 2026-11-11,
+// packages/core/src/hooks/hookRunner.ts (convertPlainTextToHookOutput
+// and the PowerShell suffix); redteam/platform-parity.md lists the
+// download under "Primary sources fetched".
 func geminiHandler(p params, ev hookio.HookEvent, async bool) jobj {
 	cmd := posixCommand(p.binary, p.agentID, p.modeFor(false))
 	if p.goos == "windows" {

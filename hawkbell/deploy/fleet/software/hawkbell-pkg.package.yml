@@ -1,3 +1,7 @@
+# PLACEHOLDER: no build produces this package yet. .goreleaser.yaml makes
+# the deb and rpm only; the pkg needs packaging/macos/build-pkg.sh on macOS,
+# which has never been run. Do not deploy this file until such a package
+# exists at url.
 # EXAMPLE, Fleet Premium only. Not validated against a server (the
 # verification server runs Fleet Free) and the macOS package is untested on
 # hardware. Reading other users' transcripts needs Full Disk Access for

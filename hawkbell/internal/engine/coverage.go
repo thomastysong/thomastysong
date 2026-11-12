@@ -9,7 +9,8 @@ import (
 	"github.com/thomastysong/thomastysong/hawkbell/internal/state"
 )
 
-// Coverage (BUILD-C C2 item 4, DECISIONS A1, A3, A6).
+// Coverage (design/BUILD-C.md section C2 item 4, design/DECISIONS.md A1,
+// A3, A6).
 //
 // Per (agent, account) the engine remembers when each surface last
 // delivered and which agent processes the process monitor reported. The

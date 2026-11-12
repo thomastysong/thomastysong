@@ -4,7 +4,7 @@
 // writes what may leave the host to the outbox, keeps the rest in the
 // local ring and feeds the state database that osquery and Fleet read.
 //
-// # Stages (BUILD-C section C2; the reasons are in design/DECISIONS.md)
+// # Stages (design/BUILD-C.md section C2; the reasons are in design/DECISIONS.md)
 //
 //  1. Exclusions first: privacy.Policy.Excluded on identity fields only,
 //     before any content is looked at. An excluded session stays excluded

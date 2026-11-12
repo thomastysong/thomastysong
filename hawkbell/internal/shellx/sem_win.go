@@ -677,6 +677,9 @@ func winDelete(a *analyzer, c *simple) bool {
 		if cls := rmTargetClass(t); cls != "" {
 			a.destructive(cls)
 		}
+		if cls := a.joinedTargetClass(t); cls != "" {
+			a.destructive(cls)
+		}
 	}
 	return true
 }

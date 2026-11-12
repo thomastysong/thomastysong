@@ -13,7 +13,7 @@ import (
 // it is the question a static rule set has to answer, because every
 // operator here is a documented approval-parser bypass or an obvious
 // variation an agent produces unprompted (research/threats.md rows 9, 23,
-// 24; red-team detection-quality section 7).
+// 24; redteam/detection-quality.md section 7).
 type Operator struct {
 	Name string
 	Doc  string

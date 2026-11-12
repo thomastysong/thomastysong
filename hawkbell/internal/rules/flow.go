@@ -21,8 +21,9 @@ import (
 	"github.com/thomastysong/thomastysong/hawkbell/internal/pathcanon"
 )
 
-// Data flow of credential VALUES within a session (threat research S1,
-// red-team precision control 2): when a tool result comes from a
+// Data flow of credential VALUES within a session (research/threats.md
+// section 4, S1; redteam/detection-quality.md section 9, precision control 2):
+// when a tool result comes from a
 // credential-class source, the engine keeps keyed fingerprints of the
 // values in it; a later command, URL or MCP argument that carries one of
 // those values (raw, URL-encoded, base64 or hex) sets session.secret_flow.

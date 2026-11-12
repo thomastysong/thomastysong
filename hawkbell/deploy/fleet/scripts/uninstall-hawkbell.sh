@@ -28,6 +28,7 @@ if [ $os = linux ]; then
 	if command -v systemctl >/dev/null 2>&1; then
 		systemctl disable --now hawkbell >/dev/null 2>&1 || true
 	fi
+	# 10-outbox-group.conf: a drop-in earlier install scripts wrote.
 	if [ -f "$UNIT" ] || [ -d "$UNIT.d" ]; then
 		rm -f "$UNIT" "$UNIT.d/10-outbox-group.conf"
 		rmdir "$UNIT.d" 2>/dev/null || true

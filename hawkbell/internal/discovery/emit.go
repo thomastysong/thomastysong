@@ -67,13 +67,12 @@ func normalizePath(p string) string {
 	return c
 }
 
-// observationDigest is the SHA256 reported for catalogued products. The
-// event contract describes it as a binary hash for agents; discovery does
-// not hash binaries (a native agent build is hundreds of megabytes, read on
-// every endpoint at every scan), so the field carries a digest of what was
-// observed instead: version, install path, evidence, risk flags and
-// telemetry. Differential inventory compares this value, so a settings
-// change that adds a risk flag re-emits the agent.
+// observationDigest is the SHA256 reported for catalogued products.
+// Discovery does not hash binaries (a native agent build is hundreds of
+// megabytes, read on every endpoint at every scan), so the field carries a
+// digest of what was observed instead: version, install path, evidence,
+// risk flags and telemetry. Differential inventory compares this value, so
+// a settings change that adds a risk flag re-emits the agent.
 func observationDigest(a *event.Asset) string {
 	parts := []string{"obs/v1", a.Version, normalizePath(a.Path), strings.Join(a.Evidence, ","), strings.Join(a.RiskFlags, ",")}
 	if a.Telemetry != nil {

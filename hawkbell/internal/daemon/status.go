@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/thomastysong/thomastysong/hawkbell/internal/bundle"
@@ -19,7 +20,9 @@ import (
 // Snapshot is the daemon's side of `hawkbell doctor`: what can be read from
 // disk about an installation, without talking to a running daemon and
 // without writing anything (the state database and Fluent Bit's tail
-// databases are opened read-only). Problems lists, in plain words, what an
+// databases are opened read-only; a tail database locked against readers
+// is copied into a private temporary directory that is removed, see
+// outboxStatus). Problems lists, in plain words, what an
 // operator should look at; an empty list means nothing was found wrong, not
 // that the daemon is running (State.Fresh says whether it wrote a heartbeat
 // recently).
@@ -326,7 +329,11 @@ func parseTS(s string) time.Time {
 }
 
 // outboxStatus measures the outbox and its consumers without changing
-// anything (no deletion, no saved coverage, no scratch copies).
+// anything (no deletion, no saved coverage). A tail database that cannot
+// be read in place (Fluent Bit's db.locking true) is read as the pruner
+// reads it, through a copy, here in a private temporary directory that is
+// removed before returning; it costs SQLite's 2 s busy timeout first. If
+// that directory cannot be made, the database is reported unreadable.
 func outboxStatus(cfg *config.Config, now time.Time) OutboxStatus {
 	o := OutboxStatus{Dir: cfg.OutboxDir()}
 	var shipCons []consumer
@@ -337,10 +344,17 @@ func outboxStatus(cfg *config.Config, now time.Time) OutboxStatus {
 		shipCons = append(shipCons, &shipperConsumer{name: "otlp", path: filepath.Join(cfg.CheckDir(), "shipper-otlp.checkpoint")})
 	}
 	spec := cfg.Output.FluentBit.TailDB
+	copyDir := ""
+	if strings.TrimSpace(spec) != "" {
+		if d, err := os.MkdirTemp("", "hawkbell-status-"); err == nil {
+			defer os.RemoveAll(d)
+			copyDir = d
+		}
+	}
 	p := newOutboxPruner(pruneOptions{
 		dir: cfg.OutboxDir(),
 		consumers: func() []consumer {
-			return append(tailDBConsumers(spec, ""), shipCons...)
+			return append(tailDBConsumers(spec, copyDir), shipCons...)
 		},
 		statePath: filepath.Join(cfg.CheckDir(), "outbox-consumers.json"),
 		readOnly:  true,

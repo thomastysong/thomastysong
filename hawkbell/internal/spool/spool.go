@@ -6,7 +6,8 @@
 // re-derives identity from the file owner and re-runs detection itself.
 //
 // The spool is user-writable by construction, so the reader treats every
-// line as a claim, never as evidence (red-team findings E1, PP-4, F4):
+// line as a claim, never as evidence (red-team findings: redteam/evasion.md
+// E1, redteam/platform-parity.md PP-4, redteam/privacy-sensor-security.md F4):
 //
 //   - only activity records are accepted; a line claiming to be a
 //     detection, health, inventory or posture record is counted and dropped,
@@ -23,6 +24,15 @@
 // exclusive lock that also guards the per-stream sequence counter, so
 // concurrent hook processes never interleave and sequence numbers are
 // gapless in file order.
+//
+// Retention: the daemon's reader deletes a fully read record file from a
+// system spool once its last write is older than retention.spool. The hook
+// prunes the rest itself (MaybePrune, prune.go), by the same setting: the
+// session state in a system spool (also when $HAWKBELL_SPOOL names one),
+// and record files, session state and temporary files in the fallback
+// spool in a home directory and in any other $HAWKBELL_SPOOL directory,
+// where no daemon deletes. It does so only when a hook runs (Location.Prune
+// lists the directories).
 package spool
 
 import (
@@ -80,31 +90,11 @@ type contentLines struct {
 	FileContent string         `json:"file_content,omitempty"`
 }
 
-// Dir resolves where a hook process running as uid may append, in order:
-// $HAWKBELL_SPOOL; <dataDir>/spool/<uid>/ when it exists, is owned by the
-// caller and is private (0700); else the caller's own state directory. It
-// never returns a shared, world-writable directory.
+// Dir is Locate's directory: where a hook process running as uid may
+// append.
 func Dir(dataDir, uid, home string) (string, error) {
-	if d := os.Getenv(EnvSpool); d != "" {
-		if err := os.MkdirAll(d, 0o700); err != nil {
-			return "", err
-		}
-		return d, checkPrivate(d, uid)
-	}
-	if dataDir != "" && uid != "" {
-		sys := filepath.Join(dataDir, "spool", uid)
-		if checkPrivate(sys, uid) == nil {
-			return sys, nil
-		}
-	}
-	d := platform.UserDirs(home).Spool
-	if d == "" {
-		return "", errors.New("spool: no user directory")
-	}
-	if err := os.MkdirAll(d, 0o700); err != nil {
-		return "", err
-	}
-	return d, checkPrivate(d, uid)
+	l, err := Locate(dataDir, uid, home)
+	return l.Dir, err
 }
 
 // Writer appends records for one user.
@@ -267,7 +257,20 @@ func (w *Writer) LoadState(agentID, sessionID string) ([]byte, bool) {
 	return b, true
 }
 
+// stateLockWait bounds how long SaveState waits for the spool's lock.
+// SaveState runs before the hook's reply, and any process of the user can
+// hold the lock, so it never waits longer: it then saves without the lock.
+// Tests change it.
+var stateLockWait = 100 * time.Millisecond
+
 // SaveState stores the guard-mode state for a session.
+//
+// The file is replaced under the spool's lock, the lock a MaybePrune scan
+// holds from the Lstat that finds a state file expired to its Remove, so a
+// scan cannot delete a state file that was replaced in between. The wait
+// for the lock is bounded by stateLockWait; when it runs out (another
+// process held the lock that long) the file is replaced without it, and a
+// scan running at that moment can still delete it.
 func (w *Writer) SaveState(agentID, sessionID string, b []byte) error {
 	if len(b) > MaxState {
 		return fmt.Errorf("spool: state of %d bytes exceeds %d", len(b), MaxState)
@@ -276,7 +279,25 @@ func (w *Writer) SaveState(agentID, sessionID string, b []byte) error {
 	if err := os.MkdirAll(d, 0o700); err != nil {
 		return err
 	}
+	if unlock, ok := lockDirWait(w.dir, stateLockWait); ok {
+		defer unlock()
+	}
 	return writeFileAtomic(filepath.Join(d, stateName(agentID, sessionID)), b, 0o600)
+}
+
+// lockDirWait takes dir's lock (lockDir), polling tryLockDir until wait
+// runs out: ok is false when another process held it all that time.
+func lockDirWait(dir string, wait time.Duration) (unlock func(), ok bool) {
+	end := time.Now().Add(wait)
+	for {
+		if unlock, ok := tryLockDir(dir); ok {
+			return unlock, true
+		}
+		if !time.Now().Before(end) {
+			return nil, false
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 // writeFileAtomic writes via a temporary file and rename, refusing to

@@ -85,11 +85,18 @@ rules:
       binary or the logs does not. A write through a link made earlier on
       the same command line is also recorded under the path it reaches.
       The path list is
-      explicit and anchored because the sensor_files path class and the
-      analyser's sensor_tamper fact also match any path that merely
-      contains these names, which in the benign replay meant this project's
-      own source tree, packaging staging roots and test fixtures (8 false
-      alerts before tuning). The anchors hold because every path the rule
+      explicit and anchored because the analyser's sensor_tamper fact
+      matches any path that merely contains a directory from its own list
+      (sensorDirs in internal/shellx: several of these locations and other
+      security tools' directories), so /tmp/stage/etc/hawkbell/x matches
+      it, and the sensor_files path class also
+      covers other security tools, matches the per-user locations
+      (.local/state/hawkbell, .config/hawkbell, Application
+      Support/hawkbell) at any depth and holds for any glob that could
+      reach a listed file (/usr/local/bin/*). Matching sensor_files raised
+      8 false alerts in the benign replay before tuning, on this project's
+      own source tree, build output, packaging staging roots and fake home
+      directories in scratch space. The anchors hold because every path the rule
       reads is in canonical form (shell.writes, shell.deletes,
       shell.changes, path.targets: "." and ".." resolved, duplicate
       separators collapsed, /proc/<id>/root stripped, joined with a

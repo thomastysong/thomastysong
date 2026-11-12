@@ -17,21 +17,22 @@ import (
 
 // transcriptRunner follows agents' session logs.
 //
-// Start at end of file (BUILD-C addendum): files that already exist when
-// hawkbell first looks at a root are not read back. transcript.Tailer applies
-// TailerOptions.FromStart to every file it has not seen before, so one
-// tailer cannot both skip what existed and read new sessions from their
-// first line. The runner therefore primes: when roots are new (first start
-// on this data directory, a new account, a configuration home the process
-// monitor just reported), a tailer with FromStart false makes one pass over
-// those new roots only, which records the current end of every file in
-// them; its checkpoints are committed and the steady tailer (FromStart
-// true) then loads them, so every file created afterwards, in any root, is
-// read from its first line. Priming only the new roots matters: a session
-// file created in an admitted root since the steady tailer's last poll did
-// not exist when its root was first seen and must not be started at its
-// end because some other root appeared. The steady tailer follows admitted
-// roots only, so a root whose priming failed is never read from the start.
+// Start at end of file (design/BUILD-C.md, Addendum): files that already
+// exist when hawkbell first looks at a root are not read back.
+// transcript.Tailer applies TailerOptions.FromStart to every file it has
+// not seen before, so one tailer cannot both skip what existed and read new
+// sessions from their first line. The runner therefore primes: when roots
+// are new (first start on this data directory, a new account, a
+// configuration home the process monitor just reported), a tailer with
+// FromStart false makes one pass over those new roots only, which records
+// the current end of every file in them; its checkpoints are committed and
+// the steady tailer (FromStart true) then loads them, so every file created
+// afterwards, in any root, is read from its first line. Priming only the
+// new roots matters: a session file created in an admitted root since the
+// steady tailer's last poll did not exist when its root was first seen and
+// must not be started at its end because some other root appeared. The
+// steady tailer follows admitted roots only, so a root whose priming failed
+// is never read from the start.
 //
 // The admitted roots are kept in the checkpoint directory with the time
 // each was last listed, and a root that is not listed is remembered for

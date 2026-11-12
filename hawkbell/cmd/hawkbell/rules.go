@@ -88,7 +88,9 @@ func (a *app) rulesList(args []string) int {
 }
 
 func (a *app) rulesTest(args []string) int {
-	set, info, r, code, done := a.rulesLoad("rules test", args, "Runs every inline rule test against one engine built from the whole set. Exits 4 when a test fails.", nil)
+	set, info, r, code, done := a.rulesLoad("rules test", args, `Runs every inline rule test (disabled rules included), each on a fresh engine
+built from the whole set, so a test also sees the flags other rules set.
+Exits 4 when a test fails.`, nil)
 	if done {
 		return code
 	}

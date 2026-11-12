@@ -13,8 +13,9 @@ import (
 	"github.com/thomastysong/thomastysong/hawkbell/internal/event"
 )
 
-// TestScenarios are the scenario tests BUILD-C C2 requires: synthetic event
-// sequences from each surface, asserting what the sinks received.
+// TestScenarios are the scenario tests design/BUILD-C.md section C2
+// requires: synthetic event sequences from each surface, asserting what the
+// sinks received.
 func TestScenarios(t *testing.T) {
 	standard := func(c *config.Config, o *Options) { c.Privacy.Profile = "standard" }
 	signals := func(c *config.Config, o *Options) { c.Rules.MinClass = "signal" }

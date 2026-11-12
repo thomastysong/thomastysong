@@ -550,9 +550,12 @@ const fleetScriptImage = "mirror.gcr.io/library/redis:7"
 // (orbit then overrides osquery's autoload file) and installs nothing;
 // install writes the binary, extension, unit and osquery's default
 // extensions.load (other lines kept, also a last line without a newline)
-// and schedules a detached osquery restart; a second run changes nothing;
-// orbit's extensions.load is never written; the atc tier unregisters and
-// works with orbit's file in use; uninstall is idempotent and keeps data.
+// and schedules a detached osquery restart; the unit carries
+// Group=hawkbell and no drop-in is written; a second run changes nothing;
+// orbit's extensions.load is never written; the atc tier unregisters,
+// deletes the hawkbell.ext copy and works with orbit's file in use;
+// uninstall is idempotent, keeps data and removes the group drop-in that
+// the install script wrote up to commit 6d0d308.
 func TestFleetInstallScripts(t *testing.T) {
 	if os.Getenv("HAWKBELL_E2E_FLEET") == "" {
 		t.Skip("set HAWKBELL_E2E_FLEET=1 (needs docker and " + fleetScriptImage + ")")
@@ -672,11 +675,10 @@ func TestFleetInstallScripts(t *testing.T) {
 		t.Errorf("extensions.load = %q", b)
 	}
 	for p, mode := range map[string]os.FileMode{
-		filepath.Join(root, "usr", "bin", "hawkbell"):                                                 0o755,
-		filepath.Join(root, "usr", "lib", "hawkbell", "hawkbell.ext"):                                 0o755,
-		filepath.Join(root, "etc", "systemd", "system", "hawkbell.service"):                           0o644,
-		filepath.Join(root, "etc", "systemd", "system", "hawkbell.service.d", "10-outbox-group.conf"): 0o644,
-		filepath.Join(root, "var", "lib", "hawkbell"):                                                 0o711 | os.ModeDir,
+		filepath.Join(root, "usr", "bin", "hawkbell"):                       0o755,
+		filepath.Join(root, "usr", "lib", "hawkbell", "hawkbell.ext"):       0o755,
+		filepath.Join(root, "etc", "systemd", "system", "hawkbell.service"): 0o644,
+		filepath.Join(root, "var", "lib", "hawkbell"):                       0o711 | os.ModeDir,
 		load: 0o644,
 	} {
 		fi, err := os.Stat(p)
@@ -692,9 +694,14 @@ func TestFleetInstallScripts(t *testing.T) {
 		t.Error("config not written with `hawkbell export config`")
 	}
 	// StateDirectory= re-owns the data directory to the service's group at
-	// each start, so the service runs with the outbox readers' group.
-	if b, _ := os.ReadFile(filepath.Join(root, "etc", "systemd", "system", "hawkbell.service.d", "10-outbox-group.conf")); string(b) != "[Service]\nGroup=hawkbell\n" {
-		t.Errorf("group drop-in = %q", b)
+	// each start, so the unit runs the service with the outbox readers'
+	// group; no drop-in repeats it.
+	if b, _ := os.ReadFile(filepath.Join(root, "etc", "systemd", "system", "hawkbell.service")); !strings.Contains(string(b), "\n[Service]\n") ||
+		!strings.Contains(string(b), "\nGroup=hawkbell\n") || !strings.Contains(string(b), "\nStateDirectory=hawkbell\n") {
+		t.Errorf("unit lacks Group=hawkbell or StateDirectory=hawkbell:\n%s", b)
+	}
+	if _, err := os.Stat(filepath.Join(root, "etc", "systemd", "system", "hawkbell.service.d")); !os.IsNotExist(err) {
+		t.Errorf("install wrote hawkbell.service.d (%v); the unit carries Group=", err)
 	}
 	// 4. Again: nothing changes, the service is only started.
 	o, code = run("install-hawkbell.sh")
@@ -715,6 +722,12 @@ func TestFleetInstallScripts(t *testing.T) {
 	if got := lines(load); strings.Join(got, ",") != "/usr/lib/other/other.ext" {
 		t.Errorf("atc tier left %v", got)
 	}
+	// Nothing loads the copy any more: the atc tier deletes it.
+	for _, p := range []string{"usr/lib/hawkbell/hawkbell.ext", "usr/lib/hawkbell"} {
+		if _, err := os.Stat(filepath.Join(root, p)); !os.IsNotExist(err) {
+			t.Errorf("atc tier left %s (%v)", p, err)
+		}
+	}
 	readLog()
 	writeFile(t, orbitLoad, nil)
 	// 6. Post-install registration of a packaged binary, twice.
@@ -727,7 +740,9 @@ func TestFleetInstallScripts(t *testing.T) {
 	if got := lines(load); len(got) != 2 {
 		t.Errorf("after register-extension: %v", got)
 	}
-	// 7. Uninstall, twice: data kept, other autoload lines kept.
+	// 7. Uninstall, twice: data kept, other autoload lines kept, and the
+	// group drop-in an earlier install script wrote removed.
+	writeFile(t, filepath.Join(root, "etc", "systemd", "system", "hawkbell.service.d", "10-outbox-group.conf"), []byte("[Service]\nGroup=hawkbell\n"))
 	if o, code = run("uninstall-hawkbell.sh"); code != 0 || !strings.Contains(o, "restarts in 10 s") {
 		t.Errorf("uninstall: exit %d\n%s", code, o)
 	}

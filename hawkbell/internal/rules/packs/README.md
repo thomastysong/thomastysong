@@ -29,7 +29,8 @@ describes.
 
 The packs implement the detection catalogue of `research/threats.md`
 sections 3 (R01 to R54) and 4 (S1 to S12). That file is the project's
-threat research, kept with its design notes outside this repository.
+threat research, published as a historical design record in
+[research/threats.md](../../../research/threats.md).
 Every entry is cited in some rule's `references`, except these six. Each
 needs a fact the sensor does not collect yet, so writing a rule now would
 mean matching command text, which the linter forbids.

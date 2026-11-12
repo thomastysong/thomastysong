@@ -70,7 +70,7 @@ cross: ## build every release platform into dist/<os>_<arch>/
 	done
 
 package: ## deb and rpm for PKG_ARCHS with nfpm (packaging/linux/nfpm.yaml stages dist/package/hawkbell)
-	@command -v $(NFPM) >/dev/null 2>&1 || { echo "nfpm not found: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest"; exit 1; }
+	@command -v $(NFPM) >/dev/null 2>&1 || { echo "nfpm not found: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.49.0 (the version the run records used; it needs Go 1.27.4 or later, which the go command downloads itself with GOTOOLCHAIN=auto, the default)"; exit 1; }
 	@set -e; for arch in $(PKG_ARCHS); do \
 	  GOOS=linux GOARCH=$$arch $(BUILD) -o $(DIST)/linux_$$arch/hawkbell ./cmd/hawkbell; \
 	  mkdir -p dist/package; cp $(DIST)/linux_$$arch/hawkbell dist/package/hawkbell; \

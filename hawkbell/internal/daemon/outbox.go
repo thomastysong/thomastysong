@@ -19,10 +19,10 @@ import (
 	"github.com/thomastysong/thomastysong/hawkbell/internal/sink"
 )
 
-// Outbox pruning (DECISIONS A14, red-team pipeline-operator F2): deleting a
-// segment Fluent Bit has not finished reading loses data silently (91% of a
-// segment in the red team's run), so the daemon prunes by what its consumers
-// have read, not by age alone:
+// Outbox pruning (design/DECISIONS.md A14): deleting a segment Fluent Bit
+// has not finished reading loses data silently (91% of a segment in the red
+// team's run, redteam/pipeline-operator.md F2), so the daemon prunes by what
+// its consumers have read, not by age alone:
 //
 //   - A consumer is Fluent Bit's tail database (read-only) or a hawkbell shipper's
 //     checkpoint. A segment is consumed when every consumer that reads its

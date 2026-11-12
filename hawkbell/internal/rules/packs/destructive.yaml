@@ -1,7 +1,17 @@
-# Destruction. Deleting inside the working directory or a temp directory
-# is never destructive here (rm -rf node_modules is housekeeping); the
-# shell.destructive vocabulary already encodes that, and the rules only
-# add class and context.
+# Destruction. Deleting a named path inside the working directory or a
+# temp directory is not destructive here (rm -rf node_modules is
+# housekeeping), and the shell.destructive vocabulary does not tag it. A
+# catch-all delete (rm -rf *, rm -rf ., find . -delete) is tagged
+# rm_recursive_wildcard or find_delete from the operand as written,
+# wherever it runs. A cd earlier on the same line is applied to
+# shell.deletes, and the analyser also classifies a recursive delete's
+# operand at the directory that cd moved to, so a delete is counted where
+# it lands (HB-DESTR-001 for / or a home directory, HB-DESTR-006 for rm -r
+# under a system directory). Without such a cd the directory is the
+# session's, which shell paths are not joined with: the packs then count
+# the tag only in a burst (HB-DESTR-005) and, for .. from a directory
+# directly below a home directory, in HB-DESTR-001 (session.cwd). The
+# rules add class and context.
 pack: destructive
 version: "2026.11.0"
 description: Recursive deletes outside the workspace, disk wipes, infrastructure teardown and history rewrites.
@@ -9,15 +19,26 @@ rules:
   - id: HB-DESTR-001
     title: Recursive delete of the filesystem root or a home directory
     description: >-
-      rm -rf of / or of a whole home directory, however it is spelled: the
-      literal path, ~, ~user or $HOME; find started at a home directory
-      that deletes without narrowing what it matches; a recursive delete of
-      * or . right after cd to a home directory; or a delete of .. (or cd
-      .. and a delete of $PWD) from a directory directly below a home
-      directory. No coding task needs it; Shai-Hulud 2.0 and the Tensorlake
-      watcher wiped $HOME, and agents have deleted user data on their own.
-      The analyser does not apply a cd to the paths that follow it, so these
-      spellings are matched on the parsed commands themselves.
+      rm -rf of / or of a whole home directory: the literal path, ~, ~user
+      or $HOME, alone or with /* or /.*; the same target reached through a
+      cd earlier on the line (cd / && rm -rf *, cd /home && rm -rf alice,
+      cd ~ && rm -rf .); find started at a home directory that deletes
+      without narrowing what it matches; or a delete of .. (or cd .. and a
+      delete of $PWD) from a directory directly below a home directory. No
+      coding task needs it; Shai-Hulud 2.0 and the Tensorlake watcher
+      wiped $HOME, and agents have deleted user data on their own. The
+      analyser's rm_recursive_root and rm_recursive_home tags classify the
+      operand as written and, after a cd on the same line, the operand
+      joined with the directory the cd moved to; they are set only for a
+      delete the analyser reads as recursive (rm -r, rd /s, Remove-Item
+      -Recurse). rm_recursive_root also covers a top-level system
+      directory, so rm -rf /usr, cd / && rm -rf home and cd /usr && rm -rf
+      * match too. rm refuses an operand whose last component is . or ..,
+      so the analyser does not read cd /tmp && rm -rf .. as a delete of /.
+      Shell paths are not joined with the session's directory, so the ..
+      spellings are matched with session.cwd (also when a cd earlier on the
+      line moved elsewhere), and rm -rf * run in a session whose directory
+      is a home directory is counted only by the burst rule HB-DESTR-005.
     kind: activity
     class: alert
     severity: critical
@@ -38,10 +59,12 @@ rules:
       any:
         - shell.destructive|contains_any: [rm_recursive_root, rm_recursive_home]
         # rm -r of ~user (the analyser tags ~, $HOME and literal homes).
+        # The flag test is rm's own short options, so PowerShell's -Force
+        # (rm is Remove-Item there) is not read as -r.
         - any_command:
             name: rm
             all:
-              - args|any_re: "^-(-recursive|[a-zA-Z]*[rR])"
+              - args|any_re: '^(--recursive|-[dfiIPvWx]*[rR][dfiIPvWxrR]*)$'
               - args|any_re: '(?i)^(~[a-z0-9._-]*|\$\{?home\}?|/home/[^/]+|/Users/[^/]+|/root|/var/root)/?(\*|\.\*)?$'
         # find from a home directory that deletes whatever it finds: -type
         # and depth limits still take everything; a name, path, age or size
@@ -146,6 +169,63 @@ rules:
       - name: everything below the root through dot segments
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf /tmp/../*" } }
         expect: match
+      - name: cd to the root, then delete everything
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cd / && rm -rf *" } }
+        expect: match
+      - name: cd to the parent of the homes, then delete one
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cd /home && rm -rf alice" } }
+        expect: match
+      - name: a home reached through dot segments after a cd
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cd /root/.. && rm -rf root" } }
+        expect: match
+      - name: cd home, then delete one directory in it
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cd ~ && rm -rf .cache/pip" } }
+        expect: no_match
+      - name: cd to the root, then delete a scratch directory
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cd / && rm -rf tmp/build-cache" } }
+        expect: no_match
+      - name: cd to the parent of the homes, then delete a cache in one
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cd /home && rm -rf alice/.cache" } }
+        expect: no_match
+      - name: cd to the root, then delete the homes
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cd / && rm -rf home" } }
+        expect: match
+      - name: cd to the root, then delete the macOS homes
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cd / && rm -rf Users" } }
+        expect: match
+      - name: cd to the root, then delete /var
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cd / && rm -rf var" } }
+        expect: match
+      - name: cd to the mounted volumes, then delete everything
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cd /Volumes && rm -rf *" } }
+        expect: match
+      - name: cd to a system directory, then delete everything in it
+        event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "cd /usr && rm -rf *" } }
+        expect: match
+      - name: rm refuses .. after a cd
+        event: { type: tool.pre, session: { cwd: /srv/app }, tool: { kind: shell, name: Bash }, target: { command: "cd /tmp && rm -rf .." } }
+        expect: no_match
+      - name: cmd, cd to the parent of the homes, then rd /s of one
+        event: { type: tool.pre, host: { os: windows }, tool: { kind: shell, name: cmd }, target: { command: "cd C:\\Users && rd /s /q alice" } }
+        expect: match
+      - name: PowerShell, Set-Location to the parent of the homes, then a recursive Remove-Item of one
+        event: { type: tool.pre, host: { os: windows }, tool: { kind: shell, name: PowerShell }, target: { command: "Set-Location C:\\Users; Remove-Item -Recurse -Force alice" } }
+        expect: match
+      - name: PowerShell, Remove-Item of a home without -Recurse (-Force)
+        event: { type: tool.pre, host: { os: windows }, tool: { kind: shell, name: PowerShell }, target: { command: "Remove-Item -Force C:\\Users\\alice" } }
+        expect: no_match
+      - name: PowerShell, Remove-Item of a home without -Recurse (-ErrorAction)
+        event: { type: tool.pre, host: { os: windows }, tool: { kind: shell, name: PowerShell }, target: { command: "Remove-Item -ErrorAction SilentlyContinue C:\\Users\\alice" } }
+        expect: no_match
+      - name: PowerShell, Remove-Item of a home without -Recurse (-WhatIf -Verbose)
+        event: { type: tool.pre, host: { os: windows }, tool: { kind: shell, name: PowerShell }, target: { command: "Remove-Item -WhatIf -Verbose C:\\Users\\alice" } }
+        expect: no_match
+      - name: PowerShell, Set-Location to the parent of the homes, then Remove-Item of one without -Recurse
+        event: { type: tool.pre, host: { os: windows }, tool: { kind: shell, name: PowerShell }, target: { command: "Set-Location C:\\Users; Remove-Item -Force alice" } }
+        expect: no_match
+      - name: PowerShell rm of ~ without recursion
+        event: { type: tool.pre, host: { os: windows }, tool: { kind: shell, name: PowerShell }, target: { command: "rm -Force ~" } }
+        expect: no_match
 
   - id: HB-DESTR-002
     title: Disk wiped, filesystem created or shadow copies deleted
@@ -348,9 +428,19 @@ rules:
       type: [tool.pre, process.exec]
     match:
       shell.deletes|any_re: "(?i)^(/usr|/etc|/var/lib|/var/log|/opt|/bin|/sbin|/lib|/lib64|/boot|/srv|/System|/Library|/Applications|c:\\\\windows|c:\\\\program files)(/|\\\\|$)"
-      any_command:
-        name|in: [rm, rmdir, remove-item, rd]
-        args|any_re: "^-(-recursive|[a-zA-Z]*[rR])"
+      # Recursion, by syntax: rm's short options (-r, -rf, -R), PowerShell's
+      # -Recurse or a prefix of it (rm, rd and rmdir are Remove-Item there),
+      # and cmd's /s for rd and rmdir. -Force or -ErrorAction is not -r.
+      any:
+        - any_command:
+            name: rm
+            args|any_re: '^(--recursive|-[dfiIPvWx]*[rR][dfiIPvWxrR]*)$'
+        - any_command:
+            name|in: [rm, rmdir, remove-item, rd]
+            args|any_re: '(?i)^-(r(e(c(u(r(s(e)?)?)?)?)?)?|rf|fr)(:\$true)?$'
+        - any_command:
+            name|in: [rmdir, rd]
+            args|any_re: '(?i)^/s$'
     dedup: [shell.deletes]
     evidence: [target.command, shell.deletes]
     remedy: Check what was removed and whether the user asked for it.
@@ -366,6 +456,21 @@ rules:
         expect: no_match
       - name: delete in the workspace
         event: { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "rm -rf ./out" } }
+        expect: no_match
+      - name: cmd rd /s under C:\Windows
+        event: { type: tool.pre, host: { os: windows }, tool: { kind: shell, name: cmd }, target: { command: "cmd /c rd /s /q C:\\Windows\\Temp\\x" } }
+        expect: match
+      - name: cmd rmdir without /s under C:\Windows
+        event: { type: tool.pre, host: { os: windows }, tool: { kind: shell, name: cmd }, target: { command: "cmd /c rmdir /q C:\\Windows\\Temp\\x" } }
+        expect: no_match
+      - name: PowerShell Remove-Item -Recurse under C:\Windows
+        event: { type: tool.pre, host: { os: windows }, tool: { kind: shell, name: PowerShell }, target: { command: "Remove-Item -Recurse C:\\Windows\\Temp\\x" } }
+        expect: match
+      - name: PowerShell rd -r under C:\Windows
+        event: { type: tool.pre, host: { os: windows }, tool: { kind: shell, name: PowerShell }, target: { command: "rd -r C:\\Windows\\Temp\\x" } }
+        expect: match
+      - name: PowerShell Remove-Item without -Recurse under C:\Windows
+        event: { type: tool.pre, host: { os: windows }, tool: { kind: shell, name: PowerShell }, target: { command: "Remove-Item -Force -ErrorAction SilentlyContinue C:\\Windows\\Temp\\x.log" } }
         expect: no_match
 
   - id: HB-DESTR-007

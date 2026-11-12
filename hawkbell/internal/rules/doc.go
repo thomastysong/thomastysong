@@ -22,7 +22,9 @@
 // characters, and compile on first use; every rule needs at least one
 // test. lists.yaml holds named lists ({lists: {name: [entries]}});
 // suppressions.yaml holds operator exceptions ({suppressions: [{rule,
-// match, expires, reason, tags}]}).
+// match, expires, reason, tags}]}); rule and reason are required, and
+// expires is read by ParseExpiry, as the configuration's
+// rules.suppressions are (a bare date lasts through that day, UTC).
 //
 // The embedded packs are also shipped pre-parsed in packs/embedded.cache,
 // because a guard-mode hook is a fresh process per tool call and YAML
@@ -109,14 +111,19 @@
 // window (0 = no window), counted per session, user or host, and then
 // restarts the count. Per-user and per-host counters a session fed travel
 // with its export, bound on import to the user or host of the session's
-// next event (never to an identity read from the state file). Detections are deduplicated per (rule, session,
-// dedup fields): repeats inside Options.SuppressFor (default 1h) are
-// counted, and the next emission carries the count. For class alert the
-// window is capped at 10 minutes and the key always includes the
-// destination (hosts and paths), so suppressing one alert cannot silence
-// the same rule against a different target. A novelty block may only add
-// attention: a first sighting adds the tag hawkbell.first_seen and, with
-// raise, lifts the class one level; a repeat never lowers anything.
+// next event (never to an identity read from the state file). Detections
+// are deduplicated per (rule, session, dedup fields): repeats inside
+// Options.SuppressFor are counted, and the next emission carries the count.
+// SuppressFor defaults to 1h when a caller leaves it zero; the engine
+// pipeline (internal/engine: daemon, detect, scan, ci) and the hook
+// (internal/hookcmd) set it from the configuration's rules.suppress_for,
+// whose default is 24h (internal/config), so the window is 24h unless the
+// operator changes it. For class alert the window is capped at 10 minutes
+// and the key always includes the destination (hosts and paths), so
+// suppressing one alert cannot silence the same rule against a different
+// target. A novelty block may only add attention: a first sighting adds
+// the tag hawkbell.first_seen and, with raise, lifts the class one level;
+// a repeat never lowers anything.
 //
 // Result.Response is the strongest of none < ask < block among fired rules
 // on tool.pre and prompt.submit (the only blockable types). When the

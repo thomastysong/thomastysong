@@ -94,13 +94,14 @@ spec:
           args: ["run", "--config", "/etc/hawkbell/hawkbell.yaml", "--log-format", "json"]
           env:
             # Host identity: the container has no machine-id or DMI of its
-            # own, so the node name is the id. host.name in records is the
-            # pod's hostname; the log pipeline adds the node and pod.
+            # own, so the node name is host.id in records; the log pipeline
+            # adds the pod.
             - name: HAWKBELL_HOST_ID
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
-            # host.name is otherwise the pod's hostname, not the node's.
+            # host.name in records: the node name. Without this it would be
+            # the container's kernel host name, the pod's name.
             - name: HAWKBELL_HOST_NAME
               valueFrom:
                 fieldRef:

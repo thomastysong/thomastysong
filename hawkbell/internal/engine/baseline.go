@@ -20,10 +20,10 @@ import (
 )
 
 // Baseline is the persistent first-seen store behind rules novelty blocks
-// (rules.Options.Baseline; BUILD-C C2 item 7). Rules ask it whether a key
-// (a digest of the rule id and the novelty fields, for example the account
-// and the egress host, or the account and an MCP server definition hash)
-// has been seen before. It is an LRU of at most max keys, kept in a file
+// (rules.Options.Baseline; design/BUILD-C.md section C2 item 7). Rules ask
+// it whether a key (a digest of the rule id and the novelty fields, for
+// example the account and the egress host, or the account and an MCP
+// server definition hash) has been seen before. It is an LRU of at most max keys, kept in a file
 // under the checkpoint directory so a daemon restart does not make every
 // host look new again.
 //

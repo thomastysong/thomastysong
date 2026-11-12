@@ -2,7 +2,7 @@
 
 Generated 2026-11-12 by `internal/bench` (`Runner.Replay`). Corpus: snapshot of /root/.claude/projects taken 2026-11-12T10:27:00Z, recorded before the rename from the working name spoor to hawkbell and read with that name rewritten as in the repository (`benchrun -old-name`: `RewriteOldName` in `internal/bench/oldname.go`).
 
-Regenerated after the rename from the working name spoor to hawkbell. The review appended below was written for the report of this benchmark made before the rename (2026-11-12, packs hash `5323a0c8ac33`, rule ids SPR-<PACK>-<NNN>). Compared with that report, with the old name and rule ids read as the new ones (`CompareRenamed`), every number, class, label and sample (time, thread, tool, label, reason) in the tables below is the same. The packs hash differs because the rename changed the rule ids and the name in the rule text. Event ids differ after their time prefix because they are keyed with the name, and evidence text differs where it holds the name.
+Regenerated after the rename from the working name spoor to hawkbell. The review appended below was written for the report of this benchmark made before the rename (2026-11-12, packs hash `5323a0c8ac33`, rule ids SPR-<PACK>-<NNN>). Compared with that report, with the old name and rule ids read as the new ones (`CompareRenamed`), every number, class, label and sample (time, thread, tool, label, reason) in the tables below is the same. The packs hash differs because the rename changed the rule ids and the name in the rule text, and because rules were changed after the rename (`git log -- internal/rules/packs`); none of these changes moved a number compared here. Event ids differ after their time prefix because they are keyed with the name, and evidence text differs where it holds the name.
 
 | Corpus | Value |
 |---|---|
@@ -14,7 +14,7 @@ Regenerated after the rename from the working name spoor to hawkbell. The review
 | Prompts | 116 |
 | First / last event | 2026-11-11T16:37:11Z / 2026-11-12T10:26:59Z |
 | Tool calls by kind | file_edit 310, file_list 11, file_read 444, file_write 760, mcp 9, other 258, shell 11860, subagent 36, web_fetch 26, web_search 150 |
-| Rules | 138 enabled (`agent-integrity@2026.11.0,coverage@2026.11.0,credential@2026.11.0,defense-evasion@2026.11.0,destructive@2026.11.0,execution@2026.11.0,exfiltration@2026.11.0,offensive@2026.11.0,persistence@2026.11.0,posture@2026.11.0,process@2026.11.0,sequence@2026.11.0,supply-chain@2026.11.0`, hash `82523dea0cec`) |
+| Rules | 138 enabled (`agent-integrity@2026.11.0,coverage@2026.11.0,credential@2026.11.0,defense-evasion@2026.11.0,destructive@2026.11.0,execution@2026.11.0,exfiltration@2026.11.0,offensive@2026.11.0,persistence@2026.11.0,posture@2026.11.0,process@2026.11.0,sequence@2026.11.0,supply-chain@2026.11.0`, hash `d3c2ecd19907`) |
 
 ## Limits
 

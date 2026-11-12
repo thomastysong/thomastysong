@@ -15,14 +15,27 @@
 #  * storage.type filesystem: with the default memory buffering, tail
 #    commits its file offset when it READS a line, so a restart while the
 #    destination is down lost 5,000 of 5,000 records in testing.
-#  * two tail inputs: with one input for every stream and the activity
-#    destination down, findings to a healthy SIEM were blocked behind it.
+#  * two tail inputs: with ONE memory-buffered input (mem_buf_limit 5M) for
+#    every stream and 35 MB of activity for an unreachable destination, the
+#    input paused and 0 of 10 later detections reached a healthy SIEM in
+#    45 s; with two such inputs, 10 of 10. With the filesystem buffering
+#    below, one input also delivered 10 of 10 (behind 3.5 MB and 35 MB),
+#    as did one memory input with mem_buf_limit 5M behind 3.5 MB. So the
+#    split guards findings when an input is memory-buffered with a
+#    mem_buf_limit the activity backlog exceeds (measured: 5M limit, 35 MB
+#    backlog); memory buffering without mem_buf_limit was not run
+#    (deploy/fluent-bit/VERIFIED.md, "Measurements added 2026-11-12").
 #  * db.compare_filename: after a segment was pruned and its inode reused,
 #    the default settings skipped the head of the new segment.
 #  * db.locking false: lets `hawkbell doctor` and the daemon read the offsets
-#    to measure shipper lag and to prune only segments that were read.
+#    in place, to measure shipper lag and to prune only segments that were
+#    read. With db.locking true, 5.2.0 held the databases locked; the
+#    daemon waits 2 s per database and reads a copy, which can be behind,
+#    and doctor does the same twice, 4 s per database (deploy/fluent-bit/
+#    VERIFIED.md, "Fixes added 2026-11-12" and its second pass).
 #  * skip_long_lines and a 1 MiB buffer: one long line otherwise stops the
-#    whole file. hawkbell caps a record at 16 KiB, so nothing is skipped.
+#    whole file. hawkbell caps a record at output.max_line_bytes (16 KiB by
+#    default, 64 KiB at most), far below the buffer.
 
 parsers:
   - name: hawkbell_ndjson
@@ -37,8 +50,8 @@ parsers:
 pipeline:
   inputs:
     # Findings, inventory, posture, health and per-session summaries: small,
-    # and what the SIEM needs. Kept apart from activity so a slow or broken
-    # activity destination can never hold them up.
+    # and what the SIEM needs. Kept apart from activity so that a paused
+    # activity input does not stop them (see the header).
     - name: tail
       alias: hawkbell_findings
       path: ${HAWKBELL_OUTBOX:-/var/lib/hawkbell/outbox}/detection-*.ndjson,${HAWKBELL_OUTBOX:-/var/lib/hawkbell/outbox}/summary-*.ndjson,${HAWKBELL_OUTBOX:-/var/lib/hawkbell/outbox}/health-*.ndjson,${HAWKBELL_OUTBOX:-/var/lib/hawkbell/outbox}/posture-*.ndjson,${HAWKBELL_OUTBOX:-/var/lib/hawkbell/outbox}/inventory-*.ndjson

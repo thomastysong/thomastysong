@@ -363,7 +363,10 @@ rules:
         - any_command:
             name|re: "ld-(linux|musl)[^/]*\\.so"
         # shell.executes_paths is canonical (the /proc/<pid>/root prefix
-        # stripped); the analyser records the prefix here.
+        # stripped); the analyser records the prefix here when the
+        # executed path or a script operand spells it. A cd into a process
+        # root earlier on the line is applied to later paths but not
+        # recorded: cd /proc/self/root/usr/bin && ./id is not matched.
         - shell.proc_root: execute
     dedup: [shell.commands]
     evidence: [target.command, shell.commands]

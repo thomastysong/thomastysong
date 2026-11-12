@@ -13,9 +13,26 @@ import (
 
 func currentUID() string { return strconv.Itoa(os.Geteuid()) }
 
-// lookupGroup resolves a group name. The pure-Go resolver reads /etc/group;
-// a group that exists only in a directory service (macOS Open Directory,
-// LDAP) is not found, and the outbox then stays readable by root only.
+// lookupGroup resolves a group name through os/user. The release builds set
+// CGO_ENABLED=0 (Makefile, .goreleaser.yaml, Dockerfile), which selects a
+// different resolver per system (Go 1.26 source, os/user build
+// constraints):
+//
+//   - Linux and the other Unix systems: the pure-Go reader of /etc/group
+//     (os/user/lookup_unix.go, "(!cgo && !darwin) || osusergo"). A group
+//     that exists only in LDAP, SSSD or NIS is not found, and the outbox
+//     then stays readable by root only.
+//   - macOS: libSystem's getgrnam_r, called without cgo
+//     (os/user/cgo_lookup_syscall.go, "!osusergo && darwin"), the system's
+//     own lookup, which consults Open Directory (as lookupUID in
+//     internal/platform/users_darwin.go relies on). Not run on a Mac.
+//
+// A build with cgo (a plain `go install` or `go build` on a Linux host with
+// a C compiler, where Go enables cgo by default) uses libc's getgrnam_r
+// instead (os/user/cgo_lookup_cgo.go, "cgo && !osusergo && unix && !android
+// && !darwin"), which follows nsswitch.conf and so can find LDAP and SSSD
+// groups (not tested). No build sets the osusergo tag, which would select
+// the /etc/group reader everywhere.
 func lookupGroup(name string) (int, bool) {
 	g, err := user.LookupGroup(name)
 	if err != nil {

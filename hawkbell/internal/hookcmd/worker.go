@@ -83,7 +83,10 @@ type work struct {
 	spool    *spool.Writer
 	spoolDir string
 	spoolErr error
-	policy   *privacy.Policy
+	// prune lists what this hook deletes its own expired files from
+	// (spool.Location.Prune); empty when the spool could not be opened.
+	prune  []spool.Target
+	policy *privacy.Policy
 }
 
 // runWorker does the actual work of one hook invocation: parse, stamp,
@@ -193,8 +196,11 @@ func (w *work) run(stdout io.Writer) int {
 	evs = kept
 	if len(evs) == 0 {
 		// Excluded sessions leave no record and get no decision: exclusion
-		// happens before any content processing.
+		// happens before any content processing. The account's expired
+		// spool files are still deleted, after the reply: an account
+		// excluded after it was recorded must not keep them for good.
 		w.answer(stdout, nil)
+		w.bounded(func() int { w.pruneSpools(); return exitOK })
 		return exitOK
 	}
 
@@ -304,14 +310,31 @@ func (w *work) parse(payload []byte, limit int) (evs []*event.Event, req *hookio
 }
 
 func (w *work) openSpool() {
-	dir, err := spool.Dir(w.cfg.DataDir, w.env.UID, w.env.Home)
+	loc, err := spool.Locate(w.cfg.DataDir, w.env.UID, w.env.Home)
 	if err == nil {
-		w.spool, err = spool.OpenWriter(dir)
+		w.spool, err = spool.OpenWriter(loc.Dir)
 	}
 	if err == nil {
-		w.spoolDir = dir
+		w.spoolDir, w.prune = loc.Dir, loc.Prune
 	}
 	w.spoolErr = err
+}
+
+// pruneSpools deletes this account's expired files that no daemon
+// deletes, in the directories spool.Location.Prune lists: record files,
+// session state and temporary files in the fallback spool in the home
+// (also while the system spool is in use; not while $HAWKBELL_SPOOL is
+// set) or in a $HAWKBELL_SPOOL directory, and only session state and
+// temporary files in the system spool, whose record files the daemon
+// deletes (also when $HAWKBELL_SPOOL names it). It uses retention.spool and runs after the
+// reply, inside appendBounded's time bound: after the records are appended,
+// or in place of that when every event was excluded. A directory not due
+// for a scan (spool.MaybePrune) costs one lstat, two when it does not
+// exist.
+func (w *work) pruneSpools() {
+	for _, t := range w.prune {
+		_, _ = spool.MaybePrune(t, w.cfg.Retention.Spool.D())
+	}
 }
 
 // baseLabels are put on every record: the operator's labels, the hook
@@ -686,6 +709,13 @@ func annotateDecision(evs, dets []*event.Event, d hookio.Decision, reply []byte,
 // that lock. A supervised worker has already answered and is killed at the
 // deadline; a worker run by hand gives up stdinGrace after it.
 func (w *work) appendBounded(evs []*event.Event, r evalResult) int {
+	return w.bounded(func() int { return w.appendAll(evs, r) })
+}
+
+// bounded runs f, which touches the spool, with appendBounded's time bound
+// (a spool on a hung file system blocks any call). It returns f's exit
+// code, exitInternal when f panicked, exitSpool when time ran out.
+func (w *work) bounded(f func() int) int {
 	done := make(chan int, 1)
 	go func() {
 		code := exitInternal
@@ -693,7 +723,7 @@ func (w *work) appendBounded(evs []*event.Event, r evalResult) int {
 			_ = recover()
 			done <- code
 		}()
-		code = w.appendAll(evs, r)
+		code = f()
 	}()
 	t := time.NewTimer(max0(time.Until(w.deadline)) + stdinGrace)
 	defer t.Stop()
@@ -709,7 +739,8 @@ func (w *work) appendBounded(evs []*event.Event, r evalResult) int {
 // findings at or above rules.min_class and their context, the same floor
 // the daemon applies. Findings from plain guard mode are not spooled: the
 // daemon re-detects from the activity and would refuse detection records
-// from a user spool anyway. Session state was saved by evaluate.
+// from a user spool anyway. Session state was saved by evaluate. Last, it
+// prunes the spools no daemon prunes (pruneSpools).
 func (w *work) appendAll(evs []*event.Event, r evalResult) int {
 	if w.spool == nil {
 		return exitSpool
@@ -754,6 +785,7 @@ func (w *work) appendAll(evs []*event.Event, r evalResult) int {
 			}
 		}
 	}
+	w.pruneSpools()
 	return code
 }
 

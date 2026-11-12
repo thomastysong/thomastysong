@@ -260,7 +260,7 @@ func TestClaudeMatch(t *testing.T) {
 	p, _ := ForFormat(FormatClaude)
 	yes := []string{
 		claudeMainPath, claudeSubPath,
-		"/root/.claude/projects/-home-user/142ab6a6/subagents/workflows/wf_81321001-875/agent-a6dc2f4fa112e786b.jsonl",
+		"/root/.claude/projects/-home-user/5f0c3a1e/subagents/workflows/wf_81321001-875/agent-a6dc2f4fa112e786b.jsonl",
 		"/home/alice/.claude/projects/-work-repo/agent-a2.jsonl", // older flat subagent file
 		"/srv/projects/alice/.claude/projects/-x/y.jsonl",
 		`C:\Users\alice\.claude\projects\C--work-repo\abc.jsonl`,
@@ -268,7 +268,7 @@ func TestClaudeMatch(t *testing.T) {
 	}
 	no := []string{
 		"/home/alice/.claude/history.jsonl",
-		"/root/.claude/projects/-home-user/142ab6a6/subagents/workflows/wf_81321001-875/journal.jsonl",
+		"/root/.claude/projects/-home-user/5f0c3a1e/subagents/workflows/wf_81321001-875/journal.jsonl",
 		"/home/alice/.claude/projects/-work-repo/5d1f26db/other/deep.jsonl",
 		"/home/alice/.claude/projects/top.jsonl",
 		"/home/alice/.claude/projects/-work-repo/5d1f26db/tool-results/out.jsonl",

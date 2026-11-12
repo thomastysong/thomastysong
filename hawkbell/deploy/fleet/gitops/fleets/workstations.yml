@@ -11,6 +11,10 @@
 # orbit points osquery at its own extensions.load and the post-install
 # script fails, so Fleet rolls the package back: publish hawkbell through that
 # agent option instead, or make this fleet tier 2 (README, "Three tiers").
+#
+# The macOS pkg and Windows msi entries are placeholders: no build produces
+# those packages yet (see their package files). Remove them, and the macOS
+# install policy, until you have built the packages yourself.
 name: "💻 Workstations"
 settings:
   secrets:

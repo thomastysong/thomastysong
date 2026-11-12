@@ -99,7 +99,8 @@ func (p *Pipeline) processAs(ev *event.Event, now time.Time, how attribution) {
 }
 
 // userKind are the surfaces the monitored user can write: they are
-// user-integrity whatever the process that read them (DECISIONS A6, A28).
+// user-integrity whatever the process that read them (design/DECISIONS.md
+// A6, A28).
 func userSurface(s event.Source) bool {
 	switch s {
 	case event.SourceHook, event.SourceTranscript, event.SourceOTel, event.SourceAdapter:

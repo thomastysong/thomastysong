@@ -233,9 +233,9 @@ rules:
   - id: HB-OFFSEC-006
     title: Host root or host PID namespace entered from a container command
     description: >-
-      A command enters PID 1's namespaces (nsenter -t 1) or mounts the
-      host root into a container and changes into it (-v /:/host, chroot
-      /host). That is a container escape primitive, not a development
+      A command enters PID 1's namespaces (nsenter -t 1), mounts the host
+      root into a container (-v /:/host) or changes root into it (chroot
+      /host). Each is a container escape primitive, not a development
       convenience.
     kind: activity
     class: finding

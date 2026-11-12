@@ -120,7 +120,9 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Fluent Bit image
-        run: docker pull fluent/fluent-bit:latest
+        # Pinned: the e2e tests record this release's behaviour (HTTP status
+        # handling, API start-up, tail database recovery).
+        run: docker pull fluent/fluent-bit:5.2.0
       - name: osquery
         # UNVERIFIED download path: check https://osquery.io/downloads for the
         # current package before relying on this step.

@@ -176,7 +176,7 @@ func (a *app) scan(ctx context.Context, cfg *config.Config, o scanOptions) (*sca
 		if outboxConsumers(cfg) {
 			// The sink prunes blindly whenever it starts a segment; with a
 			// consumer configured that would delete segments it has not
-			// read (DECISIONS A14). Only the daemon prunes then: it reads
+			// read (design/DECISIONS.md A14). Only the daemon prunes then: it reads
 			// the tail database and shipper checkpoints, keeps unread data
 			// until the hard cap and reports outbox.dropped_unshipped.
 			age, size = -1, -1

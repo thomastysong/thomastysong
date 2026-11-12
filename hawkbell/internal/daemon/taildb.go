@@ -61,6 +61,11 @@ func (c *tailDBConsumer) view() (consumerView, error) {
 	if err != nil {
 		return consumerView{}, err
 	}
+	return tailView(rows), nil
+}
+
+// tailView is what the rows of one tail database say was read.
+func tailView(rows []tailRow) consumerView {
 	v := consumerView{files: make(map[string]readPos, len(rows))}
 	for _, r := range rows {
 		base := r.name
@@ -86,37 +91,98 @@ func (c *tailDBConsumer) view() (consumerView, error) {
 			v.more[base] = append(v.more[base], pos)
 		}
 	}
-	return v, nil
+	return v
 }
 
-// tailDBConsumers expands output.fluent_bit.tail_db: a comma-separated list
-// of database paths or glob patterns (the shipped Fluent Bit configuration
-// uses one database per tail input).
-func tailDBConsumers(spec, checkDir string) []consumer {
-	var out []consumer
+// TailDB is one database named by output.fluent_bit.tail_db, after
+// expansion.
+type TailDB struct {
+	// Path is the database file; for a pattern that matched nothing it is
+	// the pattern itself, kept as a consumer that cannot be read.
+	Path string
+	// Pattern is the glob Path came from ("" for a plain path).
+	Pattern string
+	// NoMatch: the pattern matched no file. BadPattern: filepath.Glob
+	// refused it. Either way the daemon keeps it as a consumer that cannot
+	// be read, so pruning stays conservative until Fluent Bit creates it.
+	NoMatch, BadPattern bool
+}
+
+// ExpandTailDB expands output.fluent_bit.tail_db: a comma-separated list of
+// database paths or glob patterns (the shipped Fluent Bit configuration uses
+// one database per tail input). Duplicates are dropped; at most maxTailDBs
+// databases are returned and skipped counts the rest. The pruner and
+// `hawkbell doctor` both read the setting through this function.
+func ExpandTailDB(spec string) (dbs []TailDB, skipped int) {
 	seen := map[string]bool{}
 	for _, part := range strings.Split(spec, ",") {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
 		}
-		paths := []string{part}
+		found := []TailDB{{Path: part}}
 		if strings.ContainsAny(part, "*?[") {
 			m, err := filepath.Glob(part)
-			if err != nil || len(m) == 0 {
-				// Keep the pattern as a consumer that cannot be read, so the
-				// pruner stays conservative until Fluent Bit creates it.
-				m = []string{part}
+			switch {
+			case err != nil:
+				found = []TailDB{{Path: part, Pattern: part, NoMatch: true, BadPattern: true}}
+			case len(m) == 0:
+				found = []TailDB{{Path: part, Pattern: part, NoMatch: true}}
+			default:
+				found = found[:0]
+				for _, p := range m {
+					found = append(found, TailDB{Path: p, Pattern: part})
+				}
 			}
-			paths = m
 		}
-		for _, p := range paths {
-			if seen[p] || len(out) >= maxTailDBs {
+		for _, db := range found {
+			if seen[db.Path] {
 				continue
 			}
-			seen[p] = true
-			out = append(out, &tailDBConsumer{path: p, copyDir: filepath.Join(checkDir, "taildb-copy")})
+			seen[db.Path] = true
+			if len(dbs) >= maxTailDBs {
+				skipped++
+				continue
+			}
+			dbs = append(dbs, db)
 		}
+	}
+	return dbs, skipped
+}
+
+// CheckTailDB reads one tail database the way the pruner does (readTailDB),
+// including the fallback to a private copy under copyDir when the database
+// cannot be read in place (Fluent Bit's db.locking true, a read-only
+// mount), and returns how many rows about outbox segments it holds. inPlace
+// is the error of the in-place read when the copy was read instead, nil
+// otherwise. The pruner copies into its checkpoint directory; a caller that
+// is not the daemon passes a directory of its own. With copyDir "" there is
+// no fallback, so a database the pruner reads through a copy fails here.
+func CheckTailDB(path, copyDir string) (segments int, inPlace, err error) {
+	rows, inPlace, err := readTailDBVia(path, copyDir)
+	if err != nil {
+		return 0, inPlace, err
+	}
+	v := tailView(rows)
+	for _, more := range v.more {
+		segments += len(more)
+	}
+	return segments + len(v.files), inPlace, nil
+}
+
+// tailDBConsumers is one consumer per database ExpandTailDB names. A
+// database that cannot be read in place is copied into "taildb-copy" under
+// checkDir; with checkDir "" it is not copied (never into a directory
+// relative to the working directory) and reads as unreadable.
+func tailDBConsumers(spec, checkDir string) []consumer {
+	dbs, _ := ExpandTailDB(spec)
+	copyDir := ""
+	if checkDir != "" {
+		copyDir = filepath.Join(checkDir, "taildb-copy")
+	}
+	out := make([]consumer, 0, len(dbs))
+	for _, db := range dbs {
+		out = append(out, &tailDBConsumer{path: db.Path, copyDir: copyDir})
 	}
 	return out
 }
@@ -140,37 +206,43 @@ func tailDBConsumers(spec, checkDir string) []consumer {
 //     a lock), the database and its WAL are copied into the daemon's own
 //     checkpoint directory and read there. A copy can be slightly behind but
 //     every row in it is one that existed, so it never reports more than was
-//     read.
+//     read. A locked database costs the 2 s busy timeout before the copy.
 func readTailDB(path, copyDir string) ([]tailRow, error) {
+	rows, _, err := readTailDBVia(path, copyDir)
+	return rows, err
+}
+
+// readTailDBVia is readTailDB that also returns the in-place read's error
+// when the copy was read instead.
+func readTailDBVia(path, copyDir string) (rows []tailRow, inPlace, err error) {
 	fi, err := os.Stat(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if !fi.Mode().IsRegular() {
-		return nil, fmt.Errorf("%s: not a regular file", path)
+		return nil, nil, fmt.Errorf("%s: not a regular file", path)
 	}
 	if fi.Size() > maxTailDBBytes {
-		return nil, fmt.Errorf("%s: %d bytes is too large for a tail database", path, fi.Size())
+		return nil, nil, fmt.Errorf("%s: %d bytes is too large for a tail database", path, fi.Size())
 	}
 	_, werr := os.Lstat(path + "-wal")
 	walExists := werr == nil
-	var rows []tailRow
 	if walExists {
 		rows, err = queryTailDB(path, false)
 	} else {
 		rows, err = queryTailDB(path, true)
 	}
 	if err == nil {
-		return rows, nil
+		return rows, nil, nil
 	}
 	if copyDir == "" {
-		return nil, err
+		return nil, err, err
 	}
 	rows, cerr := queryCopy(path, copyDir)
 	if cerr != nil {
-		return nil, fmt.Errorf("%w (copy: %v)", err, cerr)
+		return nil, err, fmt.Errorf("%w (copy: %v)", err, cerr)
 	}
-	return rows, nil
+	return rows, err, nil
 }
 
 // sqliteURI renders a file path as the URI SQLite's parser expects.

@@ -175,11 +175,23 @@ func TestSuppressionsFromConfig(t *testing.T) {
 		{Rule: "HB-B-001", Expires: "2027-01-02T03:04:05Z"},
 		{Rule: "HB-C-001"},
 		{Rule: "HB-D-001", Expires: "next tuesday"},
+		// White space only is unreadable, not "never expires" (as in the
+		// daemon and the bundle loader): dropped, and the set is degraded.
+		{Rule: "HB-E-001", Expires: "  "},
 	})
 	// A bare date runs through the end of that day, as in the daemon.
 	if !degraded || len(sup) != 3 || !sup[0].Expires.Equal(time.Date(2027, 1, 3, 0, 0, 0, 0, time.UTC)) ||
 		!sup[1].Expires.Equal(time.Date(2027, 1, 2, 3, 4, 5, 0, time.UTC)) || !sup[2].Expires.IsZero() {
 		t.Fatalf("%v %+v", degraded, sup)
+	}
+	for _, s := range sup {
+		if s.RuleID == "HB-E-001" {
+			t.Fatalf("a white-space expiry was kept: %+v", s)
+		}
+	}
+	// On its own, so that HB-D-001 above cannot be what sets degraded.
+	if sup, degraded := suppressions([]config.Suppression{{Rule: "HB-E-001", Expires: "  "}}); !degraded || len(sup) != 0 {
+		t.Fatalf("white-space expiry alone: degraded %v, kept %+v", degraded, sup)
 	}
 }
 

@@ -241,8 +241,11 @@ func (rep *ReplayReport) Markdown(before *ReplayReport) string {
 }
 
 // renamedHash explains the one number in a renamed report's header that
-// differs from the report before the rename.
-const renamedHash = "The packs hash differs because the rename changed the rule ids and the name in the rule text."
+// differs from the report before the rename. The packs changed twice since
+// that report: the rename itself, and rule edits made after it (text and
+// matching). CompareRenamed is what shows that neither moved a number;
+// benchrun refuses to write a renamed report otherwise.
+const renamedHash = "The packs hash differs because the rename changed the rule ids and the name in the rule text, and because rules were changed after the rename (`git log -- internal/rules/packs`); none of these changes moved a number compared here."
 
 // renamedIntro is the start of the paragraph that relates a report
 // regenerated after the rename to the report the appended review was

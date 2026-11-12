@@ -748,8 +748,9 @@ func TestVocabularyHelpers(t *testing.T) {
 	}
 }
 
-// The exported API named in the build spec, pinned at compile time so a
-// refactor cannot drift from what the other packages were written against.
+// The exported API named in the build spec (design/BUILD-A.md section A4),
+// pinned at compile time so a refactor cannot drift from what the other
+// packages were written against.
 var (
 	_ func() (*Catalog, error)                                 = Load
 	_ func(*Catalog) string                                    = (*Catalog).Version

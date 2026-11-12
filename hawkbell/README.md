@@ -49,7 +49,7 @@ flowchart LR
 | GitHub Copilot CLI | yes (managed, user) | ask and deny; its hook timeouts always fail open | yes | yes | no: exports traces and metrics only | yes | no |
 | Gemini CLI | yes (managed, user) | deny blocks (no shipped rule denies; see Guard mode); ask is a warning and the action proceeds | yes | yes | yes | yes | no |
 | Cursor CLI and IDE (one `hooks.json`) | yes; payload format unverified | ask and deny; `--fail-closed` unverified | no: history is in SQLite | CLI yes; IDE no (weak marker only) | no: exports nothing | yes | no |
-| 67 other catalogued agents and SDKs | no hook dialect | no | no | where the catalog fingerprints the process | no | inventory; MCP servers and settings where catalogued | no |
+| 67 other catalogued agents and SDKs (`hawkbell catalog list --kind agent`, the rows with an empty HOOKS column) | no hook dialect | no | no | where the catalog fingerprints the process | no | inventory; MCP servers and settings where catalogued | no |
 
 - "yes" means built and covered by unit tests with fixture payloads ([internal/hookio/testdata](internal/hookio/testdata), [internal/transcript](internal/transcript/doc.go), [internal/otelrecv](internal/otelrecv/doc.go)). Only Claude Code has run through the whole pipeline, with a local stand-in for the model API ([test/e2e/REAL-AGENT.md](test/e2e/REAL-AGENT.md)). The other dialects are written from vendor documentation and source.
 - Guard semantics per agent are in [internal/hookcmd/doc.go](internal/hookcmd/doc.go) ("What ask and block mean per agent"). The guard column says what each agent does with a reply; no shipped rule asks for a deny (see Guard mode). Guard mode is advisory, not prevention: agents' own hook timeouts fail open by default, and always on Copilot CLI ([docs/LIMITATIONS.md](docs/LIMITATIONS.md#what-hawkbell-is-not)). A Codex user-scope `hooks.json` runs only after the user trusts it in `/hooks`.
@@ -101,7 +101,7 @@ hawkbell hooks install --scope user             # Claude Code, Codex, Copilot CL
 hawkbell hooks status --scope user
 ```
 
-The hook runs the binary that installed it (or `--binary`), so put the binary where it will stay. Without the daemon, hook records stay in the user's spool (`~/.local/state/hawkbell/spool` on Linux); `hawkbell detect ~/.local/state/hawkbell/spool` runs the rules over them.
+The hook runs the binary that installed it (or `--binary`), so put the binary where it will stay. Without the daemon, hook records stay in the user's spool (`~/.local/state/hawkbell/spool` on Linux; `~/Library/Application Support/hawkbell/spool` on macOS and `AppData\Local\hawkbell\spool` in the user's profile on Windows, from [internal/platform/dirs.go](internal/platform/dirs.go) and not run on either) until a hook deletes them, about 72 hours after their last write (`retention.spool`; [PRIVACY.md](docs/PRIVACY.md#retention) says when it is later, for example while the hook is switched off); `hawkbell detect ~/.local/state/hawkbell/spool` runs the rules over them.
 
 ### Guard mode
 
@@ -160,12 +160,12 @@ Measured on Linux x86-64 VMs on 2026-11-12. The conditions and limits are in eac
 - **Scenario benchmark** (synthetic corpus written by this project, so recall is an upper bound): 95/100 attacks detected as written; 94/100 detected as written and under every applicable mutation and variant (315 mutation and variant runs). Of 87 benign look-alikes, 0 raised an alert, 5 a finding and 14 a signal ([bench/results/scenarios.md](bench/results/scenarios.md)). Path-spelling variants: 16/16 detected (same file, "After path canonicalisation").
 - **Benign replay, release snapshot** (session logs of the Claude Code agents that built this project, replayed through the rules; 136 agent threads, 13,864 tool calls): 17 alerts, of which 4 red_team, 11 false_positive and 2 rule_bug. That is 13 false alerts, 0.94 per 1,000 tool calls, Wilson 95% [0.55, 1.60]. 72 finding-class hits ([bench/results/release-benign-replay.md](bench/results/release-benign-replay.md)).
 - **Benign replay, earlier snapshot** (70 agent threads, 5,337 tool calls): 3 alerts, 1 red_team and 2 rule_bug, so 2 false alerts, 0.37 per 1,000, Wilson 95% [0.10, 1.37] ([bench/results/benign-replay.md](bench/results/benign-replay.md)). Both replays are one workload on one machine, so the results do not transfer to a fleet without measuring there.
-- **Hook latency**, release build, p50 on a 4-vCPU VM: observe 10.42 ms direct, 10.97 ms through `sh -c` and 18.74 ms through `bash -lc`, against 1.33, 2.19 and 9.61 ms for an empty hook. Guard mode is 16.64 ms and in-hook detection 19.73 ms, direct ([internal/hookcmd/LATENCY.md](internal/hookcmd/LATENCY.md#current-figures-release-build-2026-11-12)). The design target of "a few ms" over an empty hook is not met.
+- **Hook latency**, release build, p50 on a 4-vCPU VM: observe 10.42 ms direct, 10.97 ms through `sh -c` and 18.74 ms through `bash -lc`, against 1.33, 2.19 and 9.61 ms for an empty hook. Guard mode is 16.64 ms and in-hook detection 19.73 ms, direct ([internal/hookcmd/LATENCY.md](internal/hookcmd/LATENCY.md#current-figures-release-build-2026-11-12)). Spool pruning in the hook, added after those figures, moved observe mode by -0.06 to +0.28 ms at p50 when no scan was due and added 0.26 to 0.42 ms when a scan deleted three files (same file, "Spool pruning in the hook"). The design target of "a few ms" over an empty hook is not met.
 - **Hook cost inside Claude Code 2.1.322** (earlier build, loaded host): 12 to 15 ms per event over a hook that only drains stdin, 18 to 23 ms in guard mode ([test/e2e/REAL-AGENT.md](test/e2e/REAL-AGENT.md#7-hook-overhead-inside-the-agent)).
 - **Fleet**: `deploy/fleet/verify.sh` against Fleet 4.94.1 (Free) and plain osquery 5.19.0: 240 checks, 240 passed, both tiers ([deploy/fleet/VERIFIED.md](deploy/fleet/VERIFIED.md#rerun-after-the-rename-2026-11-12)).
 - **Fluent Bit 5.2.0**, shipped configuration: 5,000 of 5,000 records delivered after Fluent Bit was killed with SIGKILL while the destination was down. The memory-buffering control delivered 0 of 5,000 ([deploy/fluent-bit/VERIFIED.md](deploy/fluent-bit/VERIFIED.md#rerun-after-the-rename-2026-11-12)).
 - **Real agent**: Claude Code 2.1.322 on Linux, with a local stand-in for the model API. A `curl ... | sh` tool call reached Fluent Bit as an HB-EXEC-001 finding, and in guard mode the model was shown the refusal ([test/e2e/REAL-AGENT.md](test/e2e/REAL-AGENT.md#rerun-after-the-rename-2026-11-12)).
-- **Rules**: `hawkbell rules test` runs 655 tests over 138 rules, 0 failed (packs hash `82523dea0cec`).
+- **Rules**: `hawkbell rules test` runs 681 tests over 138 rules, 0 failed (packs hash `d3c2ecd19907`).
 
 ## Documentation
 
@@ -176,6 +176,7 @@ Measured on Linux x86-64 VMs on 2026-11-12. The conditions and limits are in eac
 - [docs/LIMITATIONS.md](docs/LIMITATIONS.md): what hawkbell does not see, does not prevent and has not been tested on
 - [docs/COMPARISON.md](docs/COMPARISON.md): hawkbell next to related open-source projects and Fleet's own tables
 - [docs/ASSUMPTIONS.md](docs/ASSUMPTIONS.md): the design assumptions, the red-team review and its evidence
+- [design/](design/), [redteam/](redteam/) and [research/](research/): historical design records of 2026-11-11 (the first design and decision ledger, the build specifications, the nine red-team notes and the research reports); the design and red-team records use the working name spoor, and the research reports were written before the project had a name (`research/fleet.md` uses the placeholder `aiguard`, `research/fluentbit.md` and `research/standards.md` use `agentwatch`); they describe prototypes and plans, not the release
 - [SECURITY.md](SECURITY.md): reporting a vulnerability
 - [CONTRIBUTING.md](CONTRIBUTING.md): building, testing and changing rules
 

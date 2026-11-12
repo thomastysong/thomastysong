@@ -25,7 +25,7 @@ func configComments() map[string]string {
 
 		"privacy":                    "What leaves this machine. Detection always runs locally on full content.",
 		"privacy.profile":            "minimal: findings, inventory, posture, health and session summaries only.\nstandard: also activity, field-level redacted, no prompt text or tool output.\nfull: also redacted prompt text and tool input/output.",
-		"privacy.hmac_key_file":      "Tenant key (root-only file, 32+ bytes) for keyed digests and pseudonyms;\nwithout it no content-derived digest is emitted at all.",
+		"privacy.hmac_key_file":      "Tenant key file for keyed digests and pseudonyms: a regular file, not a symbolic link,\nno permission bits for group or others on POSIX systems, at most 4,096 bytes, and\nat least 16 bytes once trailing white space is trimmed. hawkbell does not create one;\nwithout a key no content-derived digest is emitted at all.",
 		"privacy.key_id":             "Identifies the key in records, for rotation.",
 		"privacy.pseudonymize_users": "Replace user names with keyed pseudonyms (needs hmac_key_file).",
 		"privacy.exclude":            "Sessions dropped before any content is processed (globs).",
@@ -79,7 +79,7 @@ func configComments() map[string]string {
 		"retention.outbox":              "Age cap of shipped segments.",
 		"retention.outbox_bytes":        "Hard cap; unread data dropped beyond it is reported.",
 		"retention.local":               "Local activity ring (records that never leave the host).",
-		"retention.spool":               "Fully read hook spool files.",
+		"retention.spool":               "Hook spool files, counted from their last write. The daemon deletes system spool\nrecords once it has read them; a later hook call deletes the system spool's session\nstate and everything in the fallback spool and in $HAWKBELL_SPOOL.",
 		"retention.detections":          "State database rows.",
 		"limits":                        "Volume and cost.",
 		"limits.activity_per_second":    "Per-session token bucket for activity records (detection still sees everything).",
@@ -98,8 +98,8 @@ func configComments() map[string]string {
 const configHeader = `hawkbell configuration (written by ` + "`hawkbell export config`" + `, %s).
 Every key is optional: a missing key takes the default shown here, and a
 missing file means all defaults. Unknown keys are errors, so a typo cannot
-silently switch a control off. Reference: docs/PRIVACY.md, docs/FLEET.md,
-docs/FLUENT-BIT.md.`
+silently switch a control off. Reference, in the source tree:
+docs/PRIVACY.md, docs/FLUENT-BIT.md, deploy/fleet/README.md.`
 
 // defaultConfigYAML renders config.Default(dataDir) as commented YAML that
 // config.Load reads back to the same configuration.

@@ -84,10 +84,11 @@ func TestPolicyKeysComplete(t *testing.T) {
 	}
 }
 
-// TestPoliciesFailClosed is the core property (BUILD-C C5 and addendum):
-// every policy passes on a healthy database, each planted violation fails
-// exactly its own policy, a missing database fails all of them, and the two
-// heartbeat windows separate a sleeping laptop from a dead sensor.
+// TestPoliciesFailClosed is the core property (design/BUILD-C.md section C5
+// and Addendum): every policy passes on a healthy database, each planted
+// violation fails exactly its own policy, a missing database fails all of
+// them, and the two heartbeat windows separate a sleeping laptop from a
+// dead sensor.
 func TestPoliciesFailClosed(t *testing.T) {
 	c := mustBuild(t, Options{})
 	type scenario struct {

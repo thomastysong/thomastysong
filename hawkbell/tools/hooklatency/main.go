@@ -13,6 +13,12 @@
 // included. With -alt a second binary runs the same cases in the same
 // rounds, which is how two builds are compared on a shared machine.
 //
+// With -prune N, an "observe prune-due" case runs observe mode supervised
+// (direct and sh -c) on a spool that, before every run, gets N expired
+// record files (64 KiB each, last written 100 hours ago) and a scan marker
+// older than an hour, so every run of a build that prunes its spool
+// (spool.MaybePrune) scans it and deletes N files. The set-up is not timed.
+//
 // internal/hookcmd/LATENCY.md records the results and the commands:
 //
 //	CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags '-s -w -buildid=' -o /tmp/hb ./cmd/hawkbell
@@ -36,11 +42,12 @@ import (
 )
 
 type tc struct {
-	name string
-	argv []string
-	env  []string
-	durs []time.Duration
-	bad  int
+	name  string
+	argv  []string
+	env   []string
+	setup func() // run before each timed run, not timed
+	durs  []time.Duration
+	bad   int
 }
 
 func main() {
@@ -52,6 +59,7 @@ func main() {
 	hello := flag.String("hello", "", "empty Go program (floor for any Go hook)")
 	alt := flag.String("alt", "", "second binary, measured in every mode in the same rounds as -bin")
 	altTag := flag.String("alttag", "variant", "label of -alt")
+	pruneN := flag.Int("prune", 0, "add an observe case whose spool has this many expired files and a stale scan marker before every run")
 	flag.Parse()
 	if *bin == "" || *dir == "" || *payloadPath == "" {
 		fmt.Fprintln(os.Stderr, "hooklatency: -bin, -dir and -payload are required")
@@ -68,6 +76,7 @@ func main() {
 		"detect":  "sources:\n  hooks:\n    detect_in_hook: true\n",
 	}
 	var cases []*tc
+	var setup func()
 	add := func(name string, argv []string, env ...string) {
 		if *only != "" {
 			ok := false
@@ -80,7 +89,7 @@ func main() {
 				return
 			}
 		}
-		cases = append(cases, &tc{name: name, argv: argv, env: env})
+		cases = append(cases, &tc{name: name, argv: argv, env: env, setup: setup})
 	}
 	paths := []struct {
 		name string
@@ -109,20 +118,35 @@ func main() {
 		add("hawkbell kill switch (start+init only) ["+*altTag+"] | direct", []string{*alt, "hook", "--agent", "claude-code", "--config", filepath.Join(ks, "hawkbell.yaml")})
 	}
 	type variant struct{ mode, bin, tag string }
-	variants := []variant{{"observe", *bin, ""}, {"guard", *bin, ""}, {"detect", *bin, ""}}
+	modes := []string{"observe", "guard", "detect"}
+	if *pruneN > 0 {
+		cfgs["observe prune-due"] = ""
+		modes = append(modes, "observe prune-due")
+	}
+	var variants []variant
+	for _, m := range modes {
+		variants = append(variants, variant{m, *bin, ""})
+	}
 	if *alt != "" {
-		for _, m := range []string{"observe", "guard", "detect"} {
+		for _, m := range modes {
 			variants = append(variants, variant{m, *alt, " [" + *altTag + "]"})
 		}
 	}
 	for _, v := range variants {
 		mode, bin := v.mode, &v.bin
-		md := filepath.Join(*dir, mode+strings.NewReplacer(" ", "", "[", "", "]", "").Replace(v.tag))
+		md := filepath.Join(*dir, strings.NewReplacer(" ", "", "[", "", "]", "").Replace(mode+v.tag))
 		os.MkdirAll(md, 0o700)
 		cfg := filepath.Join(md, "hawkbell.yaml")
 		os.WriteFile(cfg, []byte(cfgs[mode]), 0o600)
 		sp := filepath.Join(md, "spool")
+		setup = nil
+		if strings.HasSuffix(mode, "prune-due") {
+			setup = expired(sp, *pruneN)
+		}
 		for _, sup := range []bool{true, false} {
+			if !sup && setup != nil {
+				continue // the prune case is supervised only
+			}
 			args := []string{*bin, "hook"}
 			label := "supervised"
 			if !sup {
@@ -131,8 +155,11 @@ func main() {
 			}
 			args = append(args, "--agent", "claude-code", "--config", cfg)
 			for _, p := range paths {
-				if !sup && p.wrap != nil {
+				switch {
+				case !sup && p.wrap != nil:
 					continue // unsupervised only on the direct path
+				case setup != nil && p.name == "bash -lc":
+					continue // prune-due: direct and sh -c
 				}
 				// The command line hookinstall renders, with its
 				// missing-binary guard.
@@ -147,6 +174,9 @@ func main() {
 	}
 	base := os.Environ()
 	run := func(c *tc) {
+		if c.setup != nil {
+			c.setup()
+		}
 		cmd := exec.Command(c.argv[0], c.argv[1:]...)
 		cmd.Env = append(append([]string(nil), base...), c.env...)
 		cmd.Stdin = bytes.NewReader(payload)
@@ -187,6 +217,25 @@ func main() {
 			return float64(c.durs[i].Microseconds()) / 1000
 		}
 		fmt.Printf("| %s | %d | %.2f | %.2f | %.2f | %.2f | %d |\n", c.name, len(c.durs), q(0.50), q(0.90), q(0.99), q(1.0), c.bad)
+	}
+}
+
+// expired returns a set-up that gives the spool sp n record files last
+// written 100 hours ago and a scan marker older than an hour, so the next
+// hook run is due to prune them.
+func expired(sp string, n int) func() {
+	body := bytes.Repeat([]byte(`{"v":1,"event":{"kind":"activity"}}`+"\n"), 64<<10/38)
+	return func() {
+		os.MkdirAll(sp, 0o700)
+		at := time.Now().Add(-100 * time.Hour)
+		for i := 0; i < n; i++ {
+			p := filepath.Join(sp, fmt.Sprintf("activity-1999%04d.ndjson", i))
+			os.WriteFile(p, body, 0o600)
+			os.Chtimes(p, at, at)
+		}
+		m := filepath.Join(sp, ".prune")
+		os.WriteFile(m, nil, 0o600)
+		os.Chtimes(m, at, at)
 	}
 }
 

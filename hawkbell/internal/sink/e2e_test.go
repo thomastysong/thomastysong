@@ -41,7 +41,7 @@ func TestE2EFluentBit(t *testing.T) {
 	}
 	image := os.Getenv("HAWKBELL_E2E_FLUENTBIT_IMAGE")
 	if image == "" {
-		image = "fluent/fluent-bit:latest"
+		image = "fluent/fluent-bit:5.2.0"
 	}
 
 	// A short path: the unix socket lives here and sun_path is ~107 bytes.

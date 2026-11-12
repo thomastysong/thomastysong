@@ -2,6 +2,7 @@ package fleetgen
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -145,6 +146,112 @@ func TestScriptsRefuseOrbitManagedAutoload(t *testing.T) {
 				t.Errorf("%s/%s: refusal does not say why: %s", name, tc.name, out)
 			}
 		}
+	}
+}
+
+// TestATCTierRemovesExtensionCopy: the atc tier (tier 2) unregisters
+// hawkbell from osquery's extensions.load and deletes the hawkbell.ext copy
+// the extension tier made, so a host moved to ATC keeps no second copy of
+// the binary that nothing loads or updates. Deleting it is safe while
+// osquery still runs it: on Linux and macOS a running executable keeps its
+// file until it exits, and osquery restarts 10 seconds later without the
+// line. The directory goes when it is empty. Only the shell script's block
+// runs here; the PowerShell branch (rename, then delete, because Windows
+// does not delete a running executable) is checked as text and has not
+// run on Windows.
+func TestATCTierRemovesExtensionCopy(t *testing.T) {
+	needSh(t)
+	block := shBlock(t, readDeploy(t, "scripts/install-hawkbell.sh"), "if [ \"$TIER\" = extension ]; then\n\tinstall -d", "fi")
+	for _, tc := range []struct {
+		name        string
+		load        *string // extensions.load before, nil: missing
+		copy, other bool    // hawkbell.ext and another file in its directory
+		wantLoad    string
+		changed     bool
+	}{
+		{"registered", ptr("/a.ext\n" + "EXT\n"), true, false, "/a.ext\n", true},
+		{"registered, last line", ptr("EXT"), true, false, "", true},
+		{"copy left by an earlier atc run", ptr("/a.ext\n"), true, false, "/a.ext\n", false},
+		{"other files in the directory", ptr("/a.ext\nEXT\n"), true, true, "/a.ext\n", true},
+		{"nothing installed", nil, false, false, "", false},
+	} {
+		dir := t.TempDir()
+		extdir := filepath.Join(dir, "usr", "lib", "hawkbell")
+		ext := filepath.Join(extdir, "hawkbell.ext")
+		load := filepath.Join(dir, "extensions.load")
+		tmp := filepath.Join(dir, "tmp")
+		for _, d := range []string{extdir, tmp} {
+			if err := os.MkdirAll(d, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if tc.copy {
+			if err := os.WriteFile(ext, []byte("binary"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if tc.other {
+			if err := os.WriteFile(filepath.Join(extdir, "keep"), nil, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if tc.load != nil {
+			if err := os.WriteFile(load, []byte(strings.ReplaceAll(*tc.load, "EXT", ext)), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		out, err := runSh(t, block+"echo \"load_changed=$load_changed\"\n", "TIER=atc", "EXT="+ext, "EXTDIR="+extdir,
+			"LOAD="+load, "tmp="+tmp, "changed=0", "load_changed=0")
+		if err != nil {
+			t.Fatalf("%s: %v\n%s", tc.name, err, out)
+		}
+		if _, err := os.Stat(ext); !os.IsNotExist(err) {
+			t.Errorf("%s: %s still exists (%v)", tc.name, ext, err)
+		}
+		if _, err := os.Stat(extdir); os.IsNotExist(err) == tc.other {
+			t.Errorf("%s: directory exists = %v, want %v", tc.name, err == nil, tc.other)
+		}
+		if b, _ := os.ReadFile(load); tc.load != nil && string(b) != tc.wantLoad {
+			t.Errorf("%s: extensions.load = %q, want %q", tc.name, b, tc.wantLoad)
+		}
+		if want := fmt.Sprintf("load_changed=%d", map[bool]int{false: 0, true: 1}[tc.changed]); !strings.Contains(out, want) {
+			t.Errorf("%s: output %q lacks %s", tc.name, out, want)
+		}
+	}
+	// The PowerShell script's tier-2 branch does the same, through a rename.
+	ps := stripComments(readDeploy(t, "scripts/install-hawkbell.ps1"))
+	i := strings.Index(ps, "if ($Tier -eq 'extension') {\n    if (-not (Same $Exe $Ext))")
+	j := strings.Index(ps, "if ($restart) {")
+	if i < 0 || j < i {
+		t.Fatal("install-hawkbell.ps1: extension block not found")
+	}
+	_, atc, ok := strings.Cut(ps[i:j], "\n  } else {\n")
+	if !ok {
+		t.Fatal("install-hawkbell.ps1: no tier-2 branch")
+	}
+	for _, w := range []string{
+		`Move-Item -Force -ErrorAction SilentlyContinue -Path $Ext -Destination "$Ext.old"`,
+		`Remove-Item -Force -ErrorAction SilentlyContinue -Path "$Ext.old"`,
+		`Where-Object { $_ -ne $Ext }`,
+	} {
+		if !strings.Contains(atc, w) {
+			t.Errorf("install-hawkbell.ps1 tier-2 branch lacks %q", w)
+		}
+	}
+	// osquery runs the renamed copy until the detached restart, so the
+	// same-run Remove-Item fails while the copy is loaded: the restart
+	// command deletes the .old after Restart-Service.
+	var cmd string
+	for _, l := range strings.Split(ps[j:], "\n") {
+		if strings.HasPrefix(strings.TrimSpace(l), "$cmd = ") {
+			cmd = l
+			break
+		}
+	}
+	r := strings.Index(cmd, "Restart-Service")
+	d := strings.Index(cmd, `Remove-Item -Force -ErrorAction SilentlyContinue -Path '$Ext.old'`)
+	if r < 0 || d < r {
+		t.Errorf("install-hawkbell.ps1: the detached restart does not delete $Ext.old after Restart-Service: %q", cmd)
 	}
 }
 
@@ -491,6 +598,73 @@ echo "still running"
 	for _, w := range []string{"gave up, last count 9", "polls: 3", "unanswered poll: [?]", "still running"} {
 		if !strings.Contains(string(out), w) {
 			t.Errorf("output lacks %q:\n%s", w, out)
+		}
+	}
+}
+
+// TestVerifyShExitStatus: verify.sh used to log "done: N failed checks"
+// and exit 0 whatever N was. Its EXIT trap (cleanup) now exits 1 when a
+// check failed or the restored agent options differ from the saved copy,
+// and keeps the status of a run that stopped early (die). The trap runs
+// here against a fake fleetctl that answers every call at once.
+func TestVerifyShExitStatus(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("bash")
+	}
+	for _, tool := range []string{"bash", "jq", "diff"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("no %s", tool)
+		}
+	}
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "fleetctl")
+	if err := os.WriteFile(fake, []byte(`#!/bin/sh
+case "$1" in
+report) echo '{"host":"vm","rows":[{"n":"0"}]}' ;;
+api) echo '{}' ;;
+get) [ "$2" = config ] && cat "$WORK/after.json" ;;
+esac
+exit 0
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "agent-options.before.json"), []byte(`{"config":{"options":{}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name     string
+		failures int
+		end      string // how the main script ends
+		after    string // agent options the server reports after the restore
+		want     int
+		done     string
+	}{
+		{"all checks passed", 0, "true", `{"config":{"options":{}}}`, 0, "done: 0 failed checks"},
+		{"two checks failed", 2, "true", `{"config":{"options":{}}}`, 1, "done: 2 failed checks"},
+		{"stopped by die", 0, "die stopped", `{"config":{"options":{}}}`, 1, "done: 0 failed checks"},
+		{"restore differs", 0, "true", `{"config":{"options":{"x":1}}}`, 1, "done: 1 failed checks"},
+	} {
+		if err := os.WriteFile(filepath.Join(dir, "after.json"), []byte(`{"spec":{"agent_options":`+tc.after+`}}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		script := `HAWKBELL_VERIFY_LIB=1 source "$VERIFY"
+EXT_REGISTERED=0
+FAILURES=` + fmt.Sprint(tc.failures) + `
+trap cleanup EXIT
+` + tc.end + `
+`
+		cmd := exec.Command("bash", "-c", script)
+		cmd.Env = append(os.Environ(), "VERIFY="+filepath.Join(deployDir(t), "verify.sh"), "FLEETCTL="+fake,
+			"WORK="+dir, "POLL=0")
+		out, err := cmd.CombinedOutput()
+		code := 0
+		if ee, ok := err.(*exec.ExitError); ok {
+			code = ee.ExitCode()
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		if code != tc.want || !strings.Contains(string(out), tc.done) {
+			t.Errorf("%s: exit %d, want %d; output lacks %q?\n%s", tc.name, code, tc.want, tc.done, out)
 		}
 	}
 }

@@ -185,7 +185,8 @@
 // next to the config file the hook was pointed at makes `hawkbell hook` exit 0
 // at once with an empty reply, before reading anything. A per-user location
 // is deliberately not honoured: it would let the monitored user switch off
-// a managed hook. sources.hooks.enabled: false has the same effect.
+// a managed hook. sources.hooks.enabled: false has the same effect. Either
+// way the hook also stops deleting expired spool files (see below).
 //
 // # Spool records and their consumers
 //
@@ -197,6 +198,36 @@
 // meant for daemonless consumers (Fluent Bit on the spool, `hawkbell ci`).
 // A daemonless shipper must not ship activity-*.ndjson from the spool: those
 // lines are pre-redaction and carry local content.
+//
+// The worker deletes what no daemon deletes: the account's own files whose
+// last write is older than retention.spool (default 72 h), after the reply,
+// once its records are appended (or, when every event was excluded, in
+// place of appending). Which directories (spool.Locate):
+//
+//   - With $HAWKBELL_SPOOL set: only that directory, record files, session
+//     state and temporary files; only session state and temporary files
+//     when it names the system spool. The home is not touched.
+//   - With the system spool in use: its session state and temporary files,
+//     never its record files (the daemon deletes those once it has read
+//     them, and the hook does not delete records the daemon may not have
+//     read); and record files, session state and temporary files in the
+//     fallback spool in the home, which the hook used while the system
+//     spool was unreachable or not installed.
+//   - With the fallback spool in use: its record files, session state and
+//     temporary files.
+//
+// A directory is scanned at most once an hour across all hook processes,
+// more often when retention.spool is shorter or the previous scan stopped
+// at its cap of 1,000 deletions (spool.MaybePrune). A scan holds the
+// spool's lock, and spool.SaveState replaces a session's state under the
+// same lock, so a scan does not delete state saved while it runs; the save
+// waits for that lock at most 100 ms before the reply and then saves
+// without it, and a scan running at that moment can still delete what it
+// saved (the session then starts from empty state). Nothing is pruned
+// while the hook is switched off (kill switch, sources.hooks.enabled:
+// false; the hook then exits before it looks at a spool), or for an
+// account whose agents run no hook: their spools keep what they hold until
+// a hook runs again.
 //
 // # Known gaps
 //

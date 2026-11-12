@@ -1,6 +1,7 @@
 //go:build e2e
 
-// Container and package tests (BUILD-C, C7), with real containers:
+// Container and package tests (design/BUILD-C.md section C7), with real
+// containers:
 //
 //   - TestContainerNodeSensor builds the image from the repository's
 //     Dockerfile and runs it the way deploy/kubernetes/daemonset.yaml does
@@ -1128,7 +1129,8 @@ func pkgNFPM(t *testing.T) string {
 	}
 	p, err := exec.LookPath("nfpm")
 	if err != nil {
-		t.Skip("nfpm not found (set HAWKBELL_NFPM or put it in PATH: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest)")
+		t.Skip("nfpm not found (set HAWKBELL_NFPM or put it in PATH: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.49.0, " +
+			"the version packaging/README.md records; it needs Go 1.27.4 or later, which the go command downloads itself with GOTOOLCHAIN=auto, the default)")
 	}
 	return p
 }

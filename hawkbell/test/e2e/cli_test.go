@@ -1,12 +1,12 @@
 //go:build e2e
 
-// End-to-end test of the hawkbell binary (BUILD-C, C3): build it, give it a
-// fake home with a Claude Code transcript and settings, install the user
-// hooks with `hawkbell hooks install --scope user`, pipe real-shaped hook
-// payloads through the exact command the install registered, run the
-// daemon for a few seconds against a temporary data directory, and check
-// what reached the outbox, the local ring and the state database, and that
-// `hawkbell doctor --json` agrees.
+// End-to-end test of the hawkbell binary (design/BUILD-C.md section C3):
+// build it, give it a fake home with a Claude Code transcript and settings,
+// install the user hooks with `hawkbell hooks install --scope user`, pipe
+// real-shaped hook payloads through the exact command the install
+// registered, run the daemon for a few seconds against a temporary data
+// directory, and check what reached the outbox, the local ring and the
+// state database, and that `hawkbell doctor --json` agrees.
 //
 //	go test -tags e2e ./test/e2e -run CLI -v
 //

@@ -132,9 +132,12 @@ move a host out of the fleet before uninstalling hawkbell from it.
 The package files point at example URLs. The release build
 (`.goreleaser.yaml`) makes the deb and rpm; it does not make the macOS pkg
 (`packaging/macos/build-pkg.sh`, needs macOS, never run) or the msi
-(`packaging/windows/hawkbell.wxs` is a sketch that was never compiled), so
-`hawkbell-pkg.package.yml` and `hawkbell-msi.package.yml` have no package
-to point at yet.
+(`packaging/windows/hawkbell.wxs` is a sketch that was never compiled).
+**`hawkbell-pkg.package.yml` and `hawkbell-msi.package.yml` are
+placeholders**: no build produces the packages they name, and each says so
+in its header comment. `gitops/fleets/workstations.yml` lists both and has
+a macOS install policy for the pkg; remove those entries until you have
+built the packages yourself.
 
 ## Fail-closed policies and the two heartbeat windows
 
@@ -222,16 +225,29 @@ error in 4 of 10 tries (docs/ASSUMPTIONS.md).
 ## Install scripts
 
 `scripts/install-hawkbell.sh` (macOS, Linux) and `scripts/install-hawkbell.ps1`
-(Windows) are Fleet scripts. Fleet refuses ad hoc script contents of 10,000
-characters or more; `TestScriptsUnderFleetLimit` in internal/fleetgen fails
-at that size. As shipped, `install-hawkbell.sh` is 9,992 characters and
-`install-hawkbell.ps1` 8,478. Edit the URL and SHA-256 of each build and the
-tier at the top (a value may be a Fleet custom variable). A real SHA-256 is
-45 characters longer than the `REPLACE_WITH_SHA256` placeholder, so with all
-four hashes filled in `install-hawkbell.sh` grows to 10,172 characters:
-delete the builds you do not deploy to bring it back under 10,000. Whether
-Fleet applies the same limit to saved scripts uploaded by GitOps was not
-checked. The scripts:
+(Windows) are Fleet scripts. Edit the settings at the top: in the shell
+script the download directory `V` (or each build's URL), the SHA-256 of each
+build and `TIER`; in the PowerShell script `$Builds` and `$Tier`. A value
+may be a Fleet custom variable. Fleet's API documentation says ad hoc
+script contents must be less than 10,000 characters (docs/API/rest-api.md,
+"Run script"); its source refuses more than 10,000
+(`UnsavedScriptMaxRuneLen` and `ValidateHostScriptContents`,
+server/fleet/scripts.go). `TestScriptsUnderFleetLimit` in internal/fleetgen
+fails at 10,000, the stricter of the two, and `TestScriptsFitWithRealHashes` fails unless each
+install script, with 64-character hashes in place of its
+`REPLACE_WITH_SHA256` placeholders, stays at least 300 characters under the
+limit. On 2026-11-12, `install-hawkbell.sh` was 9,492 characters as shipped
+and 9,672 with four hashes filled in; `install-hawkbell.ps1` 8,897 and
+8,987 with two (the test logs both numbers). The rest of that margin is
+for download URLs longer than the example ones and for local edits. The
+10,000 limit is for ad hoc contents (the API's `script_contents`); Fleet's
+documentation says a longer script must be saved first and run by
+`script_id` or `script_name` (docs/API/rest-api.md, "Run script"), and
+Fleet's source allows saved scripts up to 500,000 characters
+(`SavedScriptMaxRuneLen`, server/fleet/scripts.go; both read at Fleet
+commit 27178c8). The GitOps examples upload the install scripts under
+`controls.scripts`. No script of 10,000 characters or more was uploaded to
+a Fleet server to check either limit. The scripts:
 
 - download over HTTPS and refuse to install unless the SHA-256 matches;
 - create directories and the configuration: the shell script creates the
@@ -249,8 +265,10 @@ checked. The scripts:
   the service with `Group=hawkbell`, the outbox readers' group: the unit's
   `StateDirectory=` makes systemd re-own `/var/lib/hawkbell`, recursively,
   to the service's user and group at every start, which would be
-  `root:root` without it. On Linux the script also writes a drop-in
-  (`hawkbell.service.d/10-outbox-group.conf`) that repeats `Group=hawkbell`.
+  `root:root` without it. The install script up to commit 6d0d308 also
+  wrote a drop-in, `hawkbell.service.d/10-outbox-group.conf`, that repeated
+  `Group=hawkbell`; the script no longer writes it (a host that has it keeps
+  an identical setting), and `uninstall-hawkbell.sh` removes it.
   The state database is `0600` and the spools `0700`, so the group can read
   only the `0640` outbox files (internal/daemon/dirs.go, sinks.go);
 - rewrite hawkbell's hook entries for the managed scope and Codex's system
@@ -271,7 +289,17 @@ checked. The scripts:
 
 Running a script twice changes nothing the second time. The `atc` tier
 installs without the extension: it removes hawkbell's line from
-`extensions.load` and leaves the `hawkbell.ext` copy in place.
+`extensions.load` and deletes the `hawkbell.ext` copy (and its directory
+when empty), which nothing loads or updates once the line is gone. On
+Linux and macOS osquery keeps running a deleted extension file until its
+restart 10 seconds later. Windows does not delete a running executable, so
+the PowerShell script renames `hawkbell.ext.exe` to `hawkbell.ext.exe.old`
+and deletes that file in the same run if nothing runs it, otherwise 5
+seconds after the detached osquery restart, which the same command runs
+(neither path was run on Windows). The extension tier, which renames a
+running copy before replacing it, deletes its `.old` the same way; it and
+the packages' post-install script `register-extension.*` make the copy
+again.
 `uninstall-hawkbell.*` removes hawkbell's managed and system hook entries
 while the binary still exists (the shell script stops and removes the
 service before that, the PowerShell script after), then the extension
@@ -349,8 +377,11 @@ the host does not answer is recorded as an error, and for a policy that
 counts as a failed check. The waits for the tables and for a refetch
 treat an unanswered or failed poll as "not ready yet" and poll again (up
 to 40 and 60 polls, 3 seconds apart by default) before they stop the run.
-Read the last line, `done: N failed checks`: the exit status does not
-reflect failed checks. See [VERIFIED.md](VERIFIED.md): the run after the rename, with
+The last line is `done: N failed checks`; N also counts agent options
+that differ from the saved copy after the restore. The exit status is
+nonzero when N is not 0 or the run stopped early (`TestVerifyShExitStatus`; the exit
+status of the runs recorded in VERIFIED.md, made before this change,
+reflected only early stops). See [VERIFIED.md](VERIFIED.md): the run after the rename, with
 `HAWKBELL_BIN` set, ended with 240 checks and 0 failed (10 scenarios of 24
 checks: 10 policies as live queries, 10 Fleet policy results, 4 labels).
 Not covered there: the fleetd and builtin profiles (dry run and unit tests

@@ -159,7 +159,7 @@ func TestUniqList(t *testing.T) {
 	}
 }
 
-// research/agent-surfaces-b.md item 1 lists the MCP declaration keys per
+// research/agent-surfaces-b.md section 1 lists the MCP declaration keys per
 // agent; each must be recognised, and a file that declares no server must
 // report none.
 func TestAutorunMCPDialects(t *testing.T) {

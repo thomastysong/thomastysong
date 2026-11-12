@@ -29,8 +29,9 @@ const (
 	defaultShipBatch    = 500
 	defaultShipInterval = time.Second
 	// maxShipLine is the longest line the shipper will parse. The Files
-	// sink never writes one longer than its MaxLineBytes (48 KiB by
-	// default), so anything near this size was not written by hawkbell.
+	// sink never writes one longer than its MaxLineBytes (16 KiB by
+	// default, 64 KiB at most through output.max_line_bytes), so anything
+	// near this size was not written by hawkbell.
 	maxShipLine = 1 << 20
 	// shipWindow is how much of a segment is read per batch. It must exceed
 	// maxShipLine so a window always holds at least one whole line or

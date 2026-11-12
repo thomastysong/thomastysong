@@ -134,7 +134,8 @@ func TestBooleanStructure(t *testing.T) {
 }
 
 // The red team measured flat predicates over arrays over-matching 3.3x to
-// 3.6x because they cannot say "the same command". any_command binds.
+// 3.6x because they cannot say "the same command" (redteam/detection-quality.md
+// section 6). any_command binds.
 func TestAnyCommandBindsToOneCommand(t *testing.T) {
 	cmds := func(cs ...map[string]any) map[string]any { return map[string]any{"shell.cmds": cs} }
 	rmBuild := map[string]any{"name": "rm", "path": "rm", "args": []string{"-rf", "build"}, "origin": "top", "dynamic": false}

@@ -7,9 +7,12 @@
 # (config.inputs / config.filters) or a ConfigMap you mount.
 #
 # The tail DB MUST be on a hostPath: on an emptyDir it is lost with the pod,
-# and in testing a lost tail DB replayed every retained record (5,000
-# delivered records became 10,000). hawkbell record ids are deterministic, so
-# a destination that deduplicates on "id" absorbs replays.
+# and with read_from_head a lost tail DB replays every file still on disk.
+# Measured with the outbox inputs (hawkbell-inputs.yaml), not this fragment:
+# 5,000 records delivered, tail DBs deleted, Fluent Bit restarted: all 5,000
+# delivered again, 10,000 received (deploy/fluent-bit/VERIFIED.md,
+# "Measurements added 2026-11-12"). hawkbell record ids are deterministic,
+# so a destination that deduplicates on "id" absorbs replays.
 #
 # UNTESTED on a real cluster in this release (see docs/LIMITATIONS.md).
 parsers:

@@ -399,9 +399,10 @@ func (r *run) account() {
 
 // userAuthoredAssets have definition hashes over text a user wrote (MCP
 // launch lines with inline env values, hook commands, rules files): those
-// hashes are content-derived and must be keyed. Binary and package hashes
-// identify public software and stay as they are, so they can be matched
-// against threat intelligence.
+// hashes are content-derived and must be keyed. The other kinds keep the
+// digest discovery computed (an observation digest for products, a workflow
+// file hash for CI agents, folder or file hashes for skills and plugins);
+// none of them is a hash of a binary.
 var userAuthoredAssets = map[event.AssetKind]bool{
 	event.AssetMCPServer: true, event.AssetHook: true, event.AssetRulesFile: true,
 	event.AssetSubagent: true, event.AssetCommand: true, event.AssetProjectConfig: true,

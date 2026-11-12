@@ -40,7 +40,7 @@ var nonBypassArgs = map[string]string{
 	"--permission-mode dontAsk":               "denies tools that were not pre-approved",
 	"--permission-mode auto":                  "a model classifier approves; approvals are not switched off",
 	"--permission-mode acceptEdits":           "file edits only",
-	"--bare":                                  "an attribute: managed hooks still run (BUILD-B addendum 2)",
+	"--bare":                                  "an attribute: managed hooks still run (design/BUILD-B.md, Addendum 2)",
 	"--safe-mode":                             "skips user hooks; managed hooks run",
 	"--no-session-persistence":                "no transcript; reported as coverage, not as bypass",
 	"--dangerously-load-development-channels": "loads unreleased channels",

@@ -72,6 +72,9 @@ func TestMarkdownRenamed(t *testing.T) {
 	if !strings.Contains(md, "made before the rename (2026-11-11, packs hash `5323a0c8ac33`") {
 		t.Errorf("renamed paragraph:\n%s", md)
 	}
+	if !strings.Contains(md, renamedHash) || !strings.Contains(renamedHash, "rules were changed after the rename") {
+		t.Errorf("renamed paragraph does not say why the packs hash differs:\n%s", md)
+	}
 	sc := &ScenarioReport{Renamed: now.Renamed}
 	if !strings.Contains(sc.Markdown(), "every number, class and result in the tables below is the same") {
 		t.Error("scenario report lacks the renamed paragraph")

@@ -5,9 +5,11 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 )
@@ -34,8 +36,13 @@ func readDeploy(t *testing.T, rel string) string {
 	return string(b)
 }
 
-// Fleet refuses ad hoc script contents of 10,000 characters or more
-// (docs/API/rest-api.md, "Run script").
+// fleetScriptLimit: Fleet's API documentation says ad hoc script contents
+// must be less than 10,000 characters (docs/API/rest-api.md, "Run
+// script"); its source refuses more than 10,000 (UnsavedScriptMaxRuneLen,
+// server/fleet/scripts.go at commit 27178c8). The test fails at 10,000,
+// the stricter of the two.
+const fleetScriptLimit = 10000
+
 func TestScriptsUnderFleetLimit(t *testing.T) {
 	ents, err := os.ReadDir(filepath.Join(deployDir(t), "scripts"))
 	if err != nil {
@@ -46,7 +53,7 @@ func TestScriptsUnderFleetLimit(t *testing.T) {
 	}
 	for _, e := range ents {
 		s := readDeploy(t, "scripts/"+e.Name())
-		if n := len([]rune(s)); n >= 10000 {
+		if n := utf8.RuneCountInString(s); n >= fleetScriptLimit {
 			t.Errorf("%s: %d characters, Fleet's limit is 10,000", e.Name(), n)
 		}
 		if strings.Contains(s, "\r") {
@@ -56,6 +63,33 @@ func TestScriptsUnderFleetLimit(t *testing.T) {
 		// comments included, and fails when the variable is not set.
 		if regexp.MustCompile(`\$\{?FLEET_SECRET_`).MatchString(s) {
 			t.Errorf("%s: names a Fleet secret variable; gitops would require it", e.Name())
+		}
+	}
+}
+
+// TestScriptsFitWithRealHashes: the install scripts ship with
+// REPLACE_WITH_SHA256 placeholders, 45 characters shorter than the 64 hex
+// digits an administrator puts in their place. With every hash filled in,
+// a script must stay at least 300 characters under Fleet's limit, room for
+// longer download URLs and local edits. Fleet counts characters, not
+// bytes.
+func TestScriptsFitWithRealHashes(t *testing.T) {
+	const spare = 300
+	hash := strings.Repeat("0123456789abcdef", 4)
+	if !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(hash) {
+		t.Fatalf("test hash %q is not a SHA-256 in hex", hash)
+	}
+	for name, placeholders := range map[string]int{"install-hawkbell.sh": 4, "install-hawkbell.ps1": 2} {
+		s := readDeploy(t, "scripts/"+name)
+		if n := strings.Count(s, "REPLACE_WITH_SHA256"); n != placeholders {
+			t.Errorf("%s: %d SHA-256 placeholders, want %d (one per build)", name, n, placeholders)
+		}
+		filled := strings.ReplaceAll(s, "REPLACE_WITH_SHA256", hash)
+		n := utf8.RuneCountInString(filled)
+		t.Logf("%s: %d characters as shipped, %d with real hashes", name, utf8.RuneCountInString(s), n)
+		if fleetScriptLimit-n < spare {
+			t.Errorf("%s: %d characters with real hashes, %d under Fleet's limit of %d; want at least %d to spare",
+				name, n, fleetScriptLimit-n, fleetScriptLimit, spare)
 		}
 	}
 }
@@ -150,30 +184,66 @@ func TestEmbeddedServiceDefinitions(t *testing.T) {
 
 // TestInstallScriptKeepsOutboxGroup: the data directory is root:hawkbell 0711
 // (traversable, so hooks reach their own spool directory and the bundle;
-// the outbox inside is root:hawkbell 0750 for the log shipper), but
-// the unit's StateDirectory= makes systemd re-own it, recursively, to the
-// service's user and group at every start: root:root for a root service.
-// The script therefore runs the service with Group=hawkbell through a drop-in
-// (the unit itself stays identical to packaging/), and uninstall removes it.
+// the outbox inside is root:hawkbell 0750 for the log shipper), but the
+// unit's StateDirectory= makes systemd re-own it, recursively, to the
+// service's user and group at every start: root:root for a root service
+// without Group=. The unit the script writes carries Group=hawkbell in its
+// [Service] section, as packaging/systemd/hawkbell.service does
+// (TestEmbeddedServiceDefinitions holds the two equal). The install
+// script up to commit 6d0d308 also wrote a drop-in, hawkbell.service.d/
+// 10-outbox-group.conf, repeating Group=hawkbell; the script no longer
+// writes it, and uninstall still removes it from hosts that have it.
 func TestInstallScriptKeepsOutboxGroup(t *testing.T) {
-	sh := stripComments(readDeploy(t, "scripts/install-hawkbell.sh"))
+	raw := readDeploy(t, "scripts/install-hawkbell.sh")
+	sh := stripComments(raw)
 	for _, w := range []string{
 		"getent group hawkbell >/dev/null 2>&1 || groupadd --system hawkbell",
 		`install -d -m 0711 -o 0 -g hawkbell "$DATA"`,
-		`printf '[Service]\nGroup=hawkbell\n' >"$tmp/group.conf"`,
-		`put "$tmp/group.conf" "$UNIT.d/10-outbox-group.conf" 0644`,
+		`put "$tmp/unit" "$UNIT" 0644`,
 	} {
 		if !strings.Contains(sh, w) {
 			t.Errorf("install-hawkbell.sh lacks %q", w)
 		}
 	}
-	// The drop-in counts as a unit change: daemon-reload and restart follow.
-	if strings.Index(sh, `put "$tmp/group.conf"`) > strings.Index(sh, "[ $changed = 1 ] && systemctl daemon-reload") {
-		t.Error("install-hawkbell.sh reloads systemd before writing the group drop-in")
+	service := unitSection(heredoc(t, raw, `cat >"$tmp/unit" <<'EOF'`), "Service")
+	for _, w := range []string{"Group=hawkbell", "StateDirectory=hawkbell", "StateDirectoryMode=0711"} {
+		if !slices.Contains(service, w) {
+			t.Errorf("the unit install-hawkbell.sh writes lacks %s in [Service]", w)
+		}
+	}
+	for _, l := range service {
+		if strings.HasPrefix(l, "User=") || strings.HasPrefix(l, "DynamicUser=") {
+			t.Errorf("the unit install-hawkbell.sh writes sets %s; the daemon must run as root", l)
+		}
+	}
+	// Writing the unit counts as a change: daemon-reload and restart follow.
+	if strings.Index(sh, `put "$tmp/unit" "$UNIT"`) > strings.Index(sh, "[ $changed = 1 ] && systemctl daemon-reload") {
+		t.Error("install-hawkbell.sh reloads systemd before writing the unit")
+	}
+	if strings.Contains(sh, "$UNIT.d") {
+		t.Error("install-hawkbell.sh writes a drop-in again; Group= belongs in the unit, where packaging/ has it")
 	}
 	if un := stripComments(readDeploy(t, "scripts/uninstall-hawkbell.sh")); !strings.Contains(un, `"$UNIT.d/10-outbox-group.conf"`) {
-		t.Error("uninstall-hawkbell.sh leaves the group drop-in behind")
+		t.Error("uninstall-hawkbell.sh leaves an earlier install script's group drop-in behind")
 	}
+}
+
+// unitSection returns the trimmed directive lines of one [section] of a
+// systemd unit.
+func unitSection(unit, section string) []string {
+	var out []string
+	in := false
+	for _, l := range strings.Split(unit, "\n") {
+		l = strings.TrimSpace(l)
+		switch {
+		case l == "" || strings.HasPrefix(l, "#") || strings.HasPrefix(l, ";"):
+		case strings.HasPrefix(l, "[") && strings.HasSuffix(l, "]"):
+			in = l == "["+section+"]"
+		case in:
+			out = append(out, l)
+		}
+	}
+	return out
 }
 
 func heredoc(t *testing.T, s, start string) string {

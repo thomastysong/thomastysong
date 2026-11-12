@@ -63,8 +63,20 @@ type Asset struct {
 	Owner   string `json:"owner,omitempty"` // OS user the item belongs to
 	Running bool   `json:"running,omitempty"`
 	PID     int    `json:"pid,omitempty"`
-	// SHA256 is the content hash: binary hash for agents, definition hash for
-	// MCP servers and hooks, folder hash for skills.
+	// SHA256 is the hex SHA-256 discovery computed for the asset; it
+	// changes when what discovery records about the asset changes.
+	// Discovery hashes no binaries: agents, apps, IDE and browser
+	// extensions, AI browsers and model runtimes get a digest of what the
+	// scan observed (version, install path, evidence, risk flags,
+	// telemetry), so a binary replaced in place at the same version keeps
+	// its value. CI agents carry the hash of the workflow file that names
+	// them, skills and plugin directories a folder hash, plugin files and
+	// the text files a user wrote (rules files, commands, subagents,
+	// project configuration) the hash of their content, MCP servers and
+	// hooks their definition hash. For MCP servers, hooks, rules files,
+	// subagents, commands and project configuration the privacy stage
+	// writes a keyed digest (24 hex digits) instead, or no value without a
+	// key; see the profile table in docs/EVENTS.md.
 	SHA256 string `json:"sha256,omitempty"`
 	// Evidence lists how identity was established, e.g. "package:npm",
 	// "bundle_id", "path", "process", "signature". Two independent classes

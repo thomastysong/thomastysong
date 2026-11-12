@@ -1,6 +1,9 @@
+# PLACEHOLDER: no build produces this package yet. .goreleaser.yaml makes
+# the deb and rpm only; the msi would come from packaging/windows/hawkbell.wxs,
+# a WiX sketch that has never been compiled. Do not deploy this file until
+# such a package exists at url.
 # EXAMPLE, Fleet Premium only. Not validated against a server (the
-# verification server runs Fleet Free); the Windows installer is a sketch
-# (packaging/) and untested on hardware.
+# verification server runs Fleet Free) and untested on Windows hardware.
 - url: https://downloads.example.com/hawkbell/0.1.0/hawkbell_0.1.0_windows_amd64.msi
   # Pin the package: Fleet refuses it when the download's hash differs.
   # hash_sha256: <SHA-256 of the package file>

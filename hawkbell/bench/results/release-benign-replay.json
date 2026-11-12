@@ -2,7 +2,7 @@
   "date": "2026-11-12",
   "corpus": "snapshot of /root/.claude/projects taken 2026-11-12T10:27:00Z, recorded before the rename from the working name spoor to hawkbell and read with that name rewritten as in the repository (`benchrun -old-name`: `RewriteOldName` in `internal/bench/oldname.go`)",
   "rules_version": "agent-integrity@2026.11.0,coverage@2026.11.0,credential@2026.11.0,defense-evasion@2026.11.0,destructive@2026.11.0,execution@2026.11.0,exfiltration@2026.11.0,offensive@2026.11.0,persistence@2026.11.0,posture@2026.11.0,process@2026.11.0,sequence@2026.11.0,supply-chain@2026.11.0",
-  "rules_hash": "82523dea0cecd7062bde5c524cc1cc796ba45f320b52e59d0682e3474d385ae6",
+  "rules_hash": "d3c2ecd199072d51bd157b36890dd579c39e4f37b636da1aacc7badeff99a77e",
   "rules_count": 138,
   "renamed_from": {
     "date": "2026-11-12",

@@ -13,12 +13,13 @@
 #     cap_sys_ptrace, with the effective bit (setcap ...=ep). A non-root
 #     process gets capabilities only from file capabilities: capabilities a
 #     pod adds to a non-root container land in its bounding set but are not
-#     effective (red team E1, variant I: CapEff=0). With the file
-#     capabilities, a uid-65532 sensor reads other users' /proc/<pid>/environ
-#     and 0700 homes (and any file and process memory on the node: that is
-#     what the two capabilities grant). File permissions still stop it from
-#     writing root-owned files in other containers, which a uid-0 sensor with
-#     the same two capabilities can (red team E2, W3): CAP_DAC_READ_SEARCH
+#     effective (redteam/containers-k8s.md, E1 variant I: CapEff=0). With
+#     the file capabilities, a uid-65532 sensor reads other users'
+#     /proc/<pid>/environ and 0700 homes (and any file and process memory on
+#     the node: that is what the two capabilities grant). File permissions
+#     still stop it from writing root-owned files in other containers, which
+#     a uid-0 sensor with the same two capabilities can
+#     (redteam/containers-k8s.md, E2 W3): CAP_DAC_READ_SEARCH
 #     bypasses read and search checks only. CAP_SYS_PTRACE with the host pid
 #     namespace would still let it attach to any root process and rewrite it
 #     (ptrace, process_vm_writev, pidfd_getfd), which the runtime's default

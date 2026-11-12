@@ -11,7 +11,10 @@ rules:
     description: >-
       Marker rule. A tool returned content that a third party can author (a
       web page, a search result, an MCP result, an issue body, a file under
-      node_modules, Downloads or a temp directory, a shell download).
+      node_modules, Downloads or a temp directory, a shell download). The
+      session's own scratch directory (a directory named by the session id
+      below a temp directory) is not third-party content, but a dependency
+      tree or a download inside it is.
       Documentation and the organisation's own code hosts are exempt
       through trusted_content_hosts and package registries through
       trusted_registry_hosts, because counting them made the flag
@@ -564,11 +567,14 @@ rules:
     title: Evasion attempt after a refused tool call
     description: >-
       A tool call was refused and the same thread then used a construct
-      that routes around a guard: $IFS or encoded command text, a binary run
-      through /proc/self/root or the dynamic loader, the sandbox switched
-      off for one call, or the agent's own hooks or the sensor tampered
-      with. This is the deny-then-evade pattern an agent produced unprompted
-      (Ona, Mar 2026).
+      that routes around a guard: $IFS or encoded command text, a program
+      or script named through /proc/<pid>/root or run by the dynamic
+      loader, the sandbox switched off for one call, or the agent's own
+      hooks or the sensor tampered with. This is the deny-then-evade
+      pattern an agent produced unprompted (Ona, Mar 2026). A cd into
+      /proc/<pid>/root followed by a relative program
+      (cd /proc/self/root/usr/bin && ./npx) is not recorded as a process
+      root and does not match.
     kind: activity
     class: finding
     severity: high
@@ -592,9 +598,13 @@ rules:
         - tool.input_keys: dangerouslyDisableSandbox
         - any_command:
             path|re: "/proc/[^/]+/root/"
+        # A process root spelled in the executed path or a script operand
+        # (/proc/self/./root/..., sh /proc/1/root/x.sh), as in HB-EXEC-006;
+        # a cd into one is not recorded.
+        - shell.proc_root: execute
         - any_command:
             name|re: "ld-(linux|musl)[^/]*\\.so"
-    evidence: [target.command, shell.obfuscation, shell.defense_evasion, tool.input_keys, session.flags]
+    evidence: [target.command, shell.obfuscation, shell.defense_evasion, tool.input_keys, shell.proc_root, session.flags]
     escalate: true
     remedy: Treat the refusal as bypassed; review the session and tighten the deny rule to the parsed command rather than its text.
     tests:
@@ -607,6 +617,16 @@ rules:
         events:
           - { type: tool.post, tool: { kind: shell, name: Bash }, target: { command: "docker ps" }, outcome: { status: denied } }
           - { type: tool.pre, tool: { kind: shell, name: Bash, input_keys: [command, dangerouslyDisableSandbox] }, target: { command: "docker ps" } }
+        expect: match
+      - name: denied then a dot-spelled process root
+        events:
+          - { type: tool.post, tool: { kind: shell, name: Bash }, target: { command: "npx evil-pkg" }, outcome: { status: denied } }
+          - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "/proc/self/./root/usr/bin/npx evil-pkg" } }
+        expect: match
+      - name: denied then a script run through another process's root
+        events:
+          - { type: tool.post, tool: { kind: shell, name: Bash }, target: { command: "sh /tmp/x.sh" }, outcome: { status: denied } }
+          - { type: tool.pre, tool: { kind: shell, name: Bash }, target: { command: "sh /proc/1/root/tmp/x.sh" } }
         expect: match
       - name: denied then an ordinary command
         events:

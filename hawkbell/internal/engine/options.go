@@ -28,8 +28,11 @@ const (
 	ModeHook   = "hook"
 )
 
-// Timing and size constants. They trace to design/DECISIONS.md (A6, A14,
-// A21, A22) and BUILD-C.md section C2.
+// Timing and size constants. They trace to design/BUILD-C.md section C2
+// (items 3, 4, 7 and 10, and the bounded ingest queue of its API) and its
+// addendum (late events), and to design/DECISIONS.md A6 (root-observed
+// surfaces), A21 (session summaries) and A22 (one activity record per
+// action).
 const (
 	// HoldFor is how long a transcript or OTel tool event waits for the hook
 	// record of the same call before it is processed as the activity record
@@ -78,7 +81,7 @@ const (
 )
 
 // Options configures a Pipeline. Fields marked additive are not part of the
-// API in BUILD-C.md; the daemon may leave them zero.
+// API in design/BUILD-C.md section C2; the daemon may leave them zero.
 type Options struct {
 	Config  *config.Config   // nil: config.Default("")
 	Catalog *catalog.Catalog // catalog version and hook capability; may be nil
@@ -228,7 +231,9 @@ func suppressions(in []config.Suppression) ([]rules.Suppression, error) {
 			}
 		}
 		if s.Expires != "" {
-			t, err := parseExpiry(s.Expires)
+			// A bare date lasts through the end of that day (UTC), as in a
+			// bundle's suppressions.yaml.
+			t, err := rules.ParseExpiry(s.Expires)
 			if err != nil {
 				return nil, fmt.Errorf("rules.suppressions[%d].expires: %w", i, err)
 			}
@@ -237,18 +242,6 @@ func suppressions(in []config.Suppression) ([]rules.Suppression, error) {
 		out = append(out, r)
 	}
 	return out, nil
-}
-
-func parseExpiry(s string) (time.Time, error) {
-	if t, err := time.Parse(time.RFC3339, s); err == nil {
-		return t.UTC(), nil
-	}
-	t, err := time.Parse("2006-01-02", s)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("%q: want RFC 3339 or YYYY-MM-DD", s)
-	}
-	// A date means "through the end of that day".
-	return t.Add(24 * time.Hour).UTC(), nil
 }
 
 // ruleSet returns the set the engine runs: the caller's set, or a copy of

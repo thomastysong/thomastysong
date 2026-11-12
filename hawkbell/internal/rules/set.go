@@ -8,7 +8,6 @@ import (
 	"path"
 	"sort"
 	"strings"
-	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -349,12 +348,9 @@ func suppressionsFromNode(root *yaml.Node) ([]Suppression, error) {
 		}
 		sp := Suppression{RuleID: r.Rule, Match: r.Match, Reason: r.Reason, Tags: r.Tags}
 		if r.Expires != "" {
-			t, err := time.Parse(time.RFC3339, r.Expires)
+			t, err := ParseExpiry(r.Expires)
 			if err != nil {
-				t, err = time.Parse("2006-01-02", r.Expires)
-			}
-			if err != nil {
-				return nil, fmt.Errorf("rules: suppressions.yaml: entry %d: expires %q: want RFC 3339 or YYYY-MM-DD", i+1, r.Expires)
+				return nil, fmt.Errorf("rules: suppressions.yaml: entry %d: expires %w", i+1, err)
 			}
 			sp.Expires = t
 		}

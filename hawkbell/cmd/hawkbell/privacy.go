@@ -89,7 +89,7 @@ func (a *app) privacyShow(args []string) int {
 		Retention: map[string]string{
 			"outbox":       fmt.Sprintf("%s or %s, whichever is reached first", cfg.Retention.Outbox.D(), bytesStr(cfg.Retention.OutboxBytes)),
 			"local_ring":   fmt.Sprintf("%s or %s", cfg.Retention.Local.D(), bytesStr(cfg.Retention.LocalBytes)),
-			"hook_spool":   cfg.Retention.Spool.D().String() + " after it was read",
+			"hook_spool":   cfg.Retention.Spool.D().String() + " after the last write (system spool: once the daemon has also read it; elsewhere: at the first hook call an hour or more after the previous scan of that spool, and never while no hook runs or the hook is switched off)",
 			"state_detect": cfg.Retention.Detections.D().String(),
 			"state_sess":   cfg.Retention.Sessions.D().String(),
 		},
@@ -506,11 +506,14 @@ const privacyPurgeAbout = `Erases one account's records from this machine:
     write-ahead log is truncated);
   - every line of the local ring that belongs to the account;
   - the hook spool, which holds the account's activity WITH local content
-    (prompt text, tool input and output) until the daemon has read it and
-    retention.spool has passed: every line of the account's own spool
-    directories (<data>/spool/<uid>/ and the fallback spool in its home) is
-    overwritten in place, its guard-mode session state is deleted, and lines
-    naming the account in any other spool directory are overwritten too.
+    (prompt text, tool input and output) for retention.spool after its last
+    write and until it is deleted (by the daemon once it has read a file in
+    <data>/spool/<uid>/, by a later hook of the account elsewhere; not while
+    no hook runs or the hook is switched off): every line of the account's
+    own spool directories (<data>/spool/<uid>/ and the fallback spool in its
+    home) is overwritten in place, its guard-mode session state is deleted,
+    and lines naming the account in any other spool directory are
+    overwritten too.
 Records already shipped must be erased in the log store; outbox segments are
 append-only and leave by retention (their count is reported). For a
 guaranteed purge stop the daemon and the account's agents first: a line

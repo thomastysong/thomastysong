@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -29,6 +30,26 @@ type Suppression struct {
 	// Tags limits the exception to hosts whose configured tags include at
 	// least one of these (Options.HostTags); empty applies everywhere.
 	Tags []string `json:"tags,omitempty"`
+}
+
+// ParseExpiry reads the expires value of a suppression, in the
+// configuration (rules.suppressions) and in a bundle's suppressions.yaml
+// alike: an RFC 3339 time, or a bare date (YYYY-MM-DD) that lasts through
+// the end of that day in UTC, so the exception ends at 00:00 UTC on the
+// next day. Surrounding white space is ignored; a value of white space
+// only is an error, not "never expires". The daemon, the hook and
+// the bundle loader all call it, so one entry ends at the same instant
+// wherever it is read.
+func ParseExpiry(s string) (time.Time, error) {
+	s = strings.TrimSpace(s)
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t.UTC(), nil
+	}
+	t, err := time.Parse("2006-01-02", s)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%q: want RFC 3339 or YYYY-MM-DD", s)
+	}
+	return t.AddDate(0, 0, 1), nil
 }
 
 func (s *Suppression) applies(ruleID string, fields map[string]any, now time.Time, hostTags []string) bool {

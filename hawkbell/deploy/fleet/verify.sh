@@ -41,6 +41,10 @@
 # osquery starts extensions without arguments: that file must name
 # $WORK/data.
 #
+# The last line is `done: N failed checks`, N counting failed checks and an
+# agent options restore that differs from the saved copy. The exit status
+# is 0 only when N is 0 and the run was not stopped early (die, set -e).
+#
 # Environment:
 #   FLEETCTL         fleetctl, logged in to the server (default: fleetctl)
 #   FLEET_HOST       hostname of the enrolled host (default: vm)
@@ -194,7 +198,10 @@ prefixed_policy_ids() {
 	api /api/v1/fleet/global/policies | jq -r --arg p "$PREFIX" '[.policies // [] | .[] | select(.name | startswith($p)) | .id] | join(",")'
 }
 
+# cleanup, the EXIT trap: restores the server and the host, then exits
+# nonzero when the run failed (die) or any check failed.
 cleanup() {
+	local status=$?
 	set +e
 	log "cleanup"
 	if [ -n "${DAEMON_PID:-}" ]; then
@@ -217,6 +224,7 @@ cleanup() {
 	else
 		log "AGENT OPTIONS DIFFER FROM THE SAVED COPY:"
 		diff <(jq -S . "$WORK/agent-options.before.json") <(jq -S . "$WORK/agent-options.after.json")
+		FAILURES=$((FAILURES + 1))
 	fi
 	left_labels=$(fc get labels --yaml 2>/dev/null | grep -c "name: $PREFIX" || true)
 	left_reports=$(api /api/v1/fleet/reports | jq --arg p "$PREFIX" '[.queries // .reports // [] | .[] | select(.name | startswith($p))] | length')
@@ -230,6 +238,8 @@ cleanup() {
 		log "HAWKBELL TABLES STILL REGISTERED ON THE HOST: $left_tables (osqueryd keeps ATC tables until it restarts)"
 	fi
 	log "done: $FAILURES failed checks"
+	if [ "$FAILURES" -gt 0 ] && [ "$status" = 0 ]; then status=1; fi
+	exit "$status"
 }
 
 # wait_tables N [POLLS]: until N hawkbell tables are registered. With POLLS,

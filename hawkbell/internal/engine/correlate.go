@@ -7,7 +7,8 @@ import (
 	"github.com/thomastysong/thomastysong/hawkbell/internal/otelrecv"
 )
 
-// Cross-surface correlation (BUILD-C C2 item 3, DECISIONS A22).
+// Cross-surface correlation (design/BUILD-C.md section C2 item 3,
+// design/DECISIONS.md A22).
 //
 // One activity record per action, and the hook is the primary surface. The
 // key is the record's Dedupe, which normalize derives from (host, user,

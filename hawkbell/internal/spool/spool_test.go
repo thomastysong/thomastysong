@@ -82,7 +82,7 @@ func TestAppendAndRead(t *testing.T) {
 	}
 }
 
-// TestForgedLinesAreClaimsOnly is red-team finding E1: a user appends a
+// TestForgedLinesAreClaimsOnly is redteam/evasion.md E1: a user appends a
 // "cleared" detection and an activity record attributed to someone else.
 func TestForgedLinesAreClaimsOnly(t *testing.T) {
 	dir := privateDir(t)

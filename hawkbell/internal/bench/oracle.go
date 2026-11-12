@@ -16,7 +16,7 @@ type oracleCase struct {
 // types. A rule set that does not clearly beat them on both recall and
 // false-positive rate is measuring the corpus, not detecting anything:
 // ADR-Bench's labels were reproduced by a "server never seen in a benign
-// task" oracle (red-team detection-quality section 7).
+// task" oracle (redteam/detection-quality.md section 7).
 var oracles = []struct {
 	name, doc string
 	// fit sees the whole corpus (for the leakage oracle); flag decides one

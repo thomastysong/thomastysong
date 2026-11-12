@@ -11,7 +11,7 @@ const Z95 = 1.959963984540054
 // MinTrials is the smallest number of trials for which a rate is reported
 // as a measurement; below it the cell is marked insufficient. With 10
 // trials and 10 successes the Wilson lower bound is still 72%, which says
-// almost nothing about a rule (red-team detection-quality section 7).
+// almost nothing about a rule (redteam/detection-quality.md section 7).
 const MinTrials = 30
 
 // Wilson returns the Wilson score interval for k successes in n trials at

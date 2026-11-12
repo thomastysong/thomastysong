@@ -1,4 +1,7 @@
-# Generic HTTPS JSON endpoint (webhooks, custom collectors).
+# Generic HTTPS JSON endpoint (webhooks, custom collectors). Fluent Bit
+# 5.2.0's http output drops a chunk after one request answered 400, 401 or
+# 413 even with retry_limit no_limits, and retries 503 (measured,
+# deploy/fluent-bit/VERIFIED.md): keep storage.keep.rejected on (hawkbell.yaml).
 pipeline:
   outputs:
     - name: http

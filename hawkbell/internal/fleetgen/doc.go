@@ -43,7 +43,7 @@
 // extension alike, so a policy of the form "no bad row exists" would pass on
 // a host where the sensor was never installed or its database was deleted.
 // Every hawkbell policy therefore requires a fresh hawkbell_health.heartbeat. Two
-// windows are used (BUILD-C addendum, C5):
+// windows are used (design/BUILD-C.md section C5 and Addendum):
 //
 //   - the dedicated "sensor is reporting" policy uses AlertWindow (default 30
 //     minutes) and is the one to alert on; the "hawkbell sensor unhealthy" label

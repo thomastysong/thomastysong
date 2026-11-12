@@ -2,7 +2,6 @@ package hookcmd
 
 import (
 	"runtime"
-	"strings"
 	"time"
 
 	"github.com/thomastysong/thomastysong/hawkbell/internal/bundle"
@@ -80,9 +79,16 @@ func (seenAll) Seen(string) bool { return true }
 func suppressions(in []config.Suppression) (out []rules.Suppression, degraded bool) {
 	for _, s := range in {
 		r := rules.Suppression{RuleID: s.Rule, Match: s.Match, Reason: s.Reason, Tags: s.Tags}
-		if e := strings.TrimSpace(s.Expires); e != "" {
-			t, ok := parseExpiry(e)
-			if !ok {
+		if s.Expires != "" {
+			// rules.ParseExpiry is what the daemon and the bundle loader use
+			// too: a bare date lasts through the end of that day (UTC). The
+			// hook and the daemon judge one event by the same exceptions; a
+			// guard that blocked on the expiry date while the daemon still
+			// honoured the exception would disagree with its own findings.
+			// A value of white space only is unreadable, not "never": the
+			// entry is dropped (more findings, never fewer).
+			t, err := rules.ParseExpiry(s.Expires)
+			if err != nil {
 				degraded = true
 				continue
 			}
@@ -91,20 +97,4 @@ func suppressions(in []config.Suppression) (out []rules.Suppression, degraded bo
 		out = append(out, r)
 	}
 	return out, degraded
-}
-
-// parseExpiry reads RFC 3339 or a bare date the way the daemon reads the
-// same config entry (internal/engine options.go): a bare date means
-// "through the end of that day" (UTC). The hook and the daemon judge one
-// event by the same exceptions; a guard that blocked on the expiry date
-// while the daemon still honoured the exception would disagree with its
-// own findings.
-func parseExpiry(s string) (time.Time, bool) {
-	if t, err := time.Parse(time.RFC3339, s); err == nil {
-		return t.UTC(), true
-	}
-	if t, err := time.Parse("2006-01-02", s); err == nil {
-		return t.Add(24 * time.Hour).UTC(), true
-	}
-	return time.Time{}, false
 }

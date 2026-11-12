@@ -814,8 +814,9 @@ func daemonSetContainer(t *testing.T) map[string]any {
 }
 
 // TestDaemonSet holds the manifest to the red team's minimal container
-// story (redteam/containers-k8s.md) and checks the shipped configuration
-// with the configuration loader the daemon uses.
+// story (redteam/containers-k8s.md, "Minimal honest container story for
+// v1", from findings E1 and E2) and checks the shipped configuration with
+// the configuration loader the daemon uses.
 func TestDaemonSet(t *testing.T) {
 	ds := daemonSet(t)
 	pod := get(ds, "spec", "template", "spec").(map[string]any)

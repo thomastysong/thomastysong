@@ -17,17 +17,24 @@ type FilesOptions struct {
 	MaxSegment   int64         // roll to n+1 past this size (default 16 MiB)
 	RetainBytes  int64         // prune oldest segments beyond this total (default 512 MiB; negative: no size limit)
 	RetainAge    time.Duration // prune segments older than this (default 7 days; negative: no age limit)
-	MaxLineBytes int           // events larger than this are shrunk (drop tool.input/output, then target.command tail) and marked truncated; default 48 KiB so Fluent Bit's tail buffer of 64k is safe
+	MaxLineBytes int           // events larger than this are shrunk (drop tool.input/output, then target.command tail) and marked truncated; default 16 KiB, see defaultMaxLineBytes
 	FileMode     os.FileMode   // default 0640
 	Format       string        // native | ocsf
 	Now          func() time.Time
 }
 
 const (
-	defaultMaxSegment   = 16 << 20
-	defaultRetainBytes  = 512 << 20
-	defaultRetainAge    = 7 * 24 * time.Hour
-	defaultMaxLineBytes = 48 << 10
+	defaultMaxSegment  = 16 << 20
+	defaultRetainBytes = 512 << 20
+	defaultRetainAge   = 7 * 24 * time.Hour
+	// defaultMaxLineBytes is the zero value's line cap. It equals the
+	// operator default, output.max_line_bytes (internal/config: 16 KiB,
+	// 8-64 KiB accepted); the daemon and `hawkbell scan` always pass that
+	// setting, so the zero value only serves callers that set nothing, such
+	// as tests. The largest accepted value, 64 KiB, is far below the
+	// buffer_max_size of 1M the shipped Fluent Bit tail inputs set
+	// (deploy/fluent-bit/hawkbell-inputs.yaml).
+	defaultMaxLineBytes = 16 << 10
 	defaultFileMode     = 0o640
 	// minMaxLineBytes is the smallest accepted MaxLineBytes: the last-resort
 	// shrink step (identity fields only, each clipped) always fits in it, in

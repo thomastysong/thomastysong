@@ -1,6 +1,6 @@
 # Assumptions ledger: how the design was attacked before it was built
 
-Before any product code existed, the first design ("v0") was written down as 37 explicit, numbered assumptions and handed to nine hostile reviewers, each with a different persona (the lenses below). Every reviewer had to break assumptions with evidence: a cited primary source or, preferably, an experiment run against real software (Fleet 4.94.1 with an enrolled osquery 5.19 host, the Fluent Bit 5.2.0 image, Go prototypes). A second, independent reviewer then tried to refute each finding. This file records what was assumed, what broke, the evidence, and what changed. It is kept in the repository because the failures are more useful to a prospective user than the features.
+Before any product code existed, the first design ("v0") was written down as 37 explicit, numbered assumptions and handed to nine hostile reviewers, review sessions of this build each given a different persona (the lenses below). Every reviewer had to break assumptions with evidence: a cited primary source or, preferably, an experiment run against real software (Fleet 4.94.1 with an enrolled osquery 5.19 host, the Fluent Bit 5.2.0 image, Go prototypes). A second, independent reviewer then tried to refute each finding. The first design is [design/v0.md](../design/v0.md) (assumptions in sections 11 and 12). Each reviewer's notes are in [redteam/](../redteam/), linked in the table below, and the lead's ledger of verdicts and decisions is [design/DECISIONS.md](../design/DECISIONS.md). They are historical records written on 2026-11-11; the scripts and outputs they name are on the build machine, not in this repository. This file records what was assumed, what broke, the evidence, and what changed. It is kept in the repository because the failures are more useful to a prospective user than the features.
 
 Verdicts: **broken** (the claim was false or the design as written failed), **weakened** (true only with a stated restriction), **holds** (a serious attempt to break it failed).
 
@@ -10,15 +10,15 @@ Scope of the evidence: all experiments ran on one Linux x86-64 sandbox VM on 202
 
 | Lens | Persona | Assumptions attacked |
 |---|---|---|
-| Evasion | attacker controlling the agent's context, or the developer hiding activity | A1 A3 A5 A6 A9 A11 A27 A28 |
-| Detection quality | SOC detection engineer owning the alert queue for 10,000 developers | A8 A10 A12 A13 A26 A29 A35 |
-| Fleet operator | Fleet admin with 20,000 hosts, mostly Fleet Free | A16 A17 A18 A19 A20 A30 A33 |
-| Pipeline operator | logging engineer who runs Fluent Bit everywhere and pays the SIEM bill | A14 A15 A21 A22 A23 |
-| Platform parity | Windows and macOS endpoint engineer | A2 A7 A20 A24 |
-| Containers | Kubernetes platform engineer running dev workspaces and CI | A25 |
-| Privacy and sensor security | privacy counsel plus an application security engineer | A26 A27 A28 A29 A32 A34 |
-| Skeptical buyer | security architect who already runs Fleet and Fluent Bit | A19 A30 A31 A36 A37, the thesis |
-| Alternative architectures | principal engineer arguing the top-level design is wrong | the thesis, A5 A8 A17 A21 A30 |
+| [Evasion](../redteam/evasion.md) | attacker controlling the agent's context, or the developer hiding activity | A1 A3 A5 A6 A9 A11 A27 A28 |
+| [Detection quality](../redteam/detection-quality.md) | SOC detection engineer owning the alert queue for 10,000 developers | A8 A10 A12 A13 A26 A29 A35 |
+| [Fleet operator](../redteam/fleet-operator.md) | Fleet admin with 20,000 hosts, mostly Fleet Free | A16 A17 A18 A19 A20 A30 A33 |
+| [Pipeline operator](../redteam/pipeline-operator.md) | logging engineer who runs Fluent Bit everywhere and pays the SIEM bill | A14 A15 A21 A22 A23 |
+| [Platform parity](../redteam/platform-parity.md) | Windows and macOS endpoint engineer | A2 A7 A20 A24 |
+| [Containers](../redteam/containers-k8s.md) | Kubernetes platform engineer running dev workspaces and CI | A25 |
+| [Privacy and sensor security](../redteam/privacy-sensor-security.md) | privacy counsel plus an application security engineer | A26 A27 A28 A29 A32 A34 |
+| [Skeptical buyer](../redteam/skeptical-buyer.md) | security architect who already runs Fleet and Fluent Bit | A19 A30 A31 A36 A37, the thesis |
+| [Alternative architectures](../redteam/alt-architectures.md) | principal engineer arguing the top-level design is wrong | the thesis, A5 A8 A17 A21 A30 |
 
 ## What broke, with the evidence
 
@@ -28,7 +28,7 @@ Scope of the evidence: all experiments ran on one Linux x86-64 sandbox VM on 202
 - One 200 KB event line stopped the whole segment with default tail settings (32k buffer); with `skip_long_lines` the event vanished.
 - Concurrent appenders did hold: 0 torn lines in 29,568 lines up to 1 MB from six processes using one `write(2)` per line on `O_APPEND`.
 
-Changes: the shipped Fluent Bit configuration is part of the contract (filesystem buffering, unlimited retries, filename comparison, long-line skipping); every emitted line is capped at 16 KiB with truncation recorded; the sensor reads Fluent Bit's tail database and prunes only segments that were read, and emits a health error with counts when a hard cap forces dropping unshipped data; `doctor` flags an unsafe shipper configuration when it is given the Fluent Bit API or configuration file. The kill test is an end-to-end test against the real image (`test/e2e`, `HAWKBELL_E2E_FLUENTBIT=1`); on Fluent Bit 5.2.0 with the shipped configuration it delivered 5,000 of 5,000 records after SIGKILL ([deploy/fluent-bit/VERIFIED.md](../deploy/fluent-bit/VERIFIED.md)). It is in the CI workflow, which has not run on GitHub yet ([.github/workflows/ci.yml](../.github/workflows/ci.yml)). The claim is now "at-least-once only with filesystem buffering".
+Changes: the shipped Fluent Bit configuration is part of the contract (filesystem buffering, unlimited retries, filename comparison, long-line skipping); every emitted line is capped at 16 KiB with truncation recorded; the sensor reads Fluent Bit's tail database and prunes only segments that were read, and emits a health error with counts when the byte cap forces dropping data a configured consumer has not read (with no consumer configured it cannot tell, and only heartbeat counters show what the cap removed; [LIMITATIONS.md](LIMITATIONS.md#delivery-limits)); `doctor` flags an unsafe shipper configuration when it is given the Fluent Bit API or configuration file. The kill test is an end-to-end test against the real image (`test/e2e`, `HAWKBELL_E2E_FLUENTBIT=1`); on Fluent Bit 5.2.0 with the shipped configuration it delivered 5,000 of 5,000 records after SIGKILL ([deploy/fluent-bit/VERIFIED.md](../deploy/fluent-bit/VERIFIED.md)). It is part of the `e2e-linux` job in `hawkbell/.github/workflows/ci.yml`, which pulls `fluent/fluent-bit:latest` rather than a pinned 5.2.0. GitHub does not run that file from its location under `hawkbell/`, and it has never run ([.github/workflows/ci.yml](../.github/workflows/ci.yml), header). The claim is now "at-least-once only with filesystem buffering".
 
 ### Integrity: "a user-writable spool is an acceptable trade-off" (A28) — broken
 - Forgery, not deletion, is the real risk. Three lines were appended to a spool file as the user: one genuine, one forged detection marked "cleared, approved by security", one forged activity record attributed to a different user. Fluent Bit shipped all three verbatim.
@@ -101,7 +101,7 @@ The first draft claimed that no open-source tool gives a real-time, vendor-neutr
 
 ## Findings the verification pass overturned or corrected
 
-The second reviewer was asked to refute, and did so in several places. These corrections are part of the record:
+The second reviewer was asked to refute, and did so in several places. These corrections are part of the record. The `--bare` row and the conclusions of the OpenTelemetry and adapter rows were passed to the builders in [design/BUILD-B.md](../design/BUILD-B.md), Addendum 2. The verifiers' own scripts and outputs are on the build machine, not in this repository:
 
 | Finding | Correction |
 |---|---|
@@ -127,20 +127,20 @@ The second reviewer was asked to refute, and did so in several places. These cor
 
 ## Measurements from the design review
 
-Prototype measurements from the review, several of them quoted in [DESIGN.md](DESIGN.md) and [LIMITATIONS.md](LIMITATIONS.md). The reviewers' raw records are not in this repository, so these rows can be checked only against each other. The hook rows describe prototypes, not the release:
+Prototype measurements from the review, several of them quoted in [DESIGN.md](DESIGN.md) and [LIMITATIONS.md](LIMITATIONS.md). Each row names the record that reports it. The scripts and outputs those records name are on the build machine, not in this repository, so a row can be checked against its record but not rerun from here. The hook rows describe prototypes, not the release:
 
 - The release binary is slower. With a release build on a quiet VM, observe mode (supervisor plus worker) took 10.42, 10.97 and 18.74 ms p50 direct, through `sh -c` and through `bash -lc`, against 1.33, 2.19 and 9.61 ms for `/bin/true` ([internal/hookcmd/LATENCY.md](../internal/hookcmd/LATENCY.md), "Current figures").
-- LATENCY.md cites the review's empty-hook baseline as 1.7, 2.5 and 8.5 ms p50 (direct, `sh -c`, `bash -lc`), while the first two rows below give 0.9 ms for `/bin/true` and 2.5 and 8.5 ms for a hook through the shells. Which figures the 2.5 and 8.5 ms belong to cannot be settled from the files here.
+- The empty-hook baseline that [LATENCY.md](../internal/hookcmd/LATENCY.md) cites (1.7, 2.5 and 8.5 ms p50 direct, through `sh -c` and through `bash -lc`) is the platform-parity reviewer's E4 run of a hook binary through each launch path: 1.69, 2.50 and 8.45 ms, 300 runs each, with 0.95 ms for `/bin/true` in the same run ([redteam/platform-parity.md](../redteam/platform-parity.md), E4). [design/BUILD-C.md](../design/BUILD-C.md) section C1 calls this "an empty hook"; E4 does not describe the binary. The 0.9 ms for `/bin/true`, 1.2 ms for a slim binary and 2.9 ms with SQLite, YAML and osquery-go linked come from an earlier run recorded in the first design ([design/v0.md](../design/v0.md), section 7, "Hook IPC"). The 2.5 and 8.5 ms belong to the E4 run.
 - The Fluent Bit row was reproduced on the release: 5,000 of 5,000 after SIGKILL with the shipped configuration ([deploy/fluent-bit/VERIFIED.md](../deploy/fluent-bit/VERIFIED.md)).
 
-| Measurement | Value | Conditions |
-|---|---|---|
-| Hook process: start, parse, append, exit | p50 1.2 ms slim, 2.9 ms with SQLite and YAML linked, vs 0.9 ms for `/bin/true` | Linux sandbox, direct exec, empty rule set, 300 runs |
-| Same through the launch paths agents really use | `sh -c` 2.5 ms, `bash -lc` 8.5 ms p50 | same sandbox; Windows not measured |
-| Process polling capture rate | 1% of `/bin/true`, 7% of 100 ms processes at 1 s; 7 of 120 in a second test | `/proc` scanner, Linux |
-| ATC query cost | 26 ms / 12 MB at 10k rows; 270 ms / 107 MB at 100k | osquery 5.19, WAL SQLite |
-| Fluent Bit recovery | 0 of 5,000 (memory) vs 5,000 of 5,000 (filesystem) | Fluent Bit 5.2.0, output down across restart |
-| Benign trigger rate of the co-occurrence trifecta | 13 firings in under an hour, keyed by session; 68% / 65% of 37 transcripts had untrusted input / egress | subagent transcripts of one build session of this project, no attacker |
+| Measurement | Value | Conditions | Record |
+|---|---|---|---|
+| Hook process: start, parse, append, exit | p50 1.2 ms slim, 2.9 ms with SQLite, YAML and osquery-go linked, vs 0.9 ms for `/bin/true` | Linux sandbox, direct exec; the record does not state the run count | [design/v0.md](../design/v0.md), section 7 |
+| A hook binary through the launch paths agents really use | p50 1.69 ms direct, 2.50 ms `sh -c`, 8.45 ms `bash -lc` (root's near-empty profile), vs 0.95 ms for `/bin/true` | same sandbox, 300 runs each; Windows not measured | [redteam/platform-parity.md](../redteam/platform-parity.md), E4 |
+| Process polling capture rate | 1% of `/bin/true`, 7% of 100 ms processes at 1 s; 7 of 120 in a second test | `/proc` scanner, Linux | [research/os-telemetry.md](../research/os-telemetry.md), section 1; [redteam/alt-architectures.md](../redteam/alt-architectures.md), section 3.3 |
+| ATC query cost | 26 ms / 12 MB at 10k rows; 270 ms / 107 MB at 100k | osquery 5.19, WAL SQLite | [redteam/fleet-operator.md](../redteam/fleet-operator.md), section 1.5 |
+| Fluent Bit recovery | 0 of 5,000 (memory) vs 5,000 of 5,000 (filesystem) | Fluent Bit 5.2.0, output down across restart | [redteam/pipeline-operator.md](../redteam/pipeline-operator.md), F1; reproduced in [deploy/fluent-bit/VERIFIED.md](../deploy/fluent-bit/VERIFIED.md) |
+| Benign trigger rate of the co-occurrence trifecta | 13 firings in under an hour, keyed by session; 68% / 65% of 37 transcripts had untrusted input / egress | subagent transcripts of one build session of this project, no attacker | 68% / 65%: [redteam/detection-quality.md](../redteam/detection-quality.md), section 2. The 13 firings come from the detection-quality verifier's rerun over 43 subagent transcripts of one session (0.89 h; 13 at every TTL from 300 s to unlimited); that output is on the build machine, not in this repository |
 
 ## Not verified
 

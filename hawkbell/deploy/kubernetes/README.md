@@ -13,8 +13,11 @@ seccomp profile). `packaging/packaging_test.go` checks the manifests
 (`TestDaemonSet`, `TestSeccompProfile`) and loads the ConfigMap's
 configuration with the daemon's own loader. An earlier version of the
 manifests passed `kubeconform -strict` against the Kubernetes 1.31.0
-schemas; that run predates the switch of `seccompProfile` to `Localhost`
-and was not repeated. `appArmorProfile` needs Kubernetes 1.30 or later.
+schemas (VERIFIED.md). That run predates the switch of `seccompProfile`
+to `Localhost`, the `HAWKBELL_HOST_NAME` variable and the rename from the
+working name spoor, and was not repeated: the shipped manifests have not
+been checked against the API schemas. `appArmorProfile` needs Kubernetes
+1.30 or later.
 
 ```
 # on every Linux node first (section 1, "Seccomp profile"):

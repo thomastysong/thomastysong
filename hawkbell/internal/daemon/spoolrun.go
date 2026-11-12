@@ -19,7 +19,10 @@ import (
 // deletes fully read files after retention.spool) and the users' own
 // fallback spools under their homes, which hooks use when the system one is
 // unreachable. The second reader never deletes anything: the daemon does
-// not write into home directories (systemd ProtectHome=read-only).
+// not write into home directories (systemd ProtectHome=read-only). The
+// hook prunes the fallback spool itself, and the session state in the
+// system spools, by the same retention.spool counted from each file's last
+// write (spool.MaybePrune).
 type spoolRunner struct {
 	d        *daemon
 	sys, usr *spool.Reader

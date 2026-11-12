@@ -120,7 +120,7 @@ try {
   if ($Tier -eq 'extension') {
     if (-not (Same $Exe $Ext)) {
       # A running extension's file cannot be overwritten, but it can be
-      # renamed; the old copy is deleted by the next run.
+      # renamed; the .old is deleted after the restart below.
       if (Test-Path $Ext) { Move-Item -Force -Path $Ext -Destination "$Ext.old" }
       Copy-Item -Force -Path $Exe -Destination $Ext
       $restart = $true
@@ -130,18 +130,24 @@ try {
       Set-Content -Path $Load -Value (@($lines) + $Ext) -Encoding ASCII
       $restart = $true
     }
-  } elseif ($lines -contains $Ext) {
-    Set-Content -Path $Load -Value @($lines | Where-Object { $_ -ne $Ext }) -Encoding ASCII
-    $restart = $true
+  } else {
+    # No extension copy in tier 2. A running one cannot be deleted, only
+    # renamed: its .old is deleted now or after the restart below.
+    if (Test-Path $Ext) { Move-Item -Force -ErrorAction SilentlyContinue -Path $Ext -Destination "$Ext.old" }
+    Remove-Item -Force -ErrorAction SilentlyContinue -Path "$Ext.old"
+    if ($lines -contains $Ext) {
+      Set-Content -Path $Load -Value @($lines | Where-Object { $_ -ne $Ext }) -Encoding ASCII
+      $restart = $true
+    }
   }
 
   # Restart osquery detached and delayed: this script runs under orbit, and
   # restarting it synchronously would kill the script before it reports.
   if ($restart) {
     $osq = if (Get-Service -Name 'Fleet osquery' -ErrorAction SilentlyContinue) { 'Fleet osquery' } else { 'osqueryd' }
-    $cmd = "Start-Sleep -Seconds 10; Restart-Service -Name '$osq' -Force"
+    $cmd = "Start-Sleep -Seconds 10; Restart-Service -Name '$osq' -Force; Start-Sleep -Seconds 5; Remove-Item -Force -ErrorAction SilentlyContinue -Path '$Ext.old'"
     Start-Process -FilePath powershell.exe -WindowStyle Hidden -ArgumentList @('-NoProfile', '-Command', $cmd)
-    Write-Output "osquery ($osq) restarts in 10 s to load $Ext"
+    Write-Output "osquery ($osq) restarts in 10 s"
   }
   Write-Output "hawkbell installed at $Exe (tier $Tier)"
 } finally {

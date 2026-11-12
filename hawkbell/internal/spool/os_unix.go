@@ -68,6 +68,43 @@ func lockDir(dir string) (func(), error) {
 	}, nil
 }
 
+// tryLockDir takes the lock lockDir takes, without waiting: ok is false
+// when another process holds it.
+func tryLockDir(dir string) (unlock func(), ok bool) {
+	p := filepath.Join(dir, ".lock")
+	fd, err := unix.Open(p, unix.O_RDWR|unix.O_CREAT|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
+	if err != nil {
+		return nil, false
+	}
+	for {
+		err = unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB)
+		if err != unix.EINTR {
+			break
+		}
+	}
+	if err != nil {
+		unix.Close(fd)
+		return nil, false
+	}
+	return func() {
+		_ = unix.Flock(fd, unix.LOCK_UN)
+		unix.Close(fd)
+	}, true
+}
+
+// callerOwners is the owner a file this process creates gets: its
+// effective uid.
+func callerOwners() []string { return []string{currentUID()} }
+
+// fileOwner is the uid that owns fi (from an lstat).
+func fileOwner(fi os.FileInfo, _ string) (string, bool) {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok || st == nil {
+		return "", false
+	}
+	return strconv.FormatUint(uint64(st.Uid), 10), true
+}
+
 // openAppend opens path for one append, refusing a symlink or a non-regular
 // file at that name.
 func openAppend(path string) (*os.File, error) {

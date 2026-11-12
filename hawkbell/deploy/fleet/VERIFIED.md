@@ -1529,3 +1529,112 @@ Sections 3 (ATC and the extension together) and 6 (osquery path handling)
 were not repeated: they test osquery's behaviour, not hawkbell's content.
 The first and second runs of the binary section are superseded by the run
 above.
+
+## Script changes after the rename (2026-11-12)
+
+Run on the same sandbox, with the working tree on top of commit 6d0d308.
+Only the scripts and `verify.sh` changed; the generated library, the
+agent options and the GitOps files are as in the rerun above (the Premium
+example gained a comment), so the live Fleet run and the dry runs were not
+repeated.
+
+What changed:
+
+- `install-hawkbell.sh` no longer writes the drop-in
+  `hawkbell.service.d/10-outbox-group.conf`. It only repeated
+  `Group=hawkbell`, which the unit the script writes already carries in
+  `[Service]` (as `packaging/systemd/hawkbell.service` does).
+  `uninstall-hawkbell.sh` still removes the drop-in from hosts where an
+  earlier script wrote it.
+- The `atc` tier of both install scripts deletes the `hawkbell.ext` copy
+  (the shell script also its directory when empty; the PowerShell script
+  renames `hawkbell.ext.exe` to `.old` first, as Windows does not delete
+  a running executable). Before, it only removed the `extensions.load`
+  line.
+- `install-hawkbell.sh` takes a download directory `V` that the four
+  default URLs share, and has shorter comments, so that it fits Fleet's
+  limit with real hashes (below).
+- `verify.sh` exits nonzero when a check failed or the restored agent
+  options differ from the saved copy (that difference now counts as a
+  failed check). The runs recorded above exited 0 with failed checks.
+
+Install scripts in a Debian container (section 4's test, extended: the
+unit carries `Group=hawkbell` and no drop-in is written; the `atc` tier
+leaves neither `hawkbell.ext` nor `/usr/lib/hawkbell`; uninstall removes
+a drop-in planted before it runs):
+
+```
+$ HAWKBELL_E2E_FLEET=1 go test -tags e2e ./test/e2e -run FleetInstallScripts -v -count=1
+=== RUN   TestFleetInstallScripts
+    fleet_test.go:664: install:
+        hawkbell install: osquery (osqueryd) restarts in 10 s
+        hawkbell install: hawkbell-fake-1 installed at /work/root/usr/bin/hawkbell (tier extension)
+--- PASS: TestFleetInstallScripts (1.53s)
+PASS
+ok  	github.com/thomastysong/thomastysong/hawkbell/test/e2e	1.532s
+```
+
+With `rm -f "$EXT"` disabled in the `atc` branch, the same test failed
+with `atc tier left usr/lib/hawkbell/hawkbell.ext` and `atc tier left
+usr/lib/hawkbell`, so it checks the deletion.
+
+Script sizes in characters, as shipped and with a 64-character hash in
+place of every `REPLACE_WITH_SHA256` (Fleet refuses 10,000 or more;
+`TestScriptsFitWithRealHashes` requires at least 300 to spare with the
+hashes filled in):
+
+| Script | As shipped | With real hashes |
+|---|---|---|
+| install-hawkbell.sh | 9,492 | 9,672 (4 hashes) |
+| install-hawkbell.ps1 | 8,795 | 8,885 (2 hashes) |
+| uninstall-hawkbell.sh | 3,199 | no hashes |
+| uninstall-hawkbell.ps1 | 2,519 | no hashes |
+| register-extension.sh | 2,471 | no hashes |
+| register-extension.ps1 | 2,193 | no hashes |
+
+Before this change `install-hawkbell.sh` was 9,992 characters, 10,172
+with the hashes: over the limit.
+
+`sh -n`, `dash -n` and `bash -n` pass for the three shell scripts and
+`bash -n` for `verify.sh`. `verify.sh` was not run against the live
+server; `TestVerifyShExitStatus` runs its exit trap against a fake
+fleetctl (all checks passed: exit 0; two failed checks: exit 1; stopped
+by `die`: exit 1; restored agent options differ: exit 1, "done: 1 failed
+checks").
+
+`go test -count=1 -v ./internal/fleetgen/... ./packaging/... ./deploy/...`:
+158 tests and subtests passed, none failed or skipped.
+
+Not run: the PowerShell scripts (no Windows host, no pwsh); the
+`TestATCTierRemovesExtensionCopy` check of the PowerShell branch reads
+the script's text only. The macOS branch of the shell scripts. systemd
+itself (the container test uses a fake `systemctl`).
+
+### Follow-up: Windows `.old` deletion after the restart (2026-11-12)
+
+Same day, after a review of the section above. `install-hawkbell.ps1`'s
+detached restart command now ends with `Start-Sleep -Seconds 5;
+Remove-Item -Force -ErrorAction SilentlyContinue -Path '$Ext.old'`, as
+`uninstall-hawkbell.ps1` already did for its directory. Before, when the
+`atc` tier renamed a `hawkbell.ext.exe` that osquery was running, the
+same-run `Remove-Item` failed silently (osquery restarts only 10 seconds
+after the script ends) and the `.old` stayed until the next run of an
+install or uninstall script. The extension tier's rename of a running
+copy is cleaned up by the same command. Only the script's text is
+tested: `TestATCTierRemovesExtensionCopy` now requires the `Remove-Item`
+of `$Ext.old` after `Restart-Service` in that command; with the addition
+removed it failed with "the detached restart does not delete $Ext.old
+after Restart-Service". Not run on Windows (no Windows host, no pwsh).
+
+New size of `install-hawkbell.ps1`, which replaces its row in the table
+above (`go test -count=1 -run TestScriptsFitWithRealHashes -v
+./internal/fleetgen`):
+
+```
+deploy_test.go:86: install-hawkbell.sh: 9492 characters as shipped, 9672 with real hashes
+deploy_test.go:86: install-hawkbell.ps1: 8897 characters as shipped, 8987 with real hashes
+```
+
+`HAWKBELL_E2E_FLEET=1 go test -tags e2e ./test/e2e -run
+'^TestFleetInstallScripts$' -v -count=1` (shell scripts, unchanged since
+the section above): `--- PASS: TestFleetInstallScripts (1.43s)`.

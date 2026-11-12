@@ -461,7 +461,7 @@ const maxGitLines = 20000
 // that are shell snippets ("!...": credential.helper.shell) or absolute
 // program paths (git-credential(1) runs those as given:
 // credential.helper), and includes. A repository-local .git/config with one of these runs code the
-// moment an agent or IDE calls git (threat research R14).
+// moment an agent or IDE calls git (research/threats.md section 3, R14).
 func GitExecKeys(text string) []string {
 	text = headTail(text)
 	var out []string

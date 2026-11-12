@@ -77,7 +77,7 @@ func TestCatalogFlagsClassified(t *testing.T) {
 		}
 	}
 	if _, ok := bypassArgs["--bare"]; ok {
-		t.Error("--bare is an attribute, not a bypass (BUILD-B addendum)")
+		t.Error("--bare is an attribute, not a bypass (design/BUILD-B.md, Addendum 2)")
 	}
 }
 

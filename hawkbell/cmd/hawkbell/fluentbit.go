@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -16,6 +17,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/thomastysong/thomastysong/hawkbell/internal/daemon"
 )
 
 // Fluent Bit checks for `hawkbell doctor`. The shipped configuration was
@@ -25,15 +28,20 @@ import (
 // loses everything read but not delivered), bounded retries (the default
 // retry_limit is 1) and records dropped by an output.
 //
-// Every finding is a warning (BUILD-C: "warn shipper.unsafe_config"): the
-// shipper is configured by the operator, and doctor fails only on what
-// hawkbell itself controls.
+// Every finding is a warning (design/BUILD-C.md section C3: "warn
+// shipper.unsafe_config"): the shipper is configured by the operator, and
+// doctor fails only on what hawkbell itself controls.
 //
 // What the HTTP API can show, measured on fluent/fluent-bit 5.2.0:
 // /api/v1/metrics lists per-output retries_failed and dropped_records, and
 // /api/v1/storage lists a storage_backlog input only when
 // service.storage.path is set (no filesystem buffering is possible without
-// it). The API does not say which storage type an individual input uses;
+// it). Both answer 404 for a while after start, which doctor reports as
+// "rerun": /api/v1/metrics for up to 0.8 s after the API comes up, and
+// /api/v1/storage, with storage.metrics on or not set, for the first 4 to
+// 5.5 s; with storage.metrics off /api/v1/storage always answers 404
+// (deploy/fluent-bit/VERIFIED.md, "Measurements added 2026-11-12"). The
+// API does not say which storage type an individual input uses;
 // --fluent-bit-config reads the configuration file for that.
 
 type fbFinding struct {
@@ -78,10 +86,18 @@ func getJSON(ctx context.Context, c *http.Client, u string, v any) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s: %s", u, resp.Status)
+		return &httpStatusError{url: u, code: resp.StatusCode, status: resp.Status}
 	}
 	return json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(v)
 }
+
+// httpStatusError is an API answer other than 200.
+type httpStatusError struct {
+	url, status string
+	code        int
+}
+
+func (e *httpStatusError) Error() string { return e.url + ": " + e.status }
 
 // checkFluentBitAPI queries the Fluent Bit HTTP API.
 func checkFluentBitAPI(ctx context.Context, c *http.Client, api string) ([]fbFinding, string) {
@@ -103,14 +119,18 @@ func checkFluentBitAPI(ctx context.Context, c *http.Client, api string) ([]fbFin
 			Dropped       uint64 `json:"dropped_records"`
 		} `json:"output"`
 	}
-	if err := getJSON(ctx, c, base+"/api/v1/metrics", &metrics); err != nil {
+	var se *httpStatusError
+	if err := getJSON(ctx, c, base+"/api/v1/metrics", &metrics); errors.As(err, &se) && se.code == http.StatusNotFound {
+		out = append(out, fbFinding{Code: "shipper.metrics", Status: "warn",
+			Detail: "/api/v1/metrics answered 404: Fluent Bit may have started less than a second ago (5.2.0 answered 404 there for up to 0.8 s after its API came up in testing); rerun hawkbell doctor"})
+	} else if err != nil {
 		out = append(out, fbFinding{Code: "shipper.metrics", Status: "warn", Detail: err.Error()})
 	} else {
 		for _, name := range sortedKeys(metrics.Output) {
 			o := metrics.Output[name]
 			if o.Dropped > 0 {
 				out = append(out, fbFinding{Code: "shipper.dropped_records", Status: "warn",
-					Detail: fmt.Sprintf("output %s dropped %d record(s) (a permanent error such as 401/400/413, or retries exhausted); see storage.keep.rejected", name, o.Dropped)})
+					Detail: fmt.Sprintf("output %s dropped %d record(s): Fluent Bit gave up on them (5.2.0's http output does so after one answer of 400, 401 or 413, even with retry_limit no_limits); with storage.keep.rejected on, a copy is under storage.path/rejected", name, o.Dropped)})
 			}
 			if o.RetriesFailed > 0 {
 				out = append(out, fbFinding{Code: "shipper.unsafe_config", Status: "warn",
@@ -124,10 +144,20 @@ func checkFluentBitAPI(ctx context.Context, c *http.Client, api string) ([]fbFin
 		} `json:"storage_layer"`
 		Inputs map[string]json.RawMessage `json:"input_chunks"`
 	}
-	if err := getJSON(ctx, c, base+"/api/v1/storage", &storage); err != nil || storage.Layer == nil {
+	err := getJSON(ctx, c, base+"/api/v1/storage", &storage)
+	switch {
+	case errors.As(err, &se) && se.code == http.StatusNotFound:
+		// One 404 cannot tell "storage.metrics is off" from "started
+		// seconds ago" (see the top of the file).
 		out = append(out, fbFinding{Code: "shipper.storage_metrics", Status: "warn",
-			Detail: "storage metrics are not available (service storage.metrics: on): buffering cannot be checked through the API"})
-	} else {
+			Detail: "/api/v1/storage answered 404: Fluent Bit may have started only seconds ago (5.2.0 answered 404 there for the first 4 to 5.5 s after start in testing), or service storage.metrics is off; rerun hawkbell doctor in a minute, and if it still answers 404 set storage.metrics: on. Until then buffering cannot be checked through the API"})
+	case err != nil:
+		out = append(out, fbFinding{Code: "shipper.storage_metrics", Status: "warn",
+			Detail: fmt.Sprintf("storage metrics could not be read (%v); rerun hawkbell doctor. Until then buffering cannot be checked through the API", err)})
+	case storage.Layer == nil:
+		out = append(out, fbFinding{Code: "shipper.storage_metrics", Status: "warn",
+			Detail: "/api/v1/storage has no storage_layer: buffering cannot be checked through the API"})
+	default:
 		backlog := false
 		for name := range storage.Inputs {
 			if strings.HasPrefix(name, "storage_backlog") {
@@ -300,12 +330,53 @@ func checkFluentBitConfig(secs []fbSection, outbox string) []fbFinding {
 	return out
 }
 
-func checkTailDB(path string) []fbFinding {
-	if path == "" {
+// checkTailDB checks output.fluent_bit.tail_db as the daemon reads it: the
+// same expansion (daemon.ExpandTailDB: comma-separated paths or globs) and
+// the same read (daemon.CheckTailDB), with one finding per database that is
+// missing or unreadable and per pattern that matches nothing. The read
+// includes the pruner's fallback to a private copy when a database cannot
+// be read in place (Fluent Bit's db.locking true holds it locked): the
+// pruner copies into its checkpoint directory, doctor into a temporary
+// directory it removes. A database read through a copy is not a finding,
+// since the pruner reads it too. For a locked database doctor, like the
+// pruner, first waits SQLite's 2 s busy timeout (TestFluentBitTailDBLocking).
+func checkTailDB(spec string) []fbFinding {
+	if strings.TrimSpace(spec) == "" {
 		return nil
 	}
-	if _, err := os.Stat(path); err != nil {
-		return []fbFinding{{Code: "shipper.tail_db", Status: "warn", Detail: fmt.Sprintf("output.fluent_bit.tail_db %s: %v (pruning cannot see what was shipped)", path, err)}}
+	var out []fbFinding
+	warn := func(format string, args ...any) {
+		out = append(out, fbFinding{Code: "shipper.tail_db", Status: "warn", Detail: "output.fluent_bit.tail_db: " + fmt.Sprintf(format, args...)})
 	}
-	return nil
+	// What the pruner does with a database it cannot read (internal/daemon/outbox.go).
+	const unread = "pruning counts nothing as read by it"
+	dbs, skipped := daemon.ExpandTailDB(spec)
+	if len(dbs) == 0 {
+		warn("%q names no database", spec)
+	}
+	copyDir, terr := os.MkdirTemp("", "hawkbell-doctor-")
+	if terr == nil {
+		defer os.RemoveAll(copyDir)
+	} else {
+		copyDir = "" // no copy: a locked database is reported as unreadable
+	}
+	for _, db := range dbs {
+		switch {
+		case db.BadPattern:
+			warn("%s is not a valid pattern; %s", db.Path, unread)
+		case db.NoMatch:
+			warn("%s matches no file (Fluent Bit creates a tail database when its input starts); until one exists, %s and treats it as a reader of every stream", db.Path, unread)
+		default:
+			if _, _, err := daemon.CheckTailDB(db.Path, copyDir); err != nil {
+				if terr != nil {
+					err = fmt.Errorf("%w (doctor could not create a directory for a copy: %v)", err, terr)
+				}
+				warn("%s: %v; %s", db.Path, err, unread)
+			}
+		}
+	}
+	if skipped > 0 {
+		warn("%d more database(s) after the first %d are ignored", skipped, len(dbs))
+	}
+	return out
 }

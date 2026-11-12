@@ -16,9 +16,11 @@ service:
   storage.max_chunks_up: 64
   storage.backlog.mem_limit: 32M
   storage.metrics: on
-  # A permanent error (401 after a token rotation, 400, 413) drops a chunk
-  # even with unlimited retries. Keep a copy instead of losing it, and
-  # watch dropped_records in /api/v1/metrics (hawkbell doctor does).
+  # With retry_limit no_limits, Fluent Bit 5.2.0's http output still
+  # dropped a chunk after one request answered 400, 401 (a rotated token)
+  # or 413, and retried on 503 (deploy/fluent-bit/VERIFIED.md; other
+  # outputs not tested). Keep a copy instead of losing it, and watch
+  # dropped_records in /api/v1/metrics (hawkbell doctor does).
   storage.keep.rejected: on
   storage.rejected.path: rejected
   storage.rejected.limit: 256M

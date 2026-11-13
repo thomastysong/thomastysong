@@ -62,7 +62,7 @@ func configComments() map[string]string {
 		"output.forward":                "Ship with the Fluent Forward protocol (experimental): {addr, tag_prefix, shared_key, compress, timeout}.",
 		"output.otlp":                   "Ship as OTLP/HTTP JSON logs (experimental): {endpoint, headers, gzip, timeout}.",
 		"output.fluent_bit":             "Lets the sensor observe its shipper.",
-		"output.fluent_bit.tail_db":     "Fluent Bit tail database: prune only segments it has read, report shipper lag.",
+		"output.fluent_bit.tail_db":     "Fluent Bit tail database: age pruning removes only segments it has read (the size cap can still drop unread data, reported); report shipper lag.",
 		"output.fluent_bit.api":         "Fluent Bit HTTP API (http://127.0.0.1:2020), checked by `hawkbell doctor`.",
 		"output.streams":                "Restrict shipped streams; empty means the profile's default.",
 		"output.group":                  "Group allowed to read the outbox (POSIX).",

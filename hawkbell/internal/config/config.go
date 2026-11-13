@@ -218,8 +218,9 @@ type OTLP struct {
 	Timeout  Duration          `yaml:"timeout"`
 }
 
-// FluentBit lets the sensor observe its shipper: with the tail database it
-// prunes only segments Fluent Bit has read and reports shipper lag.
+// FluentBit lets the sensor observe its shipper: with the tail database its
+// age pruning removes only segments Fluent Bit has read (the size cap can
+// still remove unread data, and reports it) and it reports shipper lag.
 type FluentBit struct {
 	TailDB string `yaml:"tail_db"`
 	API    string `yaml:"api"` // http://127.0.0.1:2020

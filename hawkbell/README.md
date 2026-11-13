@@ -129,7 +129,7 @@ hawkbell export fluent-bit --out flb   # inputs, parsers and output fragments fo
 fluent-bit -c flb/hawkbell.yaml --dry-run   # standalone example: Splunk and S3, read from environment variables
 ```
 
-Then set `output.fluent_bit.tail_db` in hawkbell's configuration, so the daemon prunes only segments Fluent Bit has read. Fragments for Splunk, S3, Elasticsearch, OpenSearch, Loki, Kafka, OTLP, HTTP, Chronicle, Sentinel and file outputs are in [deploy/fluent-bit/outputs](deploy/fluent-bit/outputs). Settings and their reasons: [docs/FLUENT-BIT.md](docs/FLUENT-BIT.md).
+Then set `output.fluent_bit.tail_db` in hawkbell's configuration, so the daemon's age pruning removes only segments Fluent Bit has read (past the 512 MiB size cap it still drops unread data, and reports it). Fragments for Splunk, S3, Elasticsearch, OpenSearch, Loki, Kafka, OTLP, HTTP, Chronicle, Sentinel and file outputs are in [deploy/fluent-bit/outputs](deploy/fluent-bit/outputs). Settings and their reasons: [docs/FLUENT-BIT.md](docs/FLUENT-BIT.md).
 
 ### Kubernetes
 
